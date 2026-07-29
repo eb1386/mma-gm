@@ -1,0 +1,50 @@
+{
+  "name": "mma-gm",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Text based MMA career and coaching simulation game",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:fast": "VITEST_TIER=fast vitest run",
+    "test:world": "VITEST_TIER=world vitest run",
+    "test:all": "VITEST_TIER=all vitest run",
+    "perf": "vite-node tools/perf.ts",
+    "perf:quick": "vite-node tools/perf.ts --quick",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false --noEmit",
+    "lint:dashes": "node scripts/check-dashes.mjs",
+    "lint:terms": "node scripts/check-terms.mjs",
+    "check": "npm run lint:dashes && npm run lint:terms && npm run typecheck && npm run test",
+    "check:all": "npm run lint:dashes && npm run lint:terms && npm run typecheck && npm run test:all",
+    "ingest": "node tools/ingest/run.mjs",
+    "ingest:rankings": "node tools/ingest/run.mjs --only-rankings",
+    "ingest:build": "node tools/ingest/build-snapshot.mjs",
+    "calibrate": "node --experimental-strip-types tools/calibrate.ts",
+    "test:flow": "VITEST_TIER=flow vitest run",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "idb-keyval": "^6.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@types/node": "^26.1.2",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.9",
+    "vitest": "^2.1.3"
+  }
+}

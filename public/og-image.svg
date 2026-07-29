@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0d1117"/>
+  <g transform="translate(120,175) scale(2.8)">
+    <polygon points="92.50,67.60 67.60,92.50 32.40,92.50 7.50,67.60 7.50,32.40 32.40,7.50 67.60,7.50 92.50,32.40" fill="none" stroke="#e6533c" stroke-width="7" stroke-linejoin="round"/>
+    <polygon points="92.50,67.60 67.60,92.50 32.40,92.50 7.50,67.60 7.50,32.40 32.40,7.50 67.60,7.50 92.50,32.40" fill="#e6533c" opacity="0.12"/>
+  </g>
+  <text x="480" y="270" font-family="Georgia, serif" font-size="76" fill="#f0f3f6" font-weight="bold">MMA GM</text>
+  <text x="482" y="330" font-family="Helvetica, Arial, sans-serif" font-size="30" fill="#9aa4b0">Free MMA career and management simulator</text>
+  <text x="482" y="386" font-family="Helvetica, Arial, sans-serif" font-size="22" fill="#6f7883">Unified World Fight Series. Deterministic fight engine. Decades of career.</text>
+  <rect x="482" y="424" width="150" height="4" fill="#e6533c"/>
+</svg>

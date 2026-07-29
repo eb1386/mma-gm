@@ -1,0 +1,93 @@
+{
+  "measuredAt": "2026-07-29T19:12:37.126Z",
+  "quick": true,
+  "results": [
+    {
+      "phase": "Load snapshot index",
+      "ms": 0.2647089999999821,
+      "target": 1000
+    },
+    {
+      "phase": "Read snapshot file from disk",
+      "ms": 3.355291999999963,
+      "target": 1000,
+      "detail": "1.55 MB"
+    },
+    {
+      "phase": "Parse snapshot JSON",
+      "ms": 3.8266669999999863,
+      "target": 1000,
+      "detail": "176 fighters"
+    },
+    {
+      "phase": "New career: Spectator Mode",
+      "ms": 250.71404099999995,
+      "target": 5000,
+      "detail": "176 real, 364 fictional, 145 gyms"
+    },
+    {
+      "phase": "New career: Fighter Mode",
+      "ms": 252.01041600000008,
+      "target": 5000
+    },
+    {
+      "phase": "New career: Coach Mode",
+      "ms": 252.79250000000002,
+      "target": 5000
+    },
+    {
+      "phase": "New career: reduced performance mode",
+      "ms": 5.880457999999862,
+      "target": 2000
+    },
+    {
+      "phase": "Advance one day",
+      "ms": 0.2586670000000595,
+      "target": 200
+    },
+    {
+      "phase": "Advance one week",
+      "ms": 62.41170899999997,
+      "target": 1000
+    },
+    {
+      "phase": "Advance one month",
+      "ms": 108.13858300000015,
+      "target": 3000
+    },
+    {
+      "phase": "Advance to next event",
+      "ms": 90.20358299999998,
+      "target": 2000,
+      "detail": "1 events resolved"
+    },
+    {
+      "phase": "Annual Pot refresh",
+      "ms": 657.481458,
+      "target": 3000,
+      "detail": "493 recomputed, 47 cached"
+    },
+    {
+      "phase": "Annual Pot refresh, second pass",
+      "ms": 0.9636249999998654,
+      "target": 500,
+      "detail": "0 recomputed, 540 cached"
+    },
+    {
+      "phase": "Serialize save to JSON",
+      "ms": 17.94312499999978,
+      "target": 2000,
+      "detail": "4.46 MB"
+    },
+    {
+      "phase": "Parse save from JSON",
+      "ms": 13.478749999999764,
+      "target": 2000
+    },
+    {
+      "phase": "Migrate a loaded save",
+      "ms": 11.695291999999881,
+      "target": 1000
+    }
+  ]
+}

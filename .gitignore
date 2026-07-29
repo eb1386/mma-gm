@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+.vite/
+.DS_Store
+*.log
+
+# Cached third party HTML from the ingestion crawler. Regenerate with tools/ingest/run.mjs.
+data/raw/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Local scratch
+tools/probe-*.ts
+tools/dbg.ts
+
+# Local agent and editor configuration, not part of the game.
+.claude/
+tsconfig.tsbuildinfo

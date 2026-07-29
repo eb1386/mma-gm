@@ -1,0 +1,19 @@
+{
+  "startedAt": "2026-07-29T08:25:42.094Z",
+  "finishedAt": "2026-07-29T08:37:27.798Z",
+  "crawlDelayMs": 15000,
+  "robotsCompliance": {
+    "crawlDelayHonored": true,
+    "disallowedPathsRefused": 0,
+    "note": "ufc.com robots.txt disallows /athletes/all?* so the full historical directory is not crawled. Roster membership comes from /rankings only."
+  },
+  "requests": {
+    "network": 48,
+    "cache": 129,
+    "failed": 0,
+    "disallowed": 0
+  },
+  "athleteCount": 176,
+  "gapCount": 0,
+  "gaps": []
+}

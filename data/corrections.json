@@ -1,0 +1,5 @@
+{
+  "note": "Dated manual correction file. Any field placed under a fighter slug overrides the ingested value, and the override is recorded in that field's provenance as manuallyOverridden. Use activityStatus to force a roster status the source has not caught up with.",
+  "correctedOn": "2026-07-29",
+  "fighters": {}
+}
