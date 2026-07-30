@@ -7,8 +7,9 @@ import type { Fighter } from '../types/fighter';
 import type { FightCardEvent, EventTier } from '../types/world';
 import type { SaveGame } from '../types/save';
 import { canCompete } from './health';
-import { assessTitleOpportunity, assessTitleRematch, lastTitleLoss } from './title-logic';
-import { calloutPressure } from './relationships';
+import { assessTitleOpportunity, assessTitleRematch, fightCloseness, lastTitleLoss } from './title-logic';
+import { existingTitleBout, interimTitleJustification, titleShotEligibility } from './title-eligibility';
+import { fulfilInterest, interestReason, matchupPull, type MatchupInterest } from './matchup-interest';
 import { bookBout, inCampFighterIds, offerBlockReason, releaseBooking, replaceSide } from './availability';
 import { resolveMessagesForBout } from './inbox';
 import { willingToFight } from './identity';
@@ -298,13 +299,45 @@ export type BookingKind =
   | 'local-showcase'
   | 'comeback'
   | 'divisional-filler'
+  | 'callout'
+  | 'rivalry'
+  | 'unification'
+  | 'divisional-debut'
   | 'short-notice-replacement';
+
+/**
+ * The reason surfaced to the player for every generated fight.
+ *
+ * Stored on the bout and on the offer so the inbox and the offer page can both say why the
+ * fight was made rather than presenting a matchup that appeared from nowhere.
+ */
+export const BOOKING_KIND_LABEL: Record<BookingKind, string> = {
+  'title-fight': 'Championship bout',
+  'interim-title': 'Interim championship bout',
+  eliminator: 'Title eliminator',
+  'ranked-matchup': 'Ranked contender matchup',
+  'prospect-test': 'Prospect step up',
+  'veteran-vs-prospect': 'Veteran against a prospect',
+  'style-clash': 'Style clash',
+  rematch: 'Rematch',
+  trilogy: 'Trilogy decider',
+  'local-showcase': 'Local showcase',
+  comeback: 'Comeback fight',
+  'divisional-filler': 'Divisional matchup',
+  callout: 'Successful callout',
+  rivalry: 'Rivalry fight',
+  unification: 'Unification fight',
+  'divisional-debut': 'Divisional debut',
+  'short-notice-replacement': 'Short notice booking',
+};
 
 export interface MatchCandidate {
   opponent: Fighter;
   score: number;
   kind: BookingKind;
   reason: string;
+  /** Set when this pairing came from a persistent matchmaking interest. */
+  interest?: MatchupInterest;
 }
 
 function priorMeetings(save: SaveGame, a: FighterId, b: FighterId): { count: number; lastDate: IsoDate | null; aWins: number; bWins: number } {
@@ -353,23 +386,35 @@ export function scoreCandidate(
   const history = priorMeetings(save, fighter.id, opponent.id);
   // A rematch needs a reason. Three meetings is the practical ceiling.
   if (history.count >= 3) return null;
+  // A rematch inside a year needs the first fight to have been worth running back. A wide
+  // decision or an early finish does not qualify, which is what stops the same pairing being
+  // remade over and over.
   if (history.count > 0 && history.lastDate && daysBetween(history.lastDate, event.date) < 400) {
-    const closeFirstFight = true;
-    if (!closeFirstFight) return null;
+    const previous = Object.values(save.history.results).find(
+      (r) =>
+        r.date === history.lastDate &&
+        ((r.fighterAId === fighter.id && r.fighterBId === opponent.id) || (r.fighterAId === opponent.id && r.fighterBId === fighter.id))
+    );
+    const worthRunningBack = previous ? fightCloseness(previous).value >= 0.7 : false;
+    const pulled = matchupPull(save, fighter.id, opponent.id).pull;
+    if (!worthRunningBack && pulled < 0.5) return null;
   }
 
   let score = 0;
   let kind: BookingKind = 'divisional-filler';
   let reason = 'a divisional matchup';
 
-  // Championship logic dominates when a champion is involved.
+  // Championship logic dominates when a champion is involved. Every championship pairing
+  // passes the shared eligibility gate, so an ineligible challenger is refused here exactly
+  // as it would be on the weekly title pass rather than slipping through on a card.
   if (isChampA || isChampB) {
+    const challenger = isChampA ? opponent : fighter;
+    const eligibility = titleShotEligibility(save, challenger, fighter.divisionId, { vacant: false });
+    if (!eligibility.eligible) return null;
     const challengerRank = isChampA ? rankB : rankA;
-    if (challengerRank === null) return null;
-    if (challengerRank > 6) return null;
-    score += 100 - challengerRank * 7;
+    score += 100 - (challengerRank ?? 8) * 7;
     kind = 'title-fight';
-    reason = `a title fight against the number ${challengerRank} contender`;
+    reason = eligibility.selectionReason;
   } else if (rankA !== null && rankB !== null) {
     const gap = Math.abs(rankA - rankB);
     // Ranked fighters meet fighters near them, with a bias toward the fighter ranked
@@ -514,9 +559,25 @@ export function findBestOpponent(
   for (const opp of pool) {
     const c = scoreCandidate(save, fighter, opp, event, rng);
     if (!c) continue;
-    // Callouts create real matchmaking pressure without ever booking a fight themselves.
-    const pressure = calloutPressure(save, fighter.id, opp.id);
-    if (pressure > 0) c.score += pressure * 22;
+    // A live matchup interest is a real candidate, not a nudge. An accepted callout between
+    // two available fighters in the same division now outweighs anything the ordinary
+    // divisional scoring would have produced, which is what makes the callout mean something.
+    const { pull, interest } = matchupPull(save, fighter.id, opp.id);
+    if (pull < 0) {
+      // Training partners and close friends are pushed out of contention entirely.
+      if (pull <= -0.9) continue;
+      c.score += pull * 60;
+    } else if (pull > 0) {
+      c.score += pull * 85;
+      if (interest && interest.eligibility === 'eligible') {
+        c.interest = interest;
+        c.kind = interest.source === 'callout' ? 'callout' : interest.source === 'rivalry' ? 'rivalry' : c.kind;
+        c.reason = interestReason(save, interest);
+      } else if (c.kind === 'divisional-filler' || c.kind === 'ranked-matchup') {
+        c.kind = 'rivalry';
+        c.reason = 'a rivalry the fans have been asking for';
+      }
+    }
     if (rematchTarget && opp.id === rematchTarget) c.score += 30;
     // A fighter with strong leverage is steered toward meaningful opposition.
     if (leverage.score >= 62) {
@@ -649,9 +710,26 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     if (allChampionIds.has(fighter.id) && !defendableChampionIds.has(fighter.id)) continue;
 
     const table = save.rankings[fighter.divisionId];
-    const isTitle =
+    let isTitle =
       candidate.kind === 'title-fight' && (table.championId === fighter.id || table.championId === candidate.opponent.id);
-    const isInterim = candidate.kind === 'interim-title';
+    let isInterim = candidate.kind === 'interim-title';
+
+    // One belt, one bout. Card seeding used to be able to create a second championship fight
+    // in a division that already had one scheduled, because only the weekly title pass
+    // checked. A pairing that would duplicate a belt is demoted to a ranked matchup rather
+    // than being dropped, so the card still fills.
+    if ((isTitle || isInterim) && existingTitleBout(save, fighter.divisionId)) {
+      isTitle = false;
+      isInterim = false;
+      candidate.kind = 'ranked-matchup';
+      candidate.reason = 'a ranked matchup with the championship already booked elsewhere';
+    }
+    // An interim belt is never created here without the shared justification.
+    if (isInterim && !interimTitleJustification(save, fighter.divisionId).justified) {
+      isInterim = false;
+      candidate.kind = 'eliminator';
+      candidate.reason = 'a title eliminator';
+    }
 
     booked.add(fighter.id);
     booked.add(candidate.opponent.id);
@@ -690,6 +768,7 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
       weighInA: null,
       weighInB: null,
       bookingReason: candidate.reason,
+      bookingKind: candidate.kind,
     };
 
     // One transaction owns the booking and both pointers. It refuses rather than
@@ -699,6 +778,9 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
       save.counters.bout--;
       continue;
     }
+    // A matchup interest that produced a fight is closed against that fight, so the player
+    // can see that the callout they made is the reason this bout exists.
+    if (candidate.interest) fulfilInterest(candidate.interest, null, bout.id);
     bouts.push(bout);
     notes.push(`${fighter.name} against ${candidate.opponent.name}: ${candidate.reason}.`);
   }

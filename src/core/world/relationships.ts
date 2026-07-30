@@ -2,6 +2,7 @@ import { clamp, Rng } from '../rng';
 import { addDays, daysBetween, type FighterId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
+import { liveInterestBetween, recordMatchupInterest } from './matchup-interest';
 
 /**
  * Relationships between fighters.
@@ -304,6 +305,13 @@ export interface Callout {
   promotionInterest: number;
   /** Whether an offer resulted. A callout never books a fight by itself. */
   ledToOffer: boolean;
+  /** How the fans took it, which the promotion weighs alongside the answer. */
+  fanResponse: 'favourable' | 'mixed' | 'unfavourable' | null;
+  /**
+   * The persistent matchmaking record this callout produced, when it produced one.
+   * Follow this to find out what actually happened to the fight.
+   */
+  matchupInterestId: string | null;
   note: string;
 }
 
@@ -434,6 +442,8 @@ export function makeCallout(save: SaveGame, fromId: FighterId, toId: FighterId, 
     responseText: null,
     promotionInterest: assessment.promotionInterest,
     ledToOffer: false,
+    fanResponse: null,
+    matchupInterestId: null,
     note: 'The matchmaker still decides whether this fight gets made.',
   };
   s[id] = callout;
@@ -471,6 +481,53 @@ export function resolveCallout(save: SaveGame, calloutId: string, rng: Rng): Cal
   callout.response = response;
   callout.status = 'answered';
   callout.responseText = responseTextFor(response, to.name, from.name);
+
+  // The fans have a view, and it is part of whether the promotion makes the fight.
+  const fanFavour = clamp(
+    (from.popularity + to.popularity) / 2 +
+      (callout.tone === 'personal' ? 12 : callout.tone === 'aggressive' ? 8 : callout.tone === 'promotional' ? 6 : 0) +
+      (response === 'accept' ? 15 : response === 'insult' || response === 'counter-callout' ? 12 : response === 'silence' ? -12 : 0),
+    0,
+    100
+  );
+  callout.fanResponse = fanFavour >= 55 ? 'favourable' : fanFavour >= 32 ? 'mixed' : 'unfavourable';
+
+  // This is the part that used to be missing. A callout now leaves a persistent record the
+  // matchmaker reads for months, instead of a relationship nudge that evaporated.
+  const positive = response === 'accept' || response === 'counter-callout' || response === 'respectful-answer' || response === 'future-promise' || response === 'insult';
+  if (positive) {
+    const interest = recordMatchupInterest(save, {
+      source: 'callout',
+      caller: from,
+      target: to,
+      requestedConditions: callout.text,
+      opponentResponse:
+        response === 'accept' ? 'accepted' : response === 'reject' ? 'declined' : 'open to it',
+      fanResponse: callout.fanResponse,
+      promotionResponse:
+        assessment.promotionInterest > 60
+          ? 'The promotion wants to make this fight.'
+          : assessment.promotionInterest > 30
+            ? 'The promotion is interested but not committed.'
+            : 'The promotion is not sold on this matchup.',
+      interestScore: clamp(
+        assessment.promotionInterest * 0.5 + fanFavour * 0.3 + (response === 'accept' ? 25 : 8),
+        0,
+        100
+      ),
+      lifespanDays: response === 'accept' ? 180 : 120,
+    });
+    callout.matchupInterestId = interest.id;
+  } else {
+    callout.matchupInterestId = null;
+    if (response === 'reject') {
+      const existing = liveInterestBetween(save, from.id, to.id);
+      if (existing) {
+        existing.eligibility = 'rejected';
+        existing.resolution = `${to.name} turned the fight down.`;
+      }
+    }
+  }
 
   const effects: Record<CalloutResponse, RelationshipDelta> = {
     accept: { rivalry: 12, respect: 6, publicHostility: 4 },

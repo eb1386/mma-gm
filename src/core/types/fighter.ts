@@ -258,6 +258,15 @@ export interface Fighter {
   isInterimChampion: boolean;
   titleReigns: number;
   titleDefenses: number;
+  /**
+   * A championship held in a division the fighter is no longer competing in.
+   *
+   * Set when a champion moves weight but keeps the belt for now. It is what allows a double
+   * champion attempt to exist without a champion silently disappearing from a division, and
+   * the deadline is when the promotion strips the title if they never come back.
+   */
+  heldTitleDivisionId?: DivisionId | null;
+  titleHoldDeadline?: IsoDate | null;
 
   // Affiliation
   gymId: GymId | null;

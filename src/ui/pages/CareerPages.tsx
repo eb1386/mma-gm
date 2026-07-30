@@ -26,12 +26,18 @@ import {
 } from '@core/world/antidoping';
 import {
   adjacentDivisions,
+  assessChampionMove,
   cancelPlan,
+  CHAMPION_PATH_LABEL,
   commitMove,
   currentPlan,
   evaluateOption,
   explore,
+  MOVE_KIND_LABEL,
   requestApproval,
+  TITLE_DECISION_LABEL,
+  type MoveKind,
+  type TitleDecision,
 } from '@core/world/weightclass';
 import {
   assessCallout,
@@ -48,6 +54,7 @@ import { offerBlockReason, BLOCK_REASON_TEXT } from '@core/world/availability';
 import { addDays } from '@core/types/common';
 import { KeyValues, Notice, Panel, Tabs } from '../components';
 import { useCareerStatus, useGame } from '../store';
+import { interestStatusLine, matchupInterestsFor, MATCHUP_SOURCE_LABEL } from '@core/world/matchup-interest';
 
 const POSTURES: CompliancePosture[] = ['strict', 'standard', 'loose', 'questionable'];
 const TONES: CalloutTone[] = ['respectful', 'confident', 'aggressive', 'personal', 'promotional'];
@@ -460,6 +467,8 @@ export function CareerPage() {
   const { act, busy } = useAct();
   const [tab, setTab] = useState('state');
   const [tone, setTone] = useState<CalloutTone>('confident');
+  const [moveKind, setMoveKind] = useState<MoveKind>('permanent');
+  const [titleDecision, setTitleDecision] = useState<TitleDecision>('vacate-now');
   const [target, setTarget] = useState<string>('');
 
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
@@ -475,6 +484,8 @@ export function CareerPage() {
   const plan = currentPlan(save, me.id);
   const relationships = relationshipsFor(save, me.id).slice(0, 25);
   const myCallouts = calloutsFor(save, me.id).slice(0, 12);
+  // Every matchup the promotion is still considering, so a callout is never a dead end.
+  const liveInterests = matchupInterestsFor(save, me.id).filter((m) => m.eligibility !== 'expired');
   const division = save.rankings[me.divisionId];
   const calloutTargets = [
     ...(division?.championId ? [division.championId] : []),
@@ -585,8 +596,16 @@ export function CareerPage() {
                   ['Manager', plan.managerOpinion ?? 'No opinion given'],
                   ['Head coach', plan.coachOpinion ?? 'No opinion given'],
                   ['Promotion', plan.promotionResponse ?? 'Not asked yet'],
+                  ['Move type', MOVE_KIND_LABEL[plan.kind ?? 'permanent']],
+                  ['Your championship', TITLE_DECISION_LABEL[plan.titleDecision ?? 'not-applicable']],
                 ]}
               />
+              {plan.championPathExplanation && (
+                <Notice kind="info">
+                  <strong>{plan.championPath ? CHAMPION_PATH_LABEL[plan.championPath] : 'Championship path'}:</strong>{' '}
+                  {plan.championPathExplanation}
+                </Notice>
+              )}
               <div className="row mt">
                 {(plan.status === 'exploring' || plan.status === 'refused') && (
                   <button
@@ -698,12 +717,61 @@ export function CareerPage() {
                       </div>
                     );
                   })()}
+                  {(() => {
+                    // A champion moving weight has to say what happens to the belt they hold,
+                    // because both divisions depend on the answer.
+                    const isChampion = save.rankings[me.divisionId]?.championId === me.id;
+                    const championPath = isChampion ? assessChampionMove(save, me, d!.id) : null;
+                    return (
+                      <>
+                        {championPath && (
+                          <Notice kind="info">
+                            <strong>{CHAMPION_PATH_LABEL[championPath.path]}:</strong> {championPath.explanation}
+                            {championPath.cautions.map((c, i) => (
+                              <div key={i} className="small warn">
+                                {c}
+                              </div>
+                            ))}
+                          </Notice>
+                        )}
+                        <div className="row wrap mt">
+                          <label>
+                            Move type
+                            <select
+                              value={moveKind}
+                              onChange={(e) => setMoveKind(e.target.value as MoveKind)}
+                              disabled={busy}
+                            >
+                              <option value="permanent">{MOVE_KIND_LABEL.permanent}</option>
+                              <option value="one-fight">{MOVE_KIND_LABEL['one-fight']}</option>
+                              {isChampion && <option value="double-champion">{MOVE_KIND_LABEL['double-champion']}</option>}
+                              {me.eligibleDivisions.includes(d!.id) && <option value="return">{MOVE_KIND_LABEL.return}</option>}
+                            </select>
+                          </label>
+                          {isChampion && (
+                            <label>
+                              Your championship
+                              <select
+                                value={titleDecision}
+                                onChange={(e) => setTitleDecision(e.target.value as TitleDecision)}
+                                disabled={busy}
+                              >
+                                <option value="vacate-now">{TITLE_DECISION_LABEL['vacate-now']}</option>
+                                <option value="keep-temporarily">{TITLE_DECISION_LABEL['keep-temporarily']}</option>
+                                <option value="defend-both">{TITLE_DECISION_LABEL['defend-both']}</option>
+                              </select>
+                            </label>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                   <button
                     className="mt"
                     disabled={busy || Boolean(plan && plan.status !== 'canceled' && plan.status !== 'completed')}
                     onClick={() =>
                       void act('Exploring the move', () => {
-                        mutate((st) => explore(st, st.fighters[me.id], d!));
+                        mutate((st) => explore(st, st.fighters[me.id], d!, moveKind, titleDecision));
                         return `You are looking into a move to ${d!.name}. Nothing is committed.`;
                       })
                     }
@@ -814,6 +882,32 @@ export function CareerPage() {
                   Call out {chosen?.name}
                 </button>
               </>
+            )}
+          </Panel>
+
+          <Panel title="Where these matchups stand">
+            {liveInterests.length === 0 ? (
+              <p className="dim">
+                Nothing is currently with the matchmaker. A callout that goes well creates a matchmaking record here, and
+                you can follow it until it becomes an offer or the promotion explains why it will not.
+              </p>
+            ) : (
+              <table>
+                <tbody>
+                  {liveInterests.map((interest) => {
+                    const other = save.fighters[interest.targetId === me.id ? interest.callerId : interest.targetId];
+                    return (
+                      <tr key={interest.id}>
+                        <td>{other?.name ?? 'Unknown fighter'}</td>
+                        <td className="small nowrap">{MATCHUP_SOURCE_LABEL[interest.source]}</td>
+                        <td className={interest.eligibility === 'eligible' ? 'small good' : 'small warn'}>
+                          {interestStatusLine(save, interest)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
           </Panel>
 

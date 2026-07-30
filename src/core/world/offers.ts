@@ -29,6 +29,10 @@ export interface CreateOfferOptions {
   isReplacementSlot: boolean;
   /** The fighter is hurt now but the event is far enough out to be worth asking about. */
   medicallyContingent?: boolean;
+  /** The structured matchmaking category, carried onto the offer for the interface. */
+  bookingKind?: string;
+  /** The persistent matchmaking interest that produced this offer, when there was one. */
+  matchupInterestId?: string | null;
 }
 
 export function rankingImplication(save: SaveGame, fighter: Fighter, opponent: Fighter, opts: CreateOfferOptions): string {
@@ -96,6 +100,10 @@ export function createFightOffer(
   });
   if (blocked) return null;
   if (!opts.isReplacementSlot && recentlyDeclined(save, fighter.id, opponent.id, event.id)) return null;
+  // An offer is always at the fighter's current division. A fighter who has moved weight
+  // must never be approached about a fight at the weight they left, which is what made a
+  // division change feel like it had not taken effect.
+  if (opponent.divisionId !== fighter.divisionId && !opts.isReplacementSlot) return null;
 
   const noticeDays = daysBetween(save.date, event.date);
   const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
@@ -132,6 +140,8 @@ export function createFightOffer(
     createdOn: save.date,
     deadline: addDays(save.date, Math.min(10, Math.max(2, Math.floor(noticeDays / 3)))),
     isReplacementSlot: opts.isReplacementSlot,
+    bookingKind: opts.bookingKind,
+    matchupInterestId: opts.matchupInterestId ?? null,
     idempotencyKey: key,
     medicallyContingent: contingent,
     status: 'open',
@@ -140,11 +150,14 @@ export function createFightOffer(
   save.fightOffers[offer.id] = offer;
 
   const health = canCompete(fighter, save.date);
+  // A championship offer answers the questions a player actually has before accepting: who
+  // holds the belt, why they were picked, and what happens if they say no.
+  const championship = isChampionshipBout(opts) ? championshipContext(save, fighter, opts) : '';
   addInboxMessage(save, {
     sender: 'matchmaker',
     senderName: PROMOTION_MATCHMAKING,
     subject: `${contingent ? 'Medically contingent offer' : opts.isTitleFight ? 'Title fight offer' : opts.isInterimTitleFight ? 'Interim title fight offer' : opts.isMainEvent ? 'Main event offer' : 'Fight offer'}: ${opponent.name}`,
-    body: `${event.name} in ${event.city}, ${event.country} on ${event.date}. ${opts.scheduledRounds} rounds at ${offer.contractedWeightLb} lb. ${noticeDays} days notice, about ${offer.campWeeksAvailable} weeks of camp. Reason for the offer: ${opts.reason}. ${offer.rankingImplication}${health.ok ? '' : ` Note: currently unavailable (${health.reason}).`}${contingent ? ' This offer is contingent on medical clearance in time for the event. It is withdrawn automatically if you are not cleared.' : ''}`,
+    body: `${event.name} in ${event.city}, ${event.country} on ${event.date}. ${opts.scheduledRounds} rounds at ${offer.contractedWeightLb} lb. ${noticeDays} days notice, about ${offer.campWeeksAvailable} weeks of camp. Reason for the offer: ${opts.reason}. ${offer.rankingImplication}${championship}${health.ok ? '' : ` Note: currently unavailable (${health.reason}).`}${contingent ? ' This offer is contingent on medical clearance in time for the event. It is withdrawn automatically if you are not cleared.' : ''}`,
     category: 'offer',
     requiresAction: true,
     deadline: offer.deadline,
@@ -157,6 +170,28 @@ export function createFightOffer(
   });
 
   return offer;
+}
+
+/**
+ * The extra paragraph a championship offer carries.
+ *
+ * Declining a title shot is a legitimate choice, so the consequences are stated up front
+ * rather than discovered afterwards.
+ */
+function championshipContext(save: SaveGame, fighter: Fighter, opts: CreateOfferOptions): string {
+  const table = save.rankings[fighter.divisionId];
+  const division = DIVISION_BY_ID[fighter.divisionId];
+  const championId = opts.isInterimTitleFight ? table.interimChampionId : table.championId;
+  const champion = championId ? save.fighters[championId] : null;
+  const belt = opts.isInterimTitleFight ? `interim ${division.name} championship` : `${division.name} championship`;
+  const holder = champion
+    ? champion.id === fighter.id
+      ? ` You are defending the ${belt}.`
+      : ` ${champion.name} holds the ${belt}.`
+    : ` The ${belt} is vacant.`;
+  const declineNote =
+    ' If you decline, the opportunity goes to the next eligible contender and you keep your ranking, but the matchmaker will remember it. Declining once does not close the door on a future title shot.';
+  return `${holder}${declineNote}`;
 }
 
 export type OfferResponse =

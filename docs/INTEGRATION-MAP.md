@@ -40,3 +40,48 @@ engine exists but a row here is empty.
 - **Money** and **Managers** have no dashboard presence and no contextual action. They are
   reachable from the sidebar and through inbox items, which is enough to find them, but the
   primary action never points at them.
+
+---
+
+## Title shots, division moves, matchmaking, callouts and rivalries
+
+These five were built at different times and each reached the world through a different
+route, which is why they behaved as if they were unaware of each other. They now share three
+modules.
+
+### `title-eligibility.ts` is the only gate on a belt
+
+| Path that can create a championship bout | Calls |
+| --- | --- |
+| Weekly title pass in `tick.ts` | `rankChallengers`, then `titleShotEligibility` again before booking |
+| Card seeding in `matchmaking.ts` | `titleShotEligibility` inside `scoreCandidate`, plus `existingTitleBout` before the bout is built |
+| Champion division move | `assessChampionMove`, which calls `rankChallengers` and `interimTitleJustification` |
+| Replacement finder | Demotes the bout when the replacement is not ranked in the top eight |
+
+`existingTitleBout` is what prevents two live bouts for one belt. `interimTitleJustification`
+is what prevents an interim championship existing for a scheduling reason.
+
+### `matchup-interest.ts` is the only persistent matchmaking candidate
+
+| Producer | Source recorded |
+| --- | --- |
+| `resolveCallout` when the answer is not a refusal | `callout` |
+| `commitMove` | `division-debut`, or `title-claim` when a championship is on the line |
+| Rivalry state, read live rather than stored | `matchupPull` |
+
+| Consumer | Effect |
+| --- | --- |
+| `findBestOpponent` | `matchupPull` moves a specific opponent up or out of the list |
+| `runMatchupInterestPass` | Converts an eligible interest into a real fight offer |
+| Career page and Rivalries page | Show the current state and the blocker |
+| `evaluateAllInterests` in the weekly tick | Recomputes eligibility against the world |
+
+### What a player sees, and where it comes from
+
+| Player visible thing | Written by | Read by |
+| --- | --- | --- |
+| "Why this fight was made" on an offer | `bookingKind` and `reason` on the offer | Offer page |
+| Why a challenger was selected | `TitleEligibility.selectionReason` | Bout `bookingReason`, title offer body |
+| Why a belt is interim | `InterimJustification.explanation` | Bout `bookingReason`, champion move panel |
+| Why a callout has not produced a fight | `MatchupInterest.blockers` | Career page, Rivalries page, weekly inbox update |
+| What happens to a championship on a move | `TitleDecision` and `ChampionMovePath` | Weight class panel, move confirmation message |

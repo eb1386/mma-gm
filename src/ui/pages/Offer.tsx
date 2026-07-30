@@ -6,9 +6,23 @@ import { formatDate, formatMoney, formatNumber } from '@core/types/common';
 import { ovrDisplayed, RATING_LONG_LABEL, RATING_KEYS } from '@core/types/fighter';
 import { estimateRatings, scoutingReport } from '@core/world/scouting';
 import { respondToOffer, type OfferResponse } from '@core/world/offers';
+import { BOOKING_KIND_LABEL, type BookingKind } from '@core/world/matchmaking';
+import { MATCHUP_SOURCE_LABEL, type MatchupSource } from '@core/world/matchup-interest';
 import { canCompete } from '@core/world/health';
 import { useGame } from '../store';
 import { EstimatedRating, KeyValues, Notice, Panel, Rating, RealTag } from '../components';
+
+/**
+ * The plain label for a stored booking category.
+ *
+ * The category is stored as a string so an older save with a category this build no longer
+ * knows about still renders, rather than showing an empty line.
+ */
+function bookingKindLabel(kind: string): string {
+  if (kind in BOOKING_KIND_LABEL) return BOOKING_KIND_LABEL[kind as BookingKind];
+  if (kind in MATCHUP_SOURCE_LABEL) return MATCHUP_SOURCE_LABEL[kind as MatchupSource];
+  return 'Matchmaking decision';
+}
 
 /** Fight offer review. Every response and its consequence is stated in plain language. */
 export function OfferPage() {
@@ -94,7 +108,9 @@ export function OfferPage() {
             ]}
           />
           <p className="small dim mt">
-            <strong>Reason for the offer:</strong> {offer.reason}.
+            <strong>Why this fight was made:</strong>{' '}
+            {offer.bookingKind ? `${bookingKindLabel(offer.bookingKind)}. ` : ''}
+            {offer.reason}
           </p>
           <p className="small dim">
             <strong>Ranking implication:</strong> {offer.rankingImplication}

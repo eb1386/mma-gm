@@ -4,6 +4,8 @@ import { allDivisionRankings } from '../world/rankings';
 import { Rng } from '../rng';
 import { generateActivityProfile, generateFame, generatePersonality, generateSocial } from '../world/identity';
 import { repairInbox } from '../world/decisions';
+import { evaluateInterest } from '../world/matchup-interest';
+import { addDays, daysBetween } from '../types/common';
 import { fightNightName, numberedEventName, PROMOTION_CONTRACTS, PROMOTION_MARKETING, PROMOTION_MATCHMAKING, PROMOTION_NAME } from '../config/branding';
 
 /**
@@ -240,6 +242,127 @@ const MIGRATION_11: Migration = {
   },
 };
 MIGRATIONS.push(MIGRATION_11);
+
+/**
+ * Schema 12: matchmaking interest, division history and the champion move fields.
+ *
+ * Everything added here is derived from state the save already holds, so an existing career
+ * keeps its championships, rankings, rivalries and results untouched. A callout that was
+ * answered before this build gets the matchmaking record it should always have had, which
+ * means an in progress save benefits from the fix rather than only new careers.
+ */
+const MIGRATION_12: Migration = {
+  to: 12,
+  describe:
+    'Adds persistent matchmaking interest, division history and champion move fields. Answered callouts in an existing save are converted into live matchmaking records, and no championship, ranking, rivalry or result is altered.',
+  apply: (save) => {
+    save.matchupInterests = save.matchupInterests ?? {};
+    save.divisionHistory = save.divisionHistory ?? {};
+
+    // Every fighter gets an open spell in whatever division they are currently in, so the
+    // history is complete from this point forward without inventing a past that was never
+    // recorded.
+    for (const f of Object.values(save.fighters ?? {})) {
+      if (f.heldTitleDivisionId === undefined) f.heldTitleDivisionId = null;
+      if (f.titleHoldDeadline === undefined) f.titleHoldDeadline = null;
+      const existing = save.divisionHistory![f.id];
+      if (existing && existing.length > 0) continue;
+      save.divisionHistory![f.id] = [
+        {
+          divisionId: f.divisionId,
+          startedOn: f.lastFightDate ?? save.date,
+          endedOn: null,
+          fights: 0,
+          wins: 0,
+          bestRanking: f.ranking ?? null,
+          heldTitle: Boolean(f.isChampion),
+          titleDefenses: f.titleDefenses ?? 0,
+          endReason: null,
+        },
+      ];
+    }
+
+    // Weight class plans written before this build have no move kind or title decision. The
+    // conservative reading of an old plan is a permanent move that vacates, which is exactly
+    // what the old code did unconditionally.
+    for (const plan of Object.values(save.weightClassPlans ?? {})) {
+      const p = plan as typeof plan & { kind?: unknown; titleDecision?: unknown; championPath?: unknown; championPathExplanation?: unknown };
+      if (p.kind === undefined) p.kind = 'permanent';
+      if (p.titleDecision === undefined) p.titleDecision = 'vacate-now';
+      if (p.championPath === undefined) p.championPath = null;
+      if (p.championPathExplanation === undefined) p.championPathExplanation = null;
+    }
+
+    // Answered callouts become matchmaking records. Without this, a player mid save who had
+    // already called somebody out would see the callout sitting answered forever with no way
+    // for it to become a fight.
+    for (const callout of Object.values(save.callouts ?? {})) {
+      const c = callout as typeof callout & { fanResponse?: unknown; matchupInterestId?: unknown };
+      if (c.fanResponse === undefined) c.fanResponse = null;
+      if (c.matchupInterestId === undefined) c.matchupInterestId = null;
+      if (callout.status !== 'answered') continue;
+      const positive =
+        callout.response === 'accept' ||
+        callout.response === 'counter-callout' ||
+        callout.response === 'respectful-answer' ||
+        callout.response === 'future-promise' ||
+        callout.response === 'insult';
+      if (!positive) continue;
+      const caller = save.fighters?.[callout.fromId];
+      const target = save.fighters?.[callout.toId];
+      if (!caller || !target) continue;
+      // Only a callout that is still recent enough to matter is revived.
+      if (daysBetween(callout.madeOn, save.date) > 150) continue;
+      const id = `matchup-${callout.fromId}-${callout.toId}-${callout.madeOn}`;
+      if (save.matchupInterests![id]) continue;
+      save.matchupInterests![id] = {
+        id,
+        source: 'callout',
+        callerId: callout.fromId,
+        targetId: callout.toId,
+        divisionId: target.divisionId,
+        createdOn: callout.madeOn,
+        expiresOn: addDays(callout.madeOn, callout.response === 'accept' ? 180 : 120),
+        requestedConditions: callout.text,
+        opponentResponse: callout.response === 'accept' ? 'accepted' : 'open to it',
+        fanResponse: null,
+        promotionResponse: null,
+        interestScore: Math.round(callout.promotionInterest * 0.5 + (callout.response === 'accept' ? 25 : 8)),
+        priority: 0,
+        rivalryEffect: 0,
+        eligibility: 'eligible',
+        blockers: [],
+        linkedOfferId: null,
+        linkedBoutId: null,
+        resolution: null,
+        lastReportedState: null,
+      };
+      c.matchupInterestId = id;
+    }
+
+    // Every live interest is evaluated once so a migrated save starts with correct blockers
+    // rather than claiming everything is eligible.
+    for (const interest of Object.values(save.matchupInterests ?? {})) {
+      evaluateInterest(save, interest);
+    }
+
+    // A championship in a division whose champion has left is either restored to a held title
+    // arrangement or released, never left pointing at somebody who is not there.
+    for (const [divisionId, table] of Object.entries(save.rankings ?? {})) {
+      if (!table.championId) continue;
+      const champ = save.fighters?.[table.championId];
+      if (!champ) {
+        table.championId = null;
+        continue;
+      }
+      if (champ.divisionId !== divisionId) {
+        champ.heldTitleDivisionId = divisionId as typeof champ.divisionId;
+        champ.titleHoldDeadline = addDays(save.date, 270);
+      }
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_12);
 
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;

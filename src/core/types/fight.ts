@@ -458,4 +458,6 @@ export interface Bout {
   weighInA: { madeWeight: boolean; weightLb: number; cutQuality: number } | null;
   weighInB: { madeWeight: boolean; weightLb: number; cutQuality: number } | null;
   bookingReason: string;
+  /** The structured matchmaking category, so the interface can label why this fight exists. */
+  bookingKind?: string;
 }

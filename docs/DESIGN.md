@@ -499,3 +499,74 @@ fighting about twice a year, and both booking paths read it.
 explanations were each investigated for longer than the measurement that settled it would
 have taken. When a metric is set by a single rate limit, compute what that limit permits
 before looking for a leak.
+
+---
+
+## 35. One gate decides every championship booking
+
+Four independent code paths could put a belt on the line: the weekly title pass, ordinary
+card seeding, the replacement finder and the player offer path. Each carried its own idea of
+who was eligible. Card seeding accepted any challenger ranked in the top six with no check on
+whether they were coming off a loss, and only the weekly pass checked whether the division
+already had a championship bout scheduled, so two live title fights for the same belt were
+reachable.
+
+`titleShotEligibility` in `title-eligibility.ts` is now the single answer. It returns a
+verdict, a list of named blockers, and the sentence explaining the selection, which is stored
+on the bout and shown on the offer. Standing is satisfied by one of several explicit routes
+rather than by a ranking threshold alone: a top five ranking, a ranked fighter on an unbeaten
+run, a win over the current number one contender, a former champion on a comeback run, the
+interim champion challenging for the undisputed belt, or a champion arriving from another
+division. Naming the routes is what lets the game explain a title shot that a pure ranking
+check would have called anomalous.
+
+**Interim belts require a stated reason.** `interimTitleJustification` returns one of five
+named causes and refuses when none applies. An interim championship is never created because
+the scheduler could not find the champion a date.
+
+---
+
+## 36. A callout leaves an object behind
+
+The callout system worked and reached nothing. It changed a relationship, and the matchmaker
+read a pressure value that decayed over 120 days. If the two fighters were not seeded onto the
+same card in the same weekly pass, the callout evaporated with no explanation. A player could
+call somebody out, get a favourable answer, and never hear about it again.
+
+A `MatchupInterest` is the missing object. It is created when a callout gets any answer other
+than a flat refusal, it persists in the save, and it is re-evaluated every week against the
+world. A blocked matchup is not deleted: it is marked blocked with the named blocker, and it
+becomes eligible again the moment the blocker clears. The weekly pass converts an eligible
+interest with real backing into an actual fight offer whose stated reason is the callout.
+
+**Blocked is a state, not a failure.** The distinction matters because the player can see it.
+"They are already booked for another fight, the matchup can be revisited afterwards" is a
+different message from silence, and it is the difference between a system that feels
+connected and one that feels fake.
+
+**Rivalry contributes on its own.** `matchupPull` reads the interest and the relationship
+together, so two fighters with genuine history are matched even when neither said anything
+publicly, and a current training partner is pushed out of contention entirely.
+
+---
+
+## 37. A division move changes eligibility, not a label
+
+`eligibleDivisions` was written by three call sites and read by none. Matchmaking keyed on
+`divisionId` alone, so a move updated the label while open offers at the old weight stayed
+live in the inbox and no debut opponent was ever sought. The fighter joined the unranked pool
+and waited to be noticed.
+
+A move now withdraws every open offer outside the new division, closes the outgoing division
+spell in `divisionHistory` so the record of what was achieved at the old weight survives, and
+seeds a real prioritised debut matchup scaled to the standing the fighter brings with them.
+`createFightOffer` refuses outright when the two fighters are in different divisions, so no
+later path can reintroduce the old behaviour.
+
+**A champion moving weight picks a path.** `assessChampionMove` returns one of six outcomes
+in a deliberate order: a direct championship bout against the destination champion first, an
+interim belt only when the shared justification gate agrees, then a contender bout, then a
+single debut fight. The original championship is kept temporarily, kept for a double champion
+attempt, or vacated, and `enforceAbsentChampions` strips a belt held by somebody who left the
+division and never came back. A champion cannot silently disappear from a division while
+remaining its champion forever.

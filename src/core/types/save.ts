@@ -22,6 +22,8 @@ import type { FinanceState, LedgerEntry, Manager, Sponsor } from '../world/finan
 import type { DopingState } from '../world/antidoping';
 import type { InjuryTreatment } from '../world/injury-flow';
 import type { Callout, Relationship } from '../world/relationships';
+import type { MatchupInterest } from '../world/matchup-interest';
+import type { DivisionSpell } from '../world/weightclass';
 import type { WeightClassPlan } from '../world/weightclass';
 import type {
   Contract,
@@ -40,7 +42,7 @@ import type {
   TrainingCamp,
 } from './world';
 
-export const SAVE_SCHEMA_VERSION = 11;
+export const SAVE_SCHEMA_VERSION = 12;
 
 export interface SaveSettings {
   difficulty: Difficulty;
@@ -179,6 +181,15 @@ export interface SaveGame {
   callouts?: Record<string, Callout>;
   /** Weight class plans, keyed by fighter id. */
   weightClassPlans?: Record<string, WeightClassPlan>;
+  /**
+   * Live matchmaking interest, keyed by its own id.
+   *
+   * This is what a callout, a rivalry or a division debut leaves behind so the matchmaker can
+   * act on it weeks later rather than only in the moment it was created.
+   */
+  matchupInterests?: Record<string, MatchupInterest>;
+  /** Every division a fighter has competed in, keyed by fighter id, oldest first. */
+  divisionHistory?: Record<string, DivisionSpell[]>;
   /**
    * Remembered game plans. The interface preselects these rather than resetting to a
    * default every time a planning screen is opened.

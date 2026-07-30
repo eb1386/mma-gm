@@ -17,6 +17,7 @@ import { FighterPage } from './pages/FighterPage';
 import { RosterPage } from './pages/Roster';
 import { DivisionPage } from './pages/Division';
 import { RankingsPage } from './pages/Rankings';
+import { RivalriesPage } from './pages/Rivalries';
 import { EventPage } from './pages/EventPage';
 import { FightPage } from './pages/FightPage';
 import { FightWeekPage } from './pages/FightWeek';
@@ -34,7 +35,14 @@ import { LeadersPage } from './pages/Leaders';
 import { GymPage, GymsPage } from './pages/Gyms';
 import { DataPage, HallOfFamePage, HelpPage, LoadGamePage, NewsPage, SettingsPage } from './pages/Misc';
 
-function Sidebar() {
+/**
+ * The left navigation.
+ *
+ * Below the narrow breakpoint it is hidden until the menu button opens it, because the
+ * sidebar was previously display:none there with nothing to replace it, which left a phone
+ * with no way to reach any page at all.
+ */
+function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const save = useGame((s) => s.save);
   const navigate = useNavigate();
   const unread = save ? actionableMessages(save).length : 0;
@@ -55,7 +63,7 @@ function Sidebar() {
   );
 
   return (
-    <nav className="sidebar">
+    <nav className={`sidebar${open ? ' open' : ''}`} onClick={onNavigate}>
       {/* The whole brand area is one control that opens the landing screen. */}
       <button className="sidebar-brand" onClick={() => navigate('/home')} title="Careers and world list">
         <OctagonMark />
@@ -75,6 +83,7 @@ function Sidebar() {
       {save.player.fighterId && link('/sponsors', 'Sponsors', sponsorOffers)}
       {save.player.fighterId && link('/management', 'Management')}
       {save.player.fighterId && link('/compliance', 'Compliance')}
+      {save.player.fighterId && link('/rivalries', 'Rivalries')}
       {save.player.fighterId && nextBoutId && link(`/fightweek/${nextBoutId}`, 'Fight week')}
       {save.player.gymId && link('/coach', 'Gym management')}
       <div className="nav-group">World</div>
@@ -200,9 +209,19 @@ function OperationPanel() {
 }
 
 function Shell() {
+  const [navOpen, setNavOpen] = useState(false);
   return (
     <div className="app">
-      <Sidebar />
+      <button
+        className="nav-toggle"
+        aria-expanded={navOpen}
+        aria-label={navOpen ? 'Close the menu' : 'Open the menu'}
+        onClick={() => setNavOpen((v) => !v)}
+      >
+        Menu
+      </button>
+      {navOpen && <div className="nav-scrim" onClick={() => setNavOpen(false)} />}
+      <Sidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
       <div className="main">
         <TopBar />
         <Routes>
@@ -213,6 +232,7 @@ function Shell() {
           <Route path="/inbox/:messageId" element={<InboxPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/rankings" element={<RankingsPage />} />
+          <Route path="/rivalries" element={<RivalriesPage />} />
           <Route path="/roster" element={<RosterPage />} />
           <Route path="/gyms" element={<GymsPage />} />
           <Route path="/gym/:gymId" element={<GymPage />} />

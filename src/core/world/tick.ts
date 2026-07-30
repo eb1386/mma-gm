@@ -38,7 +38,10 @@ import { ensureFightWeekTasks, pruneFightWeek } from './fightweek';
 import { generateSocialItems, pruneSocial, socialRng } from './social';
 import { campLifeRng, generateCampLife, seedGymRelationships } from './camp-life';
 import { decayRelationships, openCallouts, pruneCallouts, recordFightBetween, resolveCallout } from './relationships';
-import { maybeSuggestMove } from './weightclass';
+import { enforceAbsentChampions, maybeSuggestMove } from './weightclass';
+import { evaluateAllInterests, pruneMatchupInterests } from './matchup-interest';
+import { runMatchupInterestPass } from './matchup-pass';
+import { interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
 import { cancelStaleDivisionBouts, enforceDivisionInvariant, runNpcCallouts, runNpcWeightClassMoves } from './npc-behaviour';
 import { pruneGamePlans } from './gameplan-memory';
 import { syncCareerState } from './career';
@@ -955,6 +958,23 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     }
   }
 
+  // A champion who moved weight and never came back is stripped rather than holding a belt
+  // in a division they have left.
+  for (const note of enforceAbsentChampions(save)) {
+    headlines.push(note);
+    pushNews(save, {
+      date: save.date,
+      headline: note,
+      body: note,
+      tags: ['title'],
+      fighterIds: [],
+      importance: 3,
+    });
+  }
+  // Every live matchmaking interest is re-evaluated against the world once a week, so a
+  // blocked matchup becomes eligible again the moment its blocker clears.
+  evaluateAllInterests(save);
+
   // Keep the calendar populated and book cards that need bouts.
   scheduleEvents(save, rng, 200);
 
@@ -1056,6 +1076,11 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       if (suggestion) headlines.push(suggestion);
       decayRelationships(save);
       pruneCallouts(save);
+      // Live matchmaking interest. A callout that went well, a rivalry the fans want and a
+      // division debut all become real offers here rather than expiring unmentioned.
+      const matchupPass = runMatchupInterestPass(save, me, rng);
+      for (const note of matchupPass.headlines) headlines.push(note);
+      pruneMatchupInterests(save);
       pruneGamePlans(save);
       // Other fighters act too: they call the player out and occasionally change division.
       for (const note of runNpcCallouts(save, rng)) headlines.push(note);
@@ -1178,37 +1203,56 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
       let sideB: Fighter | null = null;
       let interimBout = false;
 
+      // Every challenger below passes the shared eligibility gate, and the reason it gives
+      // is what the player is shown. That is what stops an unranked fighter or somebody
+      // coming off a loss from being handed a title shot with no explanation.
+      let selectionReason = '';
+      let unification = false;
+
       if (champion && isAvailable(save, champion, ctx)) {
         const idleDays = champion.lastFightDate ? daysBetween(champion.lastFightDate, card.date) : 400;
         if (idleDays < CHAMPION_TURNAROUND_DAYS) continue;
         sideA = champion;
-        // Unification takes priority over a routine defense.
-        if (interim && isAvailable(save, interim, ctx)) {
+        // Unification takes priority over a routine defense. Once an interim champion
+        // exists the division owes that fight before anything else.
+        const due = unificationDue(save, d.id);
+        if (interim && due.due && isAvailable(save, interim, ctx)) {
           sideB = interim;
+          unification = true;
+          selectionReason = due.explanation;
         } else {
-          sideB =
-            table.entries
-              .map((e) => save.fighters[e.fighterId])
-              .filter((f): f is Fighter => Boolean(f) && isAvailable(save, f, ctx))
-              .sort((x, y) => (x.ranking ?? 99) - (y.ranking ?? 99))[0] ?? null;
+          const ranked = rankChallengers(save, d.id, (f) => isAvailable(save, f, ctx));
+          sideB = ranked[0]?.fighter ?? null;
+          selectionReason = ranked[0]?.eligibility.selectionReason ?? '';
         }
       } else {
-        const contenders = table.entries
-          .map((e) => save.fighters[e.fighterId])
-          .filter((f): f is Fighter => Boolean(f) && isAvailable(save, f, ctx))
-          .sort((x, y) => (x.ranking ?? 99) - (y.ranking ?? 99));
         if (!champion) {
-          // Vacant title.
-          sideA = contenders[0] ?? null;
-          sideB = contenders[1] ?? null;
-        } else if (shouldCreateInterimTitle(save, d.id) && !interim) {
-          sideA = contenders[0] ?? null;
-          sideB = contenders[1] ?? null;
-          interimBout = true;
+          // Vacant title. The two strongest eligible claims contest it.
+          const ranked = rankChallengers(save, d.id, (f) => isAvailable(save, f, ctx), { vacant: true });
+          sideA = ranked[0]?.fighter ?? null;
+          sideB = ranked[1]?.fighter ?? null;
+          selectionReason = ranked[0]
+            ? `The championship is vacant. ${ranked[0].eligibility.selectionReason}`
+            : 'The championship is vacant.';
+        } else {
+          const justification = interimTitleJustification(save, d.id);
+          if (justification.justified && !interim) {
+            const ranked = rankChallengers(save, d.id, (f) => isAvailable(save, f, ctx), { interim: true });
+            sideA = ranked[0]?.fighter ?? null;
+            sideB = ranked[1]?.fighter ?? null;
+            interimBout = true;
+            selectionReason = justification.explanation;
+          }
         }
       }
 
       if (!sideA || !sideB || sideA.id === sideB.id) continue;
+      // Final guard before the booking. Both sides are checked against the gate one more
+      // time with this bout excluded, so nothing that reached here by another route can slip
+      // past the eligibility rules.
+      const challengerCheck = titleShotEligibility(save, sideB, d.id, { vacant: !champion, interim: interimBout });
+      if (!challengerCheck.eligible) continue;
+      if (!selectionReason) selectionReason = challengerCheck.selectionReason;
 
       const boutId = `bout-${++save.counters.bout}`;
       const bout: Bout = {
@@ -1245,11 +1289,12 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
         }),
         weighInA: null,
         weighInB: null,
-        bookingReason: interimBout
+        bookingReason: selectionReason || (interimBout
           ? `interim ${d.name} title bout with the champion unavailable`
           : champion
             ? `${d.name} title defense`
-            : `vacant ${d.name} title bout`,
+            : `vacant ${d.name} title bout`),
+        bookingKind: unification ? 'unification' : interimBout ? 'interim-title' : 'title-fight',
       };
 
       const titleBooking = bookBout(save, bout);
@@ -1275,6 +1320,7 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
           scheduledRounds: 5,
           reason: bout.bookingReason,
           isReplacementSlot: false,
+          bookingKind: bout.bookingKind,
         });
       } else {
         for (const f of [sideA, sideB]) autoCampFor(save, f, boutId, card.date, rng);

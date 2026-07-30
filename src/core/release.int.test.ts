@@ -14,6 +14,7 @@ import { assessTitleOpportunity, assessTitleRematch, fightCloseness, unbeatenRun
 import { stagesForBout, tasksForBout, ensureFightWeekTasks } from './world/fightweek';
 import { createSession, presserRng } from './world/presser';
 import { migrateSave } from './save/migrate';
+import { SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
 
 /**
@@ -500,7 +501,7 @@ describe('save migration and repair', () => {
     delete (raw as Partial<SaveGame>).gamePlans;
     delete (raw as Partial<SaveGame>).relationships;
     const migrated = migrateSave(raw);
-    expect(migrated.schemaVersion).toBe(11);
+    expect(migrated.schemaVersion).toBe(SAVE_SCHEMA_VERSION);
     expect(migrated.gamePlans).toBeDefined();
     expect(migrated.relationships).toBeDefined();
     expect(Object.keys(migrated.fighters).length).toBe(Object.keys(f.save.fighters).length);
@@ -593,7 +594,7 @@ describe('branding and the fictional promotion', () => {
     });
 
     const migrated = migrateSave(raw);
-    expect(migrated.schemaVersion).toBe(11);
+    expect(migrated.schemaVersion).toBe(SAVE_SCHEMA_VERSION);
     // The historical record is preserved exactly.
     expect(migrated.events[ids[0]].name).toBe('UFC 200');
     // Future generated events are renamed and keep their number.
@@ -610,7 +611,7 @@ describe('branding and the fictional promotion', () => {
     const exported = JSON.stringify({ format: 'octagon-gm-save', schemaVersion: 9, save: f.save });
     const parsed = JSON.parse(exported) as { save: SaveGame };
     const migrated = migrateSave(parsed.save);
-    expect(migrated.schemaVersion).toBe(11);
+    expect(migrated.schemaVersion).toBe(SAVE_SCHEMA_VERSION);
     expect(Object.keys(migrated.fighters).length).toBeGreaterThan(0);
   });
 });

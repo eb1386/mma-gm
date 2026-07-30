@@ -137,6 +137,10 @@ export interface FightOffer {
   rankingImplication: string;
   travelKm: number;
   reason: string;
+  /** The structured matchmaking category behind the offer, shown on the offer page. */
+  bookingKind?: string;
+  /** Set when this offer came from a persistent matchmaking interest such as a callout. */
+  matchupInterestId?: string | null;
   createdOn: IsoDate;
   deadline: IsoDate;
   isReplacementSlot: boolean;

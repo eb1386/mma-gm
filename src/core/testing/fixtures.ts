@@ -5,6 +5,7 @@ import { addDays, type BoutId, type IsoDate } from '../types/common';
 import type { Injury } from '../types/fighter';
 import type { SnapshotFile } from '../data/snapshot';
 import type { SaveGame } from '../types/save';
+import type { FightCardEvent } from '../types/world';
 import { createNewGame } from '../world/newgame';
 import { bookBout } from '../world/availability';
 import { ensureFightWeekTasks } from '../world/fightweek';
@@ -150,9 +151,9 @@ export function makeInjury(on: IsoDate, opts: { blocking?: boolean; severity?: 1
 }
 
 /** Creates a card on a given date so a fixture can book onto it. */
-export function createEvent(save: SaveGame, date: IsoDate, name = 'Fixture Card') {
+export function createEvent(save: SaveGame, date: IsoDate, name = 'Fixture Card'): FightCardEvent {
   const id = `evt-fixture-${++save.counters.event}`;
-  const event = {
+  const event: FightCardEvent = {
     id,
     name,
     date,
@@ -160,7 +161,6 @@ export function createEvent(save: SaveGame, date: IsoDate, name = 'Fixture Card'
     country: 'United States',
     countryCode: 'US',
     venue: 'a large indoor arena',
-    capacity: 18000,
     tier: 'numbered-ppv' as const,
     status: 'announced' as const,
     boutIds: [] as BoutId[],
@@ -175,10 +175,10 @@ export function createEvent(save: SaveGame, date: IsoDate, name = 'Fixture Card'
     fightOfTheNightBoutId: null,
     performanceBonusFighterIds: [] as string[],
     attendance: null,
-    gate: null,
-    note: 'Created by a test fixture.',
+    drawScore: 0,
+    bonusAmount: 50000,
   };
-  save.events[id] = event as never;
+  save.events[id] = event;
   return event;
 }
 
