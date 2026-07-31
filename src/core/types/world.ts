@@ -245,6 +245,8 @@ export interface GymStaff {
 }
 
 export interface Gym {
+  /** The calendar month whose finances have already been settled, so it cannot be settled twice. */
+  lastSettledMonth?: string;
   id: GymId;
   name: string;
   country: string;

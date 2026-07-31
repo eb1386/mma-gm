@@ -40,6 +40,7 @@ export type ExpenseKind =
   | 'lifestyle'
   | 'family-support'
   | 'fine'
+  | 'media-management'
   | 'purse-forfeit';
 
 export const INCOME_LABEL: Record<IncomeKind, string> = {
@@ -61,6 +62,7 @@ export const EXPENSE_LABEL: Record<ExpenseKind, string> = {
   'gym-percentage': 'Gym percentage',
   'coaching-fees': 'Coaching fees',
   'camp-costs': 'Camp costs',
+  'media-management': 'Media management',
   nutrition: 'Nutrition',
   rehabilitation: 'Rehabilitation',
   surgery: 'Surgery',

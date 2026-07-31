@@ -268,7 +268,7 @@ export function generateFighter(rng: Rng, opts: GenerateFighterOptions): Fighter
     injuries: [],
     medicalSuspension: null,
     conditioning: clamp(Math.round(rng.normal(70, 10)), 20, 100),
-    campSharpness: 0.5,
+    campSharpness: 50,
     careerEarnings: Math.max(0, Math.round(rng.normal(proFights * 22000, 30000))),
     lastPurse: null,
     activityStatus: opts.activityStatus ?? 'active',

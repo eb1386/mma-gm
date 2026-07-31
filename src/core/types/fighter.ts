@@ -289,6 +289,12 @@ export interface Fighter {
   /** Anti-doping suspension. Abstract: a period of ineligibility with a stated reason. */
   antiDopingSuspension?: MedicalSuspension | null;
   conditioning: number;
+  /**
+   * Camp form, 0 to 100, neutral at 50.
+   *
+   * Nudged by the week to week camp life decisions and read by `finalizeCamp`, where it scales
+   * fight night sharpness. It resets to neutral when a camp starts and when one completes.
+   */
   campSharpness: number;
 
   // Money

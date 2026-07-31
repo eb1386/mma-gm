@@ -7,11 +7,11 @@ import { actionableMessages, markRead, messageNeedsAction, reconcileInbox, resol
 import { resolvePlayerDecision } from '@core/world/decisions';
 import { syncCareerState } from '@core/world/career';
 import '@core/world/decision-handlers';
-import { applyInjuryDecision, type InjuryChoiceKey } from '@core/world/injury-flow';
 import { moveFighterToGym } from '@core/world/gyms';
 import { clamp } from '@core/rng';
 import { useGame } from '../store';
 import { Notice, Panel, Tabs } from '../components';
+import { cancelBout } from '@core/world/matchmaking';
 
 /**
  * The inbox. Every decision the game asks of the player arrives here with explicit
@@ -19,20 +19,6 @@ import { Notice, Panel, Tabs } from '../components';
  */
 /** Categories whose consequences run through the registered decision handlers. */
 const HANDLED_CATEGORIES = new Set(['injury', 'medical', 'gym', 'career', 'news']);
-
-const INJURY_CHOICE_KEYS: string[] = [
-  'continue-normal',
-  'reduce-intensity',
-  'train-around',
-  'rest',
-  'rehabilitate',
-  'seek-specialist',
-  'request-evaluation',
-  'request-postponement',
-  'withdraw',
-  'continue-despite-risk',
-  'choose-surgery',
-];
 
 export function InboxPage() {
   const save = useGame((s) => s.save)!;
@@ -112,19 +98,9 @@ export function InboxPage() {
       const rng = new Rng(s.rng);
       let resolution = 'Acknowledged.';
 
-      // Injury decisions are a transaction on the booking, not a note. They are handled
-      // before the generic switch so they can move, cancel or keep the booked bout.
-      if (INJURY_CHOICE_KEYS.includes(choiceKey as InjuryChoiceKey) && message.category === 'injury') {
-        const me = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
-        const injuryId = message.linkedInjuryId ?? message.decisionKey?.replace('injury-decision-', '').split('-')[0] ?? null;
-        const injury = me && injuryId ? me.injuries.find((i) => i.id === injuryId) ?? me.injuries[me.injuries.length - 1] : null;
-        if (me && injury) {
-          const outcome = applyInjuryDecision(s, me, injury, choiceKey as InjuryChoiceKey, rng);
-          resolveMessage(s, message.id, choiceKey, outcome.message);
-          s.rng = rng.getState();
-          return;
-        }
-      }
+      // Injury decisions never reach here: `injury` is one of HANDLED_CATEGORIES, so they go
+      // through `resolvePlayerDecision` above. The duplicate implementation that used to sit here
+      // was unreachable and had drifted out of step with the transaction that actually runs.
 
       switch (choiceKey) {
         case 'accommodate': {
@@ -254,14 +230,10 @@ export function InboxPage() {
         case 'decline-replacement': {
           const bout = message.linkedBoutId ? s.bouts[message.linkedBoutId] : null;
           if (bout) {
-            bout.status = 'canceled';
-            bout.cancelReason = 'The player withdrew after an opponent change.';
-            const a = s.fighters[bout.fighterAId];
-            const b = s.fighters[bout.fighterBId];
-            if (a?.nextBoutId === bout.id) a.nextBoutId = null;
-            if (b?.nextBoutId === bout.id) b.nextBoutId = null;
-            const ev = s.events[bout.eventId];
-            if (ev) ev.boutIds = ev.boutIds.filter((id) => id !== bout.id);
+            // The one transaction that owns cancellation. This used to hand roll the pointers and
+            // the event card, which left the camp running, the linked messages unresolved and any
+            // contender claim consumed against a bout that never happened.
+            cancelBout(s, bout, 'The player withdrew after an opponent change.');
             const self = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
             if (self) self.relationships.matchmaker = clamp(self.relationships.matchmaker - 8, 0, 100);
           }

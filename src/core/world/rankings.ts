@@ -122,50 +122,58 @@ export function addRankingPoints(save: SaveGame, divisionId: DivisionId, fighter
 export const RANKING_POINTS_FLOOR = -30;
 
 /**
- * Corrects orderings that contradict a recent head to head result.
+ * The points bonus a fighter earns for a recent win over somebody above them.
  *
- * Points alone can leave a fighter ranked below somebody they have just beaten, which reads as
- * broken however defensible the arithmetic is. A recent, undisputed win over the fighter directly
- * above is honoured by swapping them. Bounded passes, so this can never loop.
+ * Expressed as an adjustment to the sort key rather than as a swap. An adjacent swap pass depends
+ * on the order it is handed, can oscillate on a cycle, and leaves violations behind when three
+ * fighters have beaten each other. A scalar adjustment is order independent, always terminates,
+ * and produces the same table whatever order the eligible list arrives in.
  */
-export function applyHeadToHead(save: SaveGame, order: Fighter[]): Fighter[] {
-  const result = [...order];
-  const recentWinOver = (winner: Fighter, loser: Fighter): boolean => {
-    let latest: { date: IsoDate; winnerId: FighterId | null } | null = null;
-    for (const id of winner.boutIds) {
-      const r = save.history.results[id];
-      if (!r) continue;
-      const pair = (r.fighterAId === winner.id && r.fighterBId === loser.id) || (r.fighterAId === loser.id && r.fighterBId === winner.id);
-      if (!pair) continue;
-      if (!latest || r.date > latest.date) latest = { date: r.date, winnerId: r.winnerId };
-    }
-    if (!latest) return false;
-    if (latest.winnerId !== winner.id) return false;
-    return daysBetween(latest.date, save.date) <= HEAD_TO_HEAD_WINDOW_DAYS;
-  };
+export function headToHeadAdjustment(
+  save: SaveGame,
+  fighter: Fighter,
+  pointsOf: Map<FighterId, number>
+): { bonus: number; over: FighterId | null } {
+  const mine = pointsOf.get(fighter.id) ?? 0;
+  let best: { gap: number; id: FighterId } | null = null;
 
-  for (let pass = 0; pass < HEAD_TO_HEAD_PASSES; pass++) {
-    let swapped = false;
-    for (let i = 1; i < result.length; i++) {
-      const above = result[i - 1];
-      const below = result[i];
-      // Only a clean, recent win counts, and only when the loser has not since beaten somebody
-      // materially better, which the points gap already expresses.
-      if (recentWinOver(below, above)) {
-        result[i - 1] = below;
-        result[i] = above;
-        swapped = true;
-      }
-    }
-    if (!swapped) break;
+  for (const id of fighter.boutIds) {
+    const r = save.history.results[id];
+    if (!r) continue;
+    if (r.winnerId !== fighter.id) continue;
+    if (daysBetween(r.date, save.date) > HEAD_TO_HEAD_WINDOW_DAYS) continue;
+    const otherId = r.fighterAId === fighter.id ? r.fighterBId : r.fighterAId;
+    const theirs = pointsOf.get(otherId);
+    if (theirs === undefined) continue;
+    // Only a win over somebody currently ahead needs correcting.
+    const gap = theirs - mine;
+    if (gap <= 0) continue;
+    // A later loss to the same opponent settles it the other way, so the most recent meeting wins.
+    const laterLoss = fighter.boutIds.some((bid) => {
+      const later = save.history.results[bid];
+      if (!later || later.date <= r.date) return false;
+      const pair =
+        (later.fighterAId === fighter.id && later.fighterBId === otherId) ||
+        (later.fighterAId === otherId && later.fighterBId === fighter.id);
+      return pair && later.winnerId === otherId;
+    });
+    if (laterLoss) continue;
+    if (!best || gap > best.gap) best = { gap, id: otherId };
   }
-  return result;
+
+  if (!best) return { bonus: 0, over: null };
+  // Enough to clear the gap, capped so one win cannot vault a fighter over the whole division.
+  const bonus = Math.min(best.gap + HEAD_TO_HEAD_MARGIN, HEAD_TO_HEAD_MAX_BONUS);
+  return { bonus, over: best.id };
 }
+
+/** The margin a head to head correction clears the opponent by. */
+export const HEAD_TO_HEAD_MARGIN = 0.5;
+/** The most a single head to head result can be worth, so one win is not a shortcut to the top. */
+export const HEAD_TO_HEAD_MAX_BONUS = 22;
 
 /** How recent a head to head win has to be to override the points order. */
 export const HEAD_TO_HEAD_WINDOW_DAYS = 730;
-/** Bounded correction passes, so the ordering can never oscillate. */
-export const HEAD_TO_HEAD_PASSES = 4;
 
 export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reasonBySlot: Map<FighterId, string>): RankingUpdate {
   const table = save.rankings[divisionId];
@@ -190,11 +198,18 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
     pointsOf.set(f.id, decayed);
   }
 
+  // Head to head is folded into the sort key, so the ordering is a pure function of the points.
+  const adjusted = new Map<FighterId, number>();
+  for (const f of eligible) {
+    const { bonus } = headToHeadAdjustment(save, f, pointsOf);
+    adjusted.set(f.id, (pointsOf.get(f.id) ?? 0) + bonus);
+  }
+
   const ordered = eligible
     .slice()
     .sort((a, b) => {
-      const pa = pointsOf.get(a.id) ?? 0;
-      const pb = pointsOf.get(b.id) ?? 0;
+      const pa = adjusted.get(a.id) ?? 0;
+      const pb = adjusted.get(b.id) ?? 0;
       if (Math.abs(pa - pb) > 0.001) return pb - pa;
       // Tie break on recent activity, then on record inside the promotion.
       const ra = a.lastFightDate ? daysBetween(a.lastFightDate, save.date) : 9999;
@@ -203,9 +218,7 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
       return b.ufcRecord.wins - a.ufcRecord.wins;
     });
 
-  // A recent head to head result outranks the points arithmetic, so nobody sits below a fighter
-  // they have just beaten.
-  const sorted = applyHeadToHead(save, ordered).slice(0, RANKED_SLOTS);
+  const sorted = ordered.slice(0, RANKED_SLOTS);
 
   const entries: RankingEntry[] = sorted.map((f, i) => {
     const prevEntry = table.entries.find((e) => e.fighterId === f.id);

@@ -613,17 +613,40 @@ export function replyToSocialItem(save: SaveGame, itemId: string, replyKey: stri
   return item.immediateReaction;
 }
 
+/**
+ * The follower effect a reply's declared figure is measured against.
+ *
+ * The effect tables express follower change as a rough count. This converts that into a rate, so
+ * the numbers written in the tables are actually read rather than being decoration.
+ */
+export const SOCIAL_FOLLOWER_REFERENCE = 4000;
+/** What ignoring a public question costs in media standing. */
+export const IGNORED_ITEM_MEDIA_COST = 1;
+/** Maximum proportional gain from one reply. */
+export const SOCIAL_FOLLOWER_GAIN = 0.006;
+/** Maximum proportional loss from one reply. Smaller, because reach is stickier than it looks. */
+export const SOCIAL_FOLLOWER_LOSS = 0.003;
+
 function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply: SocialReply, rng: Rng): void {
   const e = reply.effects;
   if (me.fame) {
     me.fame.favorability = clampPct(me.fame.favorability + (e.favorability ?? 0));
     me.fame.controversy = clampPct(me.fame.controversy + (e.controversy ?? 0));
-    me.fame.recognition = clampPct(me.fame.recognition + Math.abs(e.hype ?? 0) * 0.2);
+    // Recognition follows attention, and attention is what a reply generates whether the reaction
+    // is good or bad, so the absolute value is right for a reply that lands. A reply that damages
+    // the fight's hype does not make the fighter better known, so a negative effect is worth much
+    // less than a positive one rather than the same.
+    const hype = e.hype ?? 0;
+    me.fame.recognition = clampPct(me.fame.recognition + (hype > 0 ? hype * 0.2 : hype * -0.05));
     me.fame.promotionalTrust = clampPct(me.fame.promotionalTrust + (e.promotionRelationship ?? 0));
     me.fame.mediaFriendliness = clampPct(me.fame.mediaFriendliness + (e.mediaReputation ?? 0));
   }
   if (me.social && e.followers) {
-    const rate = e.followers > 0 ? 0.004 : -0.001;
+    // The per tone figures were written for every reply and then discarded: only the sign was
+    // read, so a reply worth ten times another moved followers by exactly the same amount. The
+    // magnitude now scales the rate, bounded so a single reply cannot transform an account.
+    const magnitude = Math.min(1, Math.abs(e.followers) / SOCIAL_FOLLOWER_REFERENCE);
+    const rate = e.followers > 0 ? SOCIAL_FOLLOWER_GAIN * magnitude : -SOCIAL_FOLLOWER_LOSS * magnitude;
     for (const key of Object.keys(me.social.followers) as (keyof typeof me.social.followers)[]) {
       me.social.followers[key] = Math.max(0, Math.round(me.social.followers[key] * (1 + rate)));
     }
@@ -697,6 +720,13 @@ export function pruneSocial(save: SaveGame, keepDays = 200): number {
     if (item.resolvedOn === null && item.expiresOn < save.date) {
       item.resolvedOn = save.date;
       item.immediateReaction = 'The moment passed without a reply.';
+      // Ignoring an item was strictly cheaper than answering it with the silent reply, so the
+      // dominant strategy was to never open the inbox. Letting a question go unanswered in public
+      // costs a little media standing, which is what the silent reply also costs.
+      const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
+      if (me?.fame && item.sourceFighterId !== me.id) {
+        me.fame.mediaFriendliness = clampPct(me.fame.mediaFriendliness - IGNORED_ITEM_MEDIA_COST);
+      }
     }
     if (item.resolvedOn && daysBetween(item.resolvedOn, save.date) > keepDays) {
       delete save.socialFeed[id];

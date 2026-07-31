@@ -32,6 +32,7 @@ import { applyReplacement, bookEvent, cancelBout, CHAMPION_TURNAROUND_DAYS, find
 import { inCampFighterIds } from './availability';
 import { applyFightPurse, paySponsorsForFight, runFinanceWeek } from './finance';
 import { clearExpiredSuspensions, runAntiDopingWeek } from './antidoping';
+import { recordSocialHistory } from './identity';
 import { bookBout, FIGHT_WEEK_DAYS, hasLiveBooking, releaseBooking } from './availability';
 import { checkPlayerInjuries } from './injury-flow';
 import { ensureFightWeekTasks, pruneFightWeek } from './fightweek';
@@ -67,6 +68,7 @@ import {
   socialFromResult,
 } from './identity';
 import { ROSTER_TARGET_SCALE } from '../config/matchmaking';
+import { featureEnabled } from '../types/save';
 
 /**
  * The world clock.
@@ -235,7 +237,11 @@ export function resolveBout(
 
   // Officials are assigned before the fight, from the persistent roster. The assignment is
   // derived from the bout id rather than the simulation rng, so it cannot shift the result.
-  const assignment = assignOfficials(save, bout);
+  // With persistent officials disabled the engine draws anonymous judges as it always did, which
+  // is the cheaper path for a lower performance save.
+  const assignment = featureEnabled(save.settings, 'persistentOfficials')
+    ? assignOfficials(save, bout)
+    : { judgeIds: [], refereeId: null };
   const hostEvent = save.events[bout.eventId];
   // A partisan crowd only exists when one fighter is at home and the other is not.
   const aHome = Boolean(hostEvent && a.country === hostEvent.country);
@@ -465,10 +471,24 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
 }
 
 /** Resolves every remaining bout on an event and closes it out. */
-export function resolveEvent(save: SaveGame, eventId: string, rng: Rng, detailCtx: DetailContext = {}): FightResult[] {
+export function resolveEvent(
+  save: SaveGame,
+  eventId: string,
+  rng: Rng,
+  detailCtx: DetailContext = {},
+  /**
+   * Results already resolved for this card before this call.
+   *
+   * The player's bout is resolved separately so the interface can play it back, which removed it
+   * from this function's view of the card entirely: it was excluded from the contested list and
+   * from bonus selection, so a player could never win Fight of the Night or a performance bonus
+   * however good the fight was.
+   */
+  preResolved: FightResult[] = []
+): FightResult[] {
   const event = save.events[eventId];
   if (!event || event.status === 'completed') return [];
-  const results: FightResult[] = [];
+  const results: FightResult[] = [...preResolved];
 
   event.weighInBoutIds = event.boutIds.filter((id) => save.bouts[id]?.status === 'scheduled');
   // Highest bout order first, which is the main event. The resolution order is part of the seeded
@@ -529,7 +549,9 @@ export function resolveEvent(save: SaveGame, eventId: string, rng: Rng, detailCt
     }
   }
 
-  computeEventBusiness(save, event, rng);
+  // Event economics is the heaviest per event computation, so a save that has it switched off
+  // skips it rather than computing figures nothing will read.
+  if (featureEnabled(save.settings, 'businessDepth')) computeEventBusiness(save, event, rng);
   const venue = VENUE_CITIES.find((v) => v.city === event.city);
   const drawFactor = results.reduce((s, r) => {
     const a = save.fighters[r.fighterAId];
@@ -701,6 +723,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     decayPopularity(fighter, save);
     decayFame(fighter, save);
     decaySocial(fighter, save);
+    // Recorded for every fighter, not only the ones losing reach, so a growing account has a
+    // history to show rather than a blank chart.
+    recordSocialHistory(fighter, save);
     if (fighter.fame) fighter.fame.drawingPower = computeDrawingPower(fighter);
     updateHappiness(save, fighter);
 
@@ -874,6 +899,16 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
           b.isInterimTitleFight = false;
           b.isTitleFight = true;
           b.bookingReason = `${b.bookingReason}. Upgraded to an undisputed title bout after the championship was vacated.`;
+        }
+        // An open interim offer has to be upgraded with the bouts. Leaving it alone let the player
+        // accept an interim championship for a division that no longer had a champion to stand in
+        // for, which is a belt that cannot mean anything.
+        for (const o of Object.values(save.fightOffers)) {
+          if (o.status !== 'open' || o.divisionId !== d.id || !o.isInterimTitleFight) continue;
+          o.isInterimTitleFight = false;
+          o.isTitleFight = true;
+          o.reason = `${o.reason}. Upgraded to an undisputed title bout after the championship was vacated.`;
+          o.rankingImplication = 'Undisputed championship on the line.';
         }
         pushNews(save, {
           date: save.date,
@@ -1145,7 +1180,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       }
       // Separate budgets. Sponsor and compliance items used to consume the whole allowance,
       // which is why social interactions almost never appeared.
-      const social = generateSocialItems(save, me, socialRng(save, me.id));
+      const social = featureEnabled(save.settings, 'mediaDepth')
+        ? generateSocialItems(save, me, socialRng(save, me.id))
+        : [];
       for (const item of social) {
         const message = addInboxMessage(save, {
           sender: item.source === 'opponent' || item.source === 'rival' || item.source === 'former-opponent' ? 'fighter' : 'media',
@@ -1168,7 +1205,11 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       pruneSocial(save);
       pruneFightWeek(save);
       for (const note of runFinanceWeek(save, me)) headlines.push(note);
-      for (const note of runAntiDopingWeek(save, me, rng)) headlines.push(note);
+      // The anti-doping system is optional and off by default. The save recorded that and nothing
+      // read it, so a player who turned it off still got tested.
+      if (featureEnabled(save.settings, 'antiDoping')) {
+        for (const note of runAntiDopingWeek(save, me, rng)) headlines.push(note);
+      }
       // Career life. This is how the gym, teammates, sponsors, the manager, the media and
       // the compliance systems actually reach the player rather than sitting on a page.
       seedGymRelationships(save, me);
@@ -1727,10 +1768,11 @@ export function simulatePlayerBout(save: SaveGame, boutId: BoutId, playerPlan: G
   const rng = rngOf(save);
   const bout = save.bouts[boutId];
   const result = resolveBout(save, bout, rng, playerPlan);
-  // Resolve the rest of the card around it.
+  // Resolve the rest of the card around it, passing the player's result in so it is part of the
+  // card for the contested list and for bonus selection.
   const event = save.events[bout.eventId];
   if (event) {
-    resolveEvent(save, event.id, rng);
+    resolveEvent(save, event.id, rng, {}, [result]);
   }
   save.pendingDecision = null;
   persistRng(save, rng);

@@ -20,6 +20,9 @@ export function EventPage() {
     { key: 'early-prelim', label: 'Early preliminary card' },
   ];
 
+  // One source for the attendance figure, shared by the header and the business panel.
+  const business = getBusiness(save, event.id);
+
   return (
     <div className="page">
       <div className="page-head">
@@ -35,7 +38,16 @@ export function EventPage() {
         <Panel title="Event summary">
           <div className="row">
             <span>
-              Attendance <strong>{event.attendance ? event.attendance.toLocaleString('en-US') : 'not recorded'}</strong>
+              Attendance{' '}
+              <strong>
+                {/* One number for one event. The header read the raw event field while the business
+                    panel read the modelled figure, so the same card showed two attendances. */}
+                {business?.attendance
+                  ? formatNumber(business.attendance)
+                  : event.attendance
+                    ? event.attendance.toLocaleString('en-US')
+                    : 'not recorded'}
+              </strong>
             </span>
             <span>
               Bonus <strong>{formatMoney(event.bonusAmount)}</strong>
@@ -67,7 +79,6 @@ export function EventPage() {
       )}
 
       {(() => {
-        const business = getBusiness(save, event.id);
         if (!business) return null;
         const kindTag = (kind: string) =>
           kind === 'simulated' ? (

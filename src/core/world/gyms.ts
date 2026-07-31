@@ -310,6 +310,14 @@ export function moveFighterToGym(save: SaveGame, fighterId: FighterId, newGymId:
 /** Monthly gym finances. */
 export function runGymMonth(save: SaveGame, gym: Gym): { income: number; costs: number; net: number; lines: string[] } {
   const lines: string[] = [];
+  // One settlement per calendar month. The player facing button had no guard, so pressing it
+  // repeatedly credited the gym its monthly income again and again and then double counted against
+  // the automatic settlement when the calendar reached the same month.
+  const month = save.date.slice(0, 7);
+  if (gym.lastSettledMonth === month) {
+    return { income: 0, costs: 0, net: 0, lines: ['This month has already been settled.'] };
+  }
+  gym.lastSettledMonth = month;
   const salaries = gym.staffIds.reduce((s, id) => s + (save.staff[id]?.salary ?? 0) / 12, 0);
   const overhead = gym.monthlyCosts;
   const membership = gym.fighterIds.length * 900 + gym.reputation * 220;

@@ -19,6 +19,7 @@ import {
   type SocialProfile,
 } from '../types/identity';
 import type { SaveGame } from '../types/save';
+import { record } from './finance';
 
 /**
  * Personality, activity, fame and social media.
@@ -373,12 +374,37 @@ export function decaySocial(fighter: Fighter, save: SaveGame): void {
   if (fightIdle > 300) rate += 0.0025;
   if (idle > 60) rate += 0.0015;
   if (fighter.lossStreak >= 2) rate += 0.0015;
+  // The design lists six sources of follower loss and only two were implemented. These are the
+  // rest, so the stated consequences are consequences rather than description.
+  if (fighter.weightMisses > 0) rate += 0.0008 * Math.min(3, fighter.weightMisses);
+  if (fighter.antiDopingSuspension && fighter.antiDopingSuspension.until > save.date) rate += 0.004;
+  if (fighter.commissionSuspension && fighter.commissionSuspension.until > save.date) rate += 0.001;
+  if (fighter.declinedOffers >= 3) rate += 0.001;
+  // An account with unusually low engagement for its size is losing people whatever else happens,
+  // which is what stops reach growing without any ceiling at all.
+  if (s.engagement < 12 && totalFollowers(s) > 250_000) rate += 0.0012;
+  // Cadence drifts down on its own, and a genuinely active account loses reach more slowly than
+  // an abandoned one with the same last post date.
+  s.activity = clamp(s.activity - 0.01, 0, 1);
+  rate *= 1 - s.activity * 0.35;
   if (rate <= 0) return;
   for (const p of PLATFORMS) s.followers[p] = Math.max(0, Math.round(s.followers[p] * (1 - rate)));
-  if (Number(save.date.slice(8, 10)) <= 7) {
-    s.history.push({ date: save.date, total: totalFollowers(s) });
-    if (s.history.length > 240) s.history.shift();
-  }
+}
+
+/**
+ * Records the monthly follower reading.
+ *
+ * Kept separate from decay, because it used to sit inside it behind an early return: a fighter who
+ * was growing never decayed, so their history was empty and the chart they were shown was blank
+ * for exactly the fighters doing well.
+ */
+export function recordSocialHistory(fighter: Fighter, save: SaveGame): void {
+  const s = fighter.social;
+  if (!s) return;
+  if (Number(save.date.slice(8, 10)) > 7) return;
+  if (s.history.some((h) => h.date.slice(0, 7) === save.date.slice(0, 7))) return;
+  s.history.push({ date: save.date, total: totalFollowers(s) });
+  if (s.history.length > 240) s.history.shift();
 }
 
 export interface SocialActionDefinition {
@@ -419,6 +445,11 @@ export const SOCIAL_ACTIONS: SocialActionDefinition[] = [
  * times a week is also the behaviour that makes an account look desperate.
  */
 export const SOCIAL_ACTIONS_PER_WEEK = 3;
+
+/** What a social media manager costs. */
+export const SOCIAL_MANAGER_FEE = 9000;
+/** Engagement a manager can take you to, so hiring one repeatedly achieves nothing. */
+export const SOCIAL_MANAGER_ENGAGEMENT_CAP = 88;
 
 /** Whether the fighter has any social actions left this week, and why not. */
 export function socialActionAllowance(save: SaveGame, fighter: Fighter): { remaining: number; reason: string | null } {
@@ -572,10 +603,27 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
     case 'go-silent':
       out.detail = 'Nothing posted. Reach will fade a little.';
       break;
-    case 'hire-social-manager':
-      social.engagement = clamp(social.engagement + 14, 0, 100);
+    case 'hire-social-manager': {
+      // Described as costing money, and it now does. It was free, repeatable and could not fail,
+      // so engagement could be taken to the ceiling in a single afternoon at no cost.
+      if (social.engagement >= SOCIAL_MANAGER_ENGAGEMENT_CAP) {
+        out.detail = 'You already have somebody running the accounts.';
+        out.succeeded = false;
+        break;
+      }
+      const affordable = save.player.fighterId !== fighter.id || (save.finance?.cash ?? 0) >= SOCIAL_MANAGER_FEE;
+      if (!affordable) {
+        out.detail = 'A manager wants more than you can pay right now.';
+        out.succeeded = false;
+        break;
+      }
+      if (save.player.fighterId === fighter.id) {
+        record(save, fighter.id, 'out', 'media-management', SOCIAL_MANAGER_FEE, 'Social media manager');
+      }
+      social.engagement = clamp(social.engagement + 14, 0, SOCIAL_MANAGER_ENGAGEMENT_CAP);
       out.detail = 'A manager is now handling the accounts. Posts will land better.';
       break;
+    }
   }
 
   applyFollowerChange(fighter, out.followerChange);
@@ -587,7 +635,14 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
   // Going quiet is not posting. Recording it as a post was self defeating: the one action whose
   // entire purpose is to let attention fade was also the action that reset the idle clock, so the
   // decay it is supposed to cause could never begin. Hiring a manager is not a post either.
-  if (key !== 'go-silent' && key !== 'hire-social-manager') social.lastPostOn = save.date;
+  if (key !== 'go-silent' && key !== 'hire-social-manager') {
+    social.lastPostOn = save.date;
+    // Posting cadence, 0 to 1. Generated and persisted but never maintained or read, so an
+    // account that posted constantly looked identical to one that never did.
+    social.activity = clamp(social.activity + 0.08, 0, 1);
+  } else if (key === 'go-silent') {
+    social.activity = clamp(social.activity - 0.12, 0, 1);
+  }
   // Repeated choices gradually shape identity rather than switching it instantly.
   personality.identityDrift = clamp(personality.identityDrift + 0.02, 0, 1);
   return out;

@@ -44,7 +44,7 @@ import type {
   TrainingCamp,
 } from './world';
 
-export const SAVE_SCHEMA_VERSION = 15;
+export const SAVE_SCHEMA_VERSION = 18;
 
 export interface SaveSettings {
   difficulty: Difficulty;
@@ -73,24 +73,30 @@ export interface SaveSettings {
   featureFlags?: FeatureFlags;
 }
 
-/** The optional systems the expansion adds. Absent means the default below. */
+/**
+ * The optional systems, each of which a code path actually branches on.
+ *
+ * Only flags the game can honour are declared. A flag that nothing reads is worse than no flag: it
+ * tells the player a system is disabled while that system carries on running. Women's divisions,
+ * historical worlds and commission detail were declared here and read nowhere, so they have been
+ * removed rather than left as a promise the build cannot keep. Migration 16 drops them from
+ * existing saves.
+ */
 export interface FeatureFlags {
-  historicalWorlds: boolean;
-  womensDivisions: boolean;
+  /** Media and social items reaching the player each week. */
   mediaDepth: boolean;
+  /** Full per event economics. The heaviest per event computation. */
   businessDepth: boolean;
+  /** The optional anti-doping system. Off by default. */
   antiDoping: boolean;
-  detailedCommissions: boolean;
+  /** Persistent judges and referees, rather than anonymous officials drawn per fight. */
   persistentOfficials: boolean;
 }
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
-  historicalWorlds: false,
-  womensDivisions: true,
   mediaDepth: true,
   businessDepth: true,
   antiDoping: false,
-  detailedCommissions: true,
   persistentOfficials: true,
 };
 

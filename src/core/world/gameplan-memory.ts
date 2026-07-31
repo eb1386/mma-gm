@@ -42,25 +42,25 @@ export function recallPlan(save: SaveGame, boutId: BoutId | null, scope: PlanSco
   const s = store(save);
   const forBout = boutId ? s.byBout[boutId] : undefined;
 
-  if (scope === 'camp' && forBout?.camp?.length) {
+  if (scope === 'camp' && forBout?.camp !== undefined) {
     return { plans: forBout.camp, remembered: true, source: 'this bout camp', updatedOn: forBout.updatedOn };
   }
   if (scope === 'preFight') {
-    if (forBout?.preFight?.length) {
+    if (forBout?.preFight !== undefined) {
       return { plans: forBout.preFight, remembered: true, source: 'this bout pre fight', updatedOn: forBout.updatedOn };
     }
-    if (forBout?.camp?.length) {
+    if (forBout?.camp !== undefined) {
       return { plans: forBout.camp, remembered: true, source: 'this bout camp', updatedOn: forBout.updatedOn };
     }
   }
   if (scope === 'inFight') {
-    if (forBout?.inFight?.length) {
+    if (forBout?.inFight !== undefined) {
       return { plans: forBout.inFight, remembered: true, source: 'the fight in progress', updatedOn: forBout.updatedOn };
     }
-    if (forBout?.preFight?.length) {
+    if (forBout?.preFight !== undefined) {
       return { plans: forBout.preFight, remembered: true, source: 'this bout pre fight', updatedOn: forBout.updatedOn };
     }
-    if (forBout?.camp?.length) {
+    if (forBout?.camp !== undefined) {
       return { plans: forBout.camp, remembered: true, source: 'this bout camp', updatedOn: forBout.updatedOn };
     }
   }
@@ -78,10 +78,13 @@ export function rememberPlan(
   plans: GamePlanKey[],
   opponentId?: string
 ): void {
-  if (plans.length === 0) return;
   const s = store(save);
-  s.lastGeneral = [...plans];
-  s.lastGeneralOn = save.date;
+  // An empty selection is a decision, not a mistake. Discarding it meant a player who cleared
+  // every chip had their previous plan silently restored the next time the screen opened.
+  if (plans.length > 0) {
+    s.lastGeneral = [...plans];
+    s.lastGeneralOn = save.date;
+  }
   if (!boutId) return;
   const existing = s.byBout[boutId] ?? { updatedOn: save.date };
   existing[scope] = [...plans];

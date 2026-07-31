@@ -166,8 +166,11 @@ export function reconcileInbox(save: SaveGame): number {
     if (m.status === 'resolved' || m.status === 'expired') continue;
     if (!m.requiresAction) continue;
     if (messageNeedsAction(save, m)) continue;
-    m.status = 'resolved';
-    m.resolution = m.resolution ?? 'Handled elsewhere.';
+    // A deadline that ran out is not the same as a decision somebody else took. Reporting both as
+    // "handled elsewhere" told the player their answer had been used when it had simply expired.
+    const lapsed = Boolean(m.deadline && m.deadline < save.date);
+    m.status = lapsed ? 'expired' : 'resolved';
+    m.resolution = m.resolution ?? (lapsed ? 'The deadline passed before this was answered.' : 'Handled elsewhere.');
     m.decisionResolvedOn = save.date;
     closed++;
   }

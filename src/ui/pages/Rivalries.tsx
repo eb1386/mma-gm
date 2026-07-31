@@ -300,10 +300,10 @@ export function RivalriesPage() {
             )}
 
             <div className="row">
-              <Link className="button" to={`/fighter/${row.otherId}`}>
+              <Link className="link-button" to={`/fighter/${row.otherId}`}>
                 Fighter profile
               </Link>
-              <Link className="button" to="/career">
+              <Link className="link-button" to="/career">
                 Call them out
               </Link>
             </div>

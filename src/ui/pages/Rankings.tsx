@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { DIVISIONS } from '@core/config/divisions';
+import { DIVISIONS, DIVISION_BY_ID } from '@core/config/divisions';
 import { formatDate } from '@core/types/common';
 import { estimateRatings } from '@core/world/scouting';
 import { useGame } from '../store';
@@ -51,7 +51,7 @@ export function RankingsPage() {
                     {f.isChampion && <span className="tag champ" style={{ marginLeft: 4 }}>C</span>}
                   </td>
                   <td>
-                    <Link to={`/division/${f.divisionId}`}>{f.divisionId}</Link>
+                    <Link to={`/division/${f.divisionId}`}>{DIVISION_BY_ID[f.divisionId].shortName}</Link>
                   </td>
                   <td className="num">
                     <EstimatedRating estimate={est.ovr} low={est.exact ? undefined : est.ovrLow} high={est.exact ? undefined : est.ovrHigh} />

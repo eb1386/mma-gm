@@ -460,17 +460,17 @@ export function scoreCandidate(
 
   const history = priorMeetings(save, fighter.id, opponent.id);
   // A rematch needs a reason. Three meetings is the practical ceiling.
-  if (history.count >= 3) return null;
+  if (history.count >= M.rematch.maxMeetings) return null;
   // A rematch inside a year needs the first fight to have been worth running back. A wide
   // decision or an early finish does not qualify, which is what stops the same pairing being
   // remade over and over.
-  if (history.count > 0 && history.lastDate && daysBetween(history.lastDate, event.date) < 400) {
+  if (history.count > 0 && history.lastDate && daysBetween(history.lastDate, event.date) < M.rematch.cooldownDays) {
     const previous = Object.values(save.history.results).find(
       (r) =>
         r.date === history.lastDate &&
         ((r.fighterAId === fighter.id && r.fighterBId === opponent.id) || (r.fighterAId === opponent.id && r.fighterBId === fighter.id))
     );
-    const worthRunningBack = previous ? fightCloseness(previous).value >= 0.7 : false;
+    const worthRunningBack = previous ? fightCloseness(previous).value >= M.rematch.closenessRequired : false;
     const pulled = matchupPull(save, fighter.id, opponent.id).pull;
     if (!worthRunningBack && pulled < 0.5) return null;
   }
@@ -487,36 +487,37 @@ export function scoreCandidate(
     const eligibility = titleShotEligibility(save, challenger, fighter.divisionId, { vacant: false });
     if (!eligibility.eligible) return null;
     const challengerRank = isChampA ? rankB : rankA;
-    score += 100 - (challengerRank ?? 8) * 7;
+    score += M.base.titleFight - (challengerRank ?? 8) * M.base.titleFightRankPenalty;
     kind = 'title-fight';
     reason = eligibility.selectionReason;
   } else if (rankA !== null && rankB !== null) {
     const gap = Math.abs(rankA - rankB);
     // Ranked fighters meet fighters near them, with a bias toward the fighter ranked
     // above so a win actually means something.
-    score += 62 - gap * 5.5;
+    score += M.base.rankedMatchup - gap * M.base.rankedGapPenalty;
     if (rankA <= 5 && rankB <= 5) {
-      score += 22;
+      score += M.base.eliminatorBonus;
       kind = 'eliminator';
       reason = 'a title eliminator between top five contenders';
     } else {
       kind = 'ranked-matchup';
       reason = `a ranked matchup at ${rankA} against ${rankB}`;
     }
-    if (gap > 8) score -= 25;
+    if (gap > M.base.wideGapThreshold) score -= M.base.wideGapPenalty;
   } else if (rankA !== null && rankB === null) {
     // Ranked fighter against an unranked fighter is a step down unless the unranked
     // fighter is a hot prospect.
     const streak = opponent.winStreak;
-    score += 26 + streak * 5 - (rankA <= 8 ? 18 : 0);
+    score += M.base.prospectTest + streak * M.base.prospectStreakBonus - (rankA <= 8 ? M.base.topTenAgainstUnrankedPenalty : 0);
     kind = 'prospect-test';
-    reason = `a step up for a prospect on a ${streak} fight run`;
+    // A fighter with no streak is not "on a 0 fight run", which is what this used to say.
+    reason = streak >= 2 ? `a step up for a prospect on a ${streak} fight run` : 'a step up for an unranked fighter';
   } else if (rankA === null && rankB !== null) {
-    score += 26 + fighter.winStreak * 5 - (rankB <= 8 ? 18 : 0);
+    score += M.base.prospectTest + fighter.winStreak * M.base.prospectStreakBonus - (rankB <= 8 ? M.base.topTenAgainstUnrankedPenalty : 0);
     kind = 'prospect-test';
     reason = 'a chance to break into the rankings';
   } else {
-    score += 30 - Math.abs(fighter.winStreak - opponent.winStreak) * 2;
+    score += M.base.unrankedPairing - Math.abs(fighter.winStreak - opponent.winStreak) * M.base.unrankedStreakGapPenalty;
     kind = 'divisional-filler';
     reason = 'a matchup between unranked fighters';
   }
@@ -551,8 +552,8 @@ export function scoreCandidate(
   // Age and career stage produce recognisable matchmaking patterns.
   const ageA = ageOn(fighter.birthDate, save.date) ?? fighter.ageAtSnapshot ?? 29;
   const ageB = ageOn(opponent.birthDate, save.date) ?? opponent.ageAtSnapshot ?? 29;
-  if (Math.abs(ageA - ageB) > 7 && Math.min(ageA, ageB) < 27) {
-    score += 8;
+  if (Math.abs(ageA - ageB) > M.age.veteranTestGap && Math.min(ageA, ageB) < M.age.veteranTestYoungerThan) {
+    score += M.age.veteranTestBonus;
     if (kind === 'divisional-filler' || kind === 'ranked-matchup') {
       kind = 'veteran-vs-prospect';
       reason = 'a veteran test for a younger fighter';
@@ -563,7 +564,7 @@ export function scoreCandidate(
   // kind is only relabelled when no title is involved.
   const titleInvolved = isChampA || isChampB;
   if (history.count === 1) {
-    score += 14;
+    score += M.rematch.rematchBonus;
     if (!titleInvolved) {
       kind = 'rematch';
       reason = 'a rematch of their previous meeting';
@@ -571,7 +572,7 @@ export function scoreCandidate(
       reason = `${reason}, in a rematch`;
     }
   } else if (history.count === 2 && history.aWins === 1 && history.bWins === 1) {
-    score += 26;
+    score += M.rematch.trilogyBonus;
     if (!titleInvolved) {
       kind = 'trilogy';
       reason = 'a trilogy decider after one win each';
@@ -582,8 +583,8 @@ export function scoreCandidate(
 
   // Style contrast sells and produces better fights.
   const contrast = styleContrast(fighter, opponent);
-  score += contrast * 22;
-  if (contrast > 0.42 && kind === 'ranked-matchup') {
+  score += contrast * M.appeal.styleContrastWeight;
+  if (contrast > M.appeal.styleClashThreshold && kind === 'ranked-matchup') {
     kind = 'style-clash';
     reason = 'a clear style clash';
   }
@@ -592,10 +593,10 @@ export function scoreCandidate(
   const regionA = regionOfFighter(fighter);
   const regionB = regionOfFighter(opponent);
   const eventRegion = VENUE_CITIES.find((v) => v.city === event.city)?.region ?? 'north-america';
-  if (regionA === eventRegion) score += 9;
-  if (regionB === eventRegion) score += 9;
+  if (regionA === eventRegion) score += M.appeal.sameRegionBonus;
+  if (regionB === eventRegion) score += M.appeal.sameRegionBonus;
   if (fighter.country === event.country || opponent.country === event.country) {
-    score += 8;
+    score += M.appeal.homeCountryBonus;
     if (kind === 'divisional-filler') {
       kind = 'local-showcase';
       reason = `a home market showcase in ${event.country}`;
@@ -603,12 +604,12 @@ export function scoreCandidate(
   }
 
   // Popularity sells a card.
-  score += (fighter.popularity + opponent.popularity) * 0.09;
+  score += (fighter.popularity + opponent.popularity) * M.appeal.popularityWeight;
 
   // A fighter coming off a long layoff gets an easier assignment.
   const layoffB = opponent.lastFightDate ? daysBetween(opponent.lastFightDate, event.date) : 999;
-  if (layoffB > 400) {
-    score += rankA !== null && rankA <= 8 ? -14 : 8;
+  if (layoffB > M.activity.longLayoffDays) {
+    score += rankA !== null && rankA <= 8 ? -M.activity.longLayoffRankedPenalty : M.activity.longLayoffBonus;
     if (kind === 'divisional-filler') {
       kind = 'comeback';
       reason = 'a return fight after a long layoff';
@@ -618,15 +619,19 @@ export function scoreCandidate(
   // Activity: the matchmaker prefers fighters who have been waiting.
   const waitA = fighter.lastFightDate ? daysBetween(fighter.lastFightDate, event.date) : 200;
   const waitB = opponent.lastFightDate ? daysBetween(opponent.lastFightDate, event.date) : 200;
-  score += clamp((waitA + waitB - 220) / 40, -6, 12);
+  score += clamp((waitA + waitB - M.activity.waitBaselineDays) / M.activity.waitDivisor, M.activity.waitFloor, M.activity.waitCeiling);
 
   // Contract pressure: a fighter on the last bout of a deal gets matched.
   const contractB = opponent.contractId ? save.contracts[opponent.contractId] : null;
-  if (contractB && contractB.fightsRemaining === 1) score += 6;
+  if (contractB && contractB.fightsRemaining === 1) score += M.relations.lastFightOnContractBonus;
 
   // Relationship: a fighter who keeps turning fights down gets offered less.
-  score -= opponent.declinedOffers * 4;
-  score += clamp((opponent.relationships.matchmaker - 50) / 6, -8, 8);
+  score -= opponent.declinedOffers * M.relations.perDeclinedOfferPenalty;
+  score += clamp(
+    (opponent.relationships.matchmaker - 50) / M.relations.matchmakerRelationshipDivisor,
+    -M.relations.matchmakerRelationshipCap,
+    M.relations.matchmakerRelationshipCap
+  );
 
   // Division congestion: when the top of a division is jammed, the matchmaker leans on
   // eliminators rather than more filler.
@@ -634,9 +639,9 @@ export function scoreCandidate(
     const f = save.fighters[e.fighterId];
     return f && !f.nextBoutId;
   }).length;
-  if (rankedActive > 10 && kind === 'divisional-filler') score -= 10;
+  if (rankedActive > M.congestion.crowdedRankedCount && kind === 'divisional-filler') score -= M.congestion.fillerPenalty;
 
-  score += rng.range(-7, 7);
+  score += rng.range(-M.jitter, M.jitter);
 
   return { opponent, score, kind, reason };
 }
@@ -778,6 +783,10 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     const champ = table.championId ? save.fighters[table.championId] : null;
     if (!champ) continue;
     allChampionIds.add(champ.id);
+    // The interim champion is a titleholder too. Leaving them out of this set meant they were
+    // seeded and matched as an ordinary contender, with no turnaround gate and no protection from
+    // being booked into filler while holding a belt.
+    if (table.interimChampionId) allChampionIds.add(table.interimChampionId);
     if (!isAvailable(save, champ, ctx)) continue;
     const daysSince = champ.lastFightDate ? daysBetween(champ.lastFightDate, event.date) : 400;
     // Champions defend a few times a year, not on every card. A big card is the place.

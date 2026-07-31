@@ -12,7 +12,7 @@ import {
 import { rankChallengers, titleShotEligibility, unificationDue } from './world/title-eligibility';
 import {
   addRankingPoints,
-  applyHeadToHead,
+  headToHeadAdjustment,
   rankingLedger,
   recomputeDivision,
   rankingPointsFor,
@@ -224,29 +224,59 @@ describe('rankings respond to who you beat', () => {
     expect(rankingLedger(f.save, 'lightweight')[outsider.id]).toBeGreaterThan(0);
   });
 
-  it('does not leave a fighter ranked below somebody they just beat', () => {
+  it('lifts a fighter above somebody they recently beat', () => {
     const f = newCareer(8203);
     const pool = roster(f.save, 'lightweight').filter((x) => x.id !== f.save.rankings.lightweight.championId);
     const lower = pool[6];
     const higher = pool[1];
     recordWin(f.save, lower, higher, f.save.date);
 
-    // Ordered by points alone the higher ranked fighter still leads.
-    const byPoints = [higher, lower];
-    const corrected = applyHeadToHead(f.save, byPoints);
-    expect(corrected[0].id).toBe(lower.id);
+    const points = new Map([
+      [higher.id, 40],
+      [lower.id, 30],
+    ]);
+    const adjustment = headToHeadAdjustment(f.save, lower, points);
+    expect(adjustment.over).toBe(higher.id);
+    // The bonus clears the gap, so the winner sorts above the fighter they beat.
+    expect(30 + adjustment.bonus).toBeGreaterThan(40);
   });
 
-  it('is stable and terminates regardless of the starting order', () => {
+  it('is a pure function of the points, so the order it is given cannot change the answer', () => {
     const f = newCareer(8204);
-    const pool = roster(f.save, 'lightweight').slice(0, 5);
-    // A cycle: a beats b, b beats c, c beats a. The correction must still terminate.
+    const pool = roster(f.save, 'lightweight').slice(0, 3);
+    // A cycle: a beats b, b beats c, c beats a. Every fighter has a claim on somebody above them.
     recordWin(f.save, pool[0], pool[1], f.save.date);
     recordWin(f.save, pool[1], pool[2], f.save.date);
     recordWin(f.save, pool[2], pool[0], f.save.date);
-    const out = applyHeadToHead(f.save, pool);
-    expect(out).toHaveLength(pool.length);
-    expect(new Set(out.map((x) => x.id)).size).toBe(pool.length);
+    const points = new Map(pool.map((x, i) => [x.id, 30 + i * 5]));
+    const first = pool.map((x) => headToHeadAdjustment(f.save, x, points).bonus);
+    const reversed = [...pool].reverse().map((x) => headToHeadAdjustment(f.save, x, points).bonus);
+    // Same inputs, same answers, whatever order they are asked in.
+    expect(reversed.reverse()).toEqual(first);
+  });
+
+  it('ignores a head to head win that a later loss has since settled', () => {
+    const f = newCareer(8207);
+    const pool = roster(f.save, 'lightweight').slice(0, 2);
+    recordWin(f.save, pool[0], pool[1], '2026-01-10');
+    recordWin(f.save, pool[1], pool[0], '2026-06-10');
+    const points = new Map([
+      [pool[1].id, 40],
+      [pool[0].id, 30],
+    ]);
+    // The rematch went the other way, so the older win no longer earns a correction.
+    expect(headToHeadAdjustment(f.save, pool[0], points).over).toBeNull();
+  });
+
+  it('caps how far a single result can lift a fighter', () => {
+    const f = newCareer(8208);
+    const pool = roster(f.save, 'lightweight').slice(0, 2);
+    recordWin(f.save, pool[0], pool[1], f.save.date);
+    const points = new Map([
+      [pool[1].id, 900],
+      [pool[0].id, 0],
+    ]);
+    expect(headToHeadAdjustment(f.save, pool[0], points).bonus).toBeLessThanOrEqual(22);
   });
 
   it('measures strength of schedule from real opponents', () => {

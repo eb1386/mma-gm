@@ -32,11 +32,12 @@ export function CampPage() {
   const planLabel = planSourceLabel(recalled);
   // Every change is stored immediately, so leaving the page cannot lose it.
   const setPlans = (next: GamePlanKey[] | ((cur: GamePlanKey[]) => GamePlanKey[])) => {
-    setPlansState((cur) => {
-      const value = typeof next === 'function' ? next(cur) : next;
-      mutate((s) => rememberPlan(s, bootBoutId, 'camp', value));
-      return value;
-    });
+    // The value is resolved first and the store written once, outside the updater. A setState
+    // updater must be pure: React is free to call it more than once, which would have recorded
+    // the same plan change twice.
+    const value = typeof next === 'function' ? next(plans) : next;
+    setPlansState(value);
+    mutate((s) => rememberPlan(s, bootBoutId, 'camp', value));
   };
   const [campType, setCampType] = useState<TrainingCamp['campType']>('home');
   const [visitGymId, setVisitGymId] = useState<string>('');

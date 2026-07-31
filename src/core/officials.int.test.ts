@@ -427,13 +427,54 @@ describe('migrating a save without officials', () => {
     for (const key of Object.keys(DEFAULT_FEATURE_FLAGS) as (keyof typeof DEFAULT_FEATURE_FLAGS)[]) {
       expect(typeof featureEnabled(migrated.settings, key)).toBe('boolean');
     }
-    // Anti-doping and historical worlds are off by default, per the specification.
+    // Anti-doping is off by default, per the specification.
     expect(featureEnabled(migrated.settings, 'antiDoping')).toBe(false);
-    expect(featureEnabled(migrated.settings, 'historicalWorlds')).toBe(false);
+    expect(featureEnabled(migrated.settings, 'persistentOfficials')).toBe(true);
   });
 
   it('reads a flag safely when settings are absent entirely', () => {
-    expect(featureEnabled(undefined, 'womensDivisions')).toBe(true);
+    expect(featureEnabled(undefined, 'mediaDepth')).toBe(true);
     expect(featureEnabled(undefined, 'antiDoping')).toBe(false);
+  });
+
+  it('drops the flags that no code branched on', () => {
+    const f = newCareer(6504);
+    const legacy = JSON.parse(JSON.stringify(f.save)) as SaveGame;
+    legacy.schemaVersion = 15;
+    (legacy.settings as unknown as Record<string, unknown>).featureFlags = {
+      historicalWorlds: false,
+      womensDivisions: true,
+      detailedCommissions: true,
+      mediaDepth: true,
+      businessDepth: true,
+      antiDoping: false,
+      persistentOfficials: true,
+    };
+    const migrated = migrateSave(legacy);
+    const flags = migrated.settings.featureFlags as unknown as Record<string, unknown>;
+    // A flag that claims to disable a system nothing checks is a lie to the player, so it is gone.
+    expect(flags.historicalWorlds).toBeUndefined();
+    expect(flags.womensDivisions).toBeUndefined();
+    expect(flags.detailedCommissions).toBeUndefined();
+    // Every surviving flag is one a code path actually reads.
+    for (const key of Object.keys(DEFAULT_FEATURE_FLAGS)) expect(flags[key]).toBeDefined();
+  });
+
+  it('every declared flag is read by production code', async () => {
+    // The guarantee this whole type exists for. If a flag is added without a branch, this fails.
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const roots = ['src/core/world', 'src/core/sim', 'src/ui', 'src/ui/pages'];
+    let source = '';
+    for (const dir of roots) {
+      for (const name of readdirSync(dir)) {
+        if (!name.endsWith('.ts') && !name.endsWith('.tsx')) continue;
+        if (name.includes('.test.')) continue;
+        source += readFileSync(join(dir, name), 'utf8');
+      }
+    }
+    for (const key of Object.keys(DEFAULT_FEATURE_FLAGS)) {
+      expect(source.includes(`'${key}'`), `no production code reads the ${key} flag`).toBe(true);
+    }
   });
 });

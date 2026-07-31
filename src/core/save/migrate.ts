@@ -383,12 +383,9 @@ const MIGRATION_13: Migration = {
     // Defensive defaults. Every flag is on except the ones the specification says default off.
     if (flags.featureFlags === undefined) {
       (save.settings as unknown as Record<string, unknown>).featureFlags = {
-        historicalWorlds: false,
-        womensDivisions: true,
         mediaDepth: true,
         businessDepth: true,
         antiDoping: false,
-        detailedCommissions: true,
         persistentOfficials: true,
       };
     }
@@ -477,6 +474,67 @@ const MIGRATION_15: Migration = {
   },
 };
 MIGRATIONS.push(MIGRATION_15);
+
+/**
+ * Schema 16: drops the feature flags no code branched on.
+ *
+ * `historicalWorlds`, `womensDivisions` and `detailedCommissions` were persisted and shown as
+ * switches while nothing read them, so turning one off changed nothing and the save misrepresented
+ * what the game was doing. Removing them is the honest fix; the systems they claimed to gate are
+ * either always present or not implemented at all.
+ */
+const MIGRATION_16: Migration = {
+  to: 16,
+  describe: 'Removes the feature flags that no code branched on, so a flag can no longer claim to disable a system that keeps running.',
+  apply: (save) => {
+    const flags = (save.settings as unknown as Record<string, unknown>).featureFlags as Record<string, unknown> | undefined;
+    if (!flags) return;
+    for (const dead of ['historicalWorlds', 'womensDivisions', 'detailedCommissions']) delete flags[dead];
+    for (const [key, value] of Object.entries({ mediaDepth: true, businessDepth: true, antiDoping: false, persistentOfficials: true })) {
+      if (flags[key] === undefined) flags[key] = value;
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_16);
+
+/**
+ * Schema 17: puts camp form on one scale.
+ *
+ * `campSharpness` had two writers that disagreed: the camp life system treated it as a 0 to 100
+ * form score while `finalizeCamp` overwrote it with a 0 to 1 sharpness value, and nothing read
+ * either. Any value at or below 1 in an existing save came from the wrong writer and is reset to
+ * the neutral baseline rather than being scaled, because it never meant anything.
+ */
+const MIGRATION_17: Migration = {
+  to: 17,
+  describe: 'Normalises camp form onto one scale so camp life decisions reach fight night sharpness.',
+  apply: (save) => {
+    for (const f of Object.values(save.fighters ?? {})) {
+      if (typeof f.campSharpness !== 'number' || !Number.isFinite(f.campSharpness) || f.campSharpness <= 1) {
+        f.campSharpness = 50;
+      }
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_17);
+
+/**
+ * Schema 18: one gym settlement per month.
+ *
+ * The manual close out button had no idempotency guard, so a gym could be credited its monthly
+ * income any number of times. Existing saves start with no month recorded, which means the current
+ * month can be settled once more and then never again.
+ */
+const MIGRATION_18: Migration = {
+  to: 18,
+  describe: 'Records which month a gym last settled, so finances cannot be closed out twice.',
+  apply: (save) => {
+    for (const gym of Object.values(save.gyms ?? {})) {
+      if (gym.lastSettledMonth === undefined) gym.lastSettledMonth = null as unknown as string | undefined;
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_18);
 
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;

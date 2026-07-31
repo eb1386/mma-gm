@@ -1069,3 +1069,18 @@ button.urgent { box-shadow: 0 0 0 1px var(--warn) inset; }
 .rivalry-list li {
   margin: 2px 0;
 }
+
+/* A link styled as a button, used where navigation is the action. */
+.link-button {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+.link-button:hover {
+  border-color: var(--accent);
+}

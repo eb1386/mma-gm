@@ -583,14 +583,10 @@ export function NewGamePage() {
               </li>
             ))}
           </ol>
-          <button
-            className="danger mt"
-            onClick={() => {
-              cancelRef.canceled = true;
-            }}
-          >
-            Cancel
-          </button>
+          <p className="small faint mt">
+            Building a world runs in one pass and takes a few seconds. It cannot be interrupted part
+            way through, so there is nothing to cancel: nothing is written until it finishes.
+          </p>
         </Panel>
       )}
 

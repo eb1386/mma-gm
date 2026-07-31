@@ -4,6 +4,8 @@ import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { findRivalry, hypeStore, addHypeMoment } from './hype';
 import { TONE_LABEL, type SocialEffects, type SocialTone } from './social';
+import { record } from './finance';
+import { addInboxMessage } from './inbox';
 
 /**
  * Press conferences and media obligations.
@@ -807,8 +809,43 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
   }
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(3000 + rng.range(0, 12000));
-    save.player.balance -= fine;
+    record(save, me.id, 'out', 'fine', fine, 'Commission fine for conduct at the press conference');
     me.careerEarnings -= fine;
+  }
+
+  // Winding the opponent up makes them train harder for you. This was written onto every
+  // aggressive answer and read by nothing, so needling an opponent had no cost at all.
+  const bout = save.bouts[session.boutId];
+  const opponent = bout ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
+  if (opponent && e.opponentFocus) {
+    opponent.campSharpness = Math.max(0, Math.min(100, opponent.campSharpness + e.opponentFocus));
+  }
+
+  // Saying something a sponsor cannot stand puts the agreement at risk. Also written everywhere
+  // and read nowhere, so the morality clauses in every sponsorship meant nothing.
+  if (e.sponsorRisk && e.sponsorRisk > 0) {
+    for (const sponsor of Object.values(save.sponsors ?? {})) {
+      if (sponsor.status !== 'active') continue;
+      // Only an agreement that actually carries a morality clause can be broken over remarks.
+      if (!sponsor.moralityClause) continue;
+      // A satisfied sponsor rides it out. One already unhappy does not.
+      const exposure = (e.sponsorRisk / 100) * (1 - sponsor.satisfaction / 100);
+      if (!rng.chance(exposure)) continue;
+      sponsor.status = 'terminated';
+      sponsor.note = 'Terminated after remarks at a press conference.';
+      addInboxMessage(save, {
+        sender: 'manager',
+        senderName: sponsor.name,
+        subject: `${sponsor.name} has ended the agreement`,
+        body: `${sponsor.name} has terminated the sponsorship following your remarks at the press conference. The morality clause was invoked.`,
+        category: 'career',
+        requiresAction: false,
+        deadline: null,
+        choices: [],
+        linkedFighterId: me.id,
+      });
+      break;
+    }
   }
 }
 

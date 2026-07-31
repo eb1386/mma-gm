@@ -150,8 +150,28 @@ export function estimateCampCost(save: SaveGame, setup: CampSetup): { weeks: num
   return { weeks, cost: Math.round(weeks * baseCost * typeMultiplier + specialistCost) };
 }
 
+/**
+ * The neutral camp form score. Camp life nudges a fighter above or below it.
+ *
+ * Kept on the 0 to 100 scale the camp life system already used, so its existing adjustments are
+ * correct as written and only needed somewhere to land.
+ */
+export const CAMP_FORM_BASELINE = 50;
+
+/**
+ * How much camp form moves fight night sharpness.
+ *
+ * A perfect camp is worth about a fifth more sharpness than a neutral one and a wretched camp
+ * about a fifth less. Large enough that the decisions matter, small enough that camp life cannot
+ * overwhelm the length, intensity and coaching that dominate preparation.
+ */
+export const CAMP_FORM_WEIGHT = 0.2;
+
 export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): TrainingCamp {
   const { weeks, cost } = estimateCampCost(save, setup);
+  // A new camp starts from neutral form, so last camp's run of bad weeks does not follow a fighter
+  // into a preparation that has not happened yet.
+  fighter.campSharpness = CAMP_FORM_BASELINE;
 
   return {
     id: `camp-${++save.counters.camp}`,
@@ -396,6 +416,14 @@ export function finalizeCamp(save: SaveGame, camp: TrainingCamp, rng: Rng): { sh
     badWeeks * 0.08;
   if (camp.campType === 'solo') sharpness *= 0.55;
   if (camp.arriveEarlyDays >= 7) sharpness += 0.04;
+
+  // Camp life, the week to week decisions the player actually makes, is applied here. It was
+  // recorded on `fighter.campSharpness` as a 0 to 100 form score and read by nothing at all, while
+  // this function then overwrote the same field with a 0 to 1 value. The two writers disagreed
+  // about the scale and neither reached the cage, so every camp life choice was inert.
+  const form = fighter ? clamp(fighter.campSharpness, 0, 100) : CAMP_FORM_BASELINE;
+  sharpness *= 1 + ((form - CAMP_FORM_BASELINE) / CAMP_FORM_BASELINE) * CAMP_FORM_WEIGHT;
+
   sharpness = clamp(sharpness + rng.normal(0, 0.05), 0, 1);
 
   // Tactical familiarity depends on the coherence of the plan and the quality of the room.
@@ -413,7 +441,8 @@ export function finalizeCamp(save: SaveGame, camp: TrainingCamp, rng: Rng): { sh
   camp.resultingTacticalFamiliarity = familiarity;
 
   if (fighter) {
-    fighter.campSharpness = sharpness;
+    // Form resets for the next camp rather than carrying a finished camp's history forward.
+    fighter.campSharpness = CAMP_FORM_BASELINE;
     fighter.conditioning = clamp(Math.round(45 + sharpness * 55), 10, 100);
   }
 

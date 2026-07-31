@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { formatDate, formatMoney } from '@core/types/common';
@@ -234,10 +234,16 @@ function PresserStage({ task, busy, onComplete, mutate }: { task: FightWeekTask;
   void revision;
   const kind = task.stage === 'media-day' ? 'media-day' : 'press-conference';
   const sessionId = `presser-${task.boutId}-${kind}`;
-  let session = save.pressers?.[sessionId] ?? null;
-  if (!session) {
-    session = mutate((s) => createSession(s, task.boutId, kind, presserRng(s, task.boutId, kind))) ?? null;
-  }
+  const session = save.pressers?.[sessionId] ?? null;
+
+  // Creating the session writes to the save, so it happens in an effect rather than during
+  // render. Writing persisted state while rendering runs twice under strict mode and makes the
+  // component's output depend on a side effect it has just performed.
+  useEffect(() => {
+    if (session) return;
+    mutate((s) => createSession(s, task.boutId, kind, presserRng(s, task.boutId, kind)));
+  }, [session, task.boutId, kind, mutate]);
+
   if (!session) return <SimpleStage task={task} busy={busy} onComplete={onComplete} />;
 
   const answered = session.questions.filter((q) => q.selectedKey).length;
