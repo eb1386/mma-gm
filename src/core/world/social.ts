@@ -696,7 +696,6 @@ function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(2000 + rng.range(0, 8000));
     record(save, me.id, 'out', 'fine', fine, 'Fine for a social media post');
-    me.careerEarnings -= fine;
   }
 }
 

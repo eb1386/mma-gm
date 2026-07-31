@@ -1,7 +1,7 @@
 import { clamp, hashString, Rng } from '../rng';
 import { ageOn, type IsoDate } from '../types/common';
 import { ovrRaw, RATING_KEYS, type Fighter } from '../types/fighter';
-import type { SaveGame } from '../types/save';
+import { DEFAULT_SETTINGS, type SaveGame } from '../types/save';
 import { estimatePot, potConfidenceFor } from './development';
 
 /**
@@ -116,7 +116,10 @@ export function updatePot(save: SaveGame, fighter: Fighter, opts: PotUpdateOptio
     return hit.pot;
   }
 
-  const paths = Math.max(4, POT_PATHS[tier]);
+  // Scaled by the player's setting rather than ignoring it. The tier decides the relative effort,
+  // the setting decides the total budget, and previously the setting was read nowhere at all.
+  const budget = save.settings.potPaths > 0 ? save.settings.potPaths / DEFAULT_SETTINGS.potPaths : 1;
+  const paths = Math.max(4, Math.round(POT_PATHS[tier] * clamp(budget, 0.25, 4)));
   // The projection seed is derived from the save seed and the fighter id so the answer is
   // reproducible and does not depend on how many other fighters were processed first.
   const rng = new Rng((hashString(`pot-${fighter.id}-${key}`) ^ save.seed) >>> 0);

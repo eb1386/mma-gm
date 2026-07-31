@@ -367,6 +367,11 @@ export function applySecondAttempt(save: SaveGame, boutId: BoutId, choice: Secon
       state.rulingText = `${me.name} withdrew on medical advice rather than continue the cut. The bout is off.`;
       state.stage = 'complete';
       state.log.push(state.rulingText);
+      // This returns before the finalisation that cancels the bout, so it has to cancel it here.
+      // Setting only the local status told the player the fight was off and then left it
+      // scheduled, and they fought on the night anyway.
+      const record = save.bouts[boutId];
+      if (record && record.status === 'scheduled') cancelBout(save, record, state.rulingText);
       return state;
     }
   }
@@ -475,6 +480,16 @@ function applyRuling(save: SaveGame, state: WeighInState, me: Fighter, opponent:
       const reduced = { ...purse, show: purse.show - amount };
       if (playerIsA) boutRecord.purseB = reduced;
       else boutRecord.purseA = reduced;
+      // The forfeit goes to the fighter who made weight. It was deducted from the fighter who
+      // missed and then went nowhere, so accepting the bout cost the player the inconvenience and
+      // paid them nothing for it.
+      if (!ineligible.includes(me.id)) {
+        const mine = playerIsA ? boutRecord.purseA : boutRecord.purseB;
+        const paid = { ...mine, show: mine.show + amount };
+        if (playerIsA) boutRecord.purseA = paid;
+        else boutRecord.purseB = paid;
+        state.log.push(`The forfeited purse share of ${amount} is added to ${me.name}'s show money.`);
+      }
     }
   }
 

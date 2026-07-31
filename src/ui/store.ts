@@ -252,6 +252,11 @@ export const useGame = create<GameState>((set, get) => ({
         busy: false,
         operation: { kind, label, phase: 'failed', detail: message, progress: null, startedAt: Date.now() },
         lastResult: { ...EMPTY_RESULT, ok: false, error: message },
+        // The work may have mutated the save before throwing, so it is republished on the failure
+        // path too. Leaving it unpublished showed the player a world that no longer matched the
+        // one they were playing.
+        save: { ...save },
+        revision: get().revision + 1,
       });
       return { ...EMPTY_RESULT, ok: false, error: message };
     }

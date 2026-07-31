@@ -816,8 +816,9 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
   }
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(3000 + rng.range(0, 12000));
+    // `record` already reduces cash and the career expense total. Subtracting from career
+    // earnings as well counted the same fine twice.
     record(save, me.id, 'out', 'fine', fine, 'Commission fine for conduct at the press conference');
-    me.careerEarnings -= fine;
   }
 
   // Winding the opponent up makes them train harder for you. This was written onto every

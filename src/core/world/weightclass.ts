@@ -13,6 +13,7 @@ import { assessTitleOpportunity } from './title-logic';
 import { existingTitleBout, interimTitleJustification, rankChallengers, type InterimReason } from './title-eligibility';
 import { evaluateInterest, matchupInterestsFor, recordMatchupInterest } from './matchup-interest';
 import { forfeitContenderStatus, grantContenderStatus } from './contender';
+import { rankingLedger } from './rankings';
 
 /**
  * Moving up or down a division.
@@ -550,6 +551,12 @@ export function commitMove(save: SaveGame, fighter: Fighter, announce: boolean):
 
   // A contender position belongs to the division it was earned in.
   forfeitContenderStatus(save, from.id, `${fighter.name} moved to ${to.name}.`, fighter.id);
+
+  // The points earned at the old weight stay with the old division and do not follow the fighter.
+  // Leaving a stale total in the new division's ledger would have let a returning fighter re-enter
+  // the rankings on results from a different phase of their career.
+  const arrivingLedger = rankingLedger(save, to.id);
+  delete arrivingLedger[fighter.id];
 
   fighter.divisionId = to.id;
   fighter.ranking = null;

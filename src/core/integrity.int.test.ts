@@ -8,7 +8,7 @@ import { createCamp, finalizeCamp, CAMP_FORM_BASELINE, estimateCampCost } from '
 import { performSocialAction, socialActionAllowance, SOCIAL_ACTIONS_PER_WEEK, decaySocial, recordSocialHistory } from './world/identity';
 import { rememberPlan, recallPlan } from './world/gameplan-memory';
 import { migrateSave } from './save/migrate';
-import { SAVE_SCHEMA_VERSION } from './types/save';
+import { DEFAULT_FEATURE_FLAGS, DEFAULT_SETTINGS, SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
 import type { Fighter } from './types/fighter';
 
@@ -272,5 +272,103 @@ describe('money always moves through the ledger', () => {
     runWorld(f.save, 40);
     // The two representations must agree, because one is derived from the other.
     expect(f.save.player.balance).toBe(f.save.finance!.cash);
+  });
+});
+
+describe('the invariants that have repeatedly broken', () => {
+  it('never consumes the world rng inside a settings conditional', async () => {
+    // Broken five times in this codebase. Gating a call that draws from the shared rng looks like
+    // gating a feature and is actually gating a draw, which shifts every later draw and changes
+    // every fight in the world. The setting must decide what is kept, never what is drawn.
+    //
+    // The first version of this guard looked back a fixed twelve lines and missed two live
+    // offenders whose conditional opened further above. It now tracks brace depth, so a draw
+    // anywhere inside a settings guarded block is found however long that block is.
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const offenders: string[] = [];
+    const DRAW = /\brng\.(chance|range|normal|pick|shuffle|int|nextUint32|normalClamped)\b/;
+    const GUARD = /\bif\s*\(([^)]*)(save\.settings|featureEnabled|settings\.)/;
+
+    const scan = (file: string): void => {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      // Depth at which each open settings guard began, if any.
+      const guardDepths: number[] = [];
+      let depth = 0;
+      for (const [i, line] of lines.entries()) {
+        const opensGuard = GUARD.test(line) && line.includes('{');
+        if (opensGuard) guardDepths.push(depth);
+        if (DRAW.test(line) && guardDepths.length > 0) offenders.push(`${file}:${i + 1}`);
+        for (const ch of line) {
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            while (guardDepths.length > 0 && guardDepths[guardDepths.length - 1] >= depth) guardDepths.pop();
+          }
+        }
+      }
+    };
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.ts') && !entry.name.includes('.test.')) scan(full);
+      }
+    };
+    walk('src/core');
+    expect(offenders, `rng drawn under a settings conditional at ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  it('produces an identical world whether or not the business model is kept', () => {
+    // businessDepth decides only whether the event economics figures are retained, so it must not
+    // change a single fight. Injuries and anti-doping legitimately change what happens to
+    // fighters, so they are expected to diverge and are not asserted here; what the rule above
+    // protects is that they diverge through their effects rather than by moving the rng stream.
+    const build = (business: boolean): string => {
+      const f = newCareer(9801);
+      f.save.settings.featureFlags = {
+        ...(f.save.settings.featureFlags ?? DEFAULT_FEATURE_FLAGS),
+        businessDepth: business,
+      };
+      runWorld(f.save, 26);
+      return Object.values(f.save.history.results)
+        .map((r) => `${r.boutId}:${r.winnerId}:${r.method}:${r.endRound}`)
+        .sort()
+        .join('|');
+    };
+    expect(build(false)).toBe(build(true));
+  });
+});
+
+describe('no control lies to the player', () => {
+  it('has every save setting read by something other than the settings screen', async () => {
+    // Three settings controls shipped reading nothing: the playback speed, the exact live scores
+    // and the projection path budget. A control that changes a stored value nobody reads is worse
+    // than no control, because it tells the player they have changed something.
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    let source = '';
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        if (entry.name.includes('.test.')) continue;
+        // The settings screen writes them; it does not count as a reader.
+        if (entry.name === 'Misc.tsx' || full.endsWith('types/save.ts')) continue;
+        source += readFileSync(full, 'utf8');
+      }
+    };
+    walk('src/core');
+    walk('src/ui');
+
+    const unread = Object.keys(DEFAULT_SETTINGS)
+      .filter((key) => key !== 'featureFlags')
+      .filter((key) => !source.includes(`settings.${key}`) && !source.includes(`'${key}'`));
+    expect(unread, `settings read by nothing: ${unread.join(', ')}`).toEqual([]);
   });
 });

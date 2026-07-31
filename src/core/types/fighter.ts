@@ -332,6 +332,8 @@ export interface Fighter {
   weightMisses: number;
   lastWeightCutQuality: number | null;
   declinedOffers: number;
+  /** When the last refusal happened, so the penalty for refusing can fade with time. */
+  lastDeclineOn?: IsoDate | null;
   acceptedShortNotice: number;
   createdBy: 'real-snapshot' | 'generated' | 'user';
 }

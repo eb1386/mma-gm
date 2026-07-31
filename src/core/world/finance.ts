@@ -539,7 +539,9 @@ export function applyFightPurse(
   }
   const gym = fighter.gymId ? save.gyms[fighter.gymId] : null;
   if (gym) {
-    const cut = Math.round(total * 0.08);
+    // The gym's own agreed rate, as every other path uses. A hard coded eight percent meant a
+    // gym could negotiate a share that was then ignored on the one payment that matters most.
+    const cut = Math.round(total * (gym.revenueSharePct / 100));
     record(save, fighter.id, 'out', 'gym-percentage', cut, `${gym.name} percentage`, boutId);
     deductions.push({ kind: 'gym-percentage', amount: cut });
   }

@@ -609,7 +609,9 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
       text = 'The gym noticed you backing them.';
       break;
     case 'camp-gym-stay-out':
-      text = 'You stayed out of it.';
+      // Neutrality is noticed. Smaller than taking a side, but not free.
+      me.relationships.team = clamp(me.relationships.team - 3, 0, 100);
+      text = 'You stayed out of it. Nobody thanks you for that, but nobody blames you either.';
       break;
     case 'camp-gym-look-around':
       me.relationships.team = clamp(me.relationships.team - 12, 0, 100);

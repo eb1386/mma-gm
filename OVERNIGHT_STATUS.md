@@ -336,3 +336,66 @@ Three waves each found real defects in the work of the wave before. That rate is
 has not reached zero, and a fourth wave would be the honest way to find out whether it has. The
 gates are green and the finding list is closed; that is a stronger claim than the last section
 could make and still not the same as proof that nothing is left.
+
+
+---
+
+# Fourth wave
+
+Run specifically to find out whether the defect rate had reached zero. It had not.
+
+34 agents across five areas: three checking one invariant each exhaustively, two reading the core
+and the player's week with fresh eyes and no reference to earlier findings.
+
+## What it found that three previous waves and my own mechanical checks had missed
+
+**Two more instances of the RNG invariant, and a guard test too weak to see them.** I had written
+a test that looked back twelve lines from each draw for a settings conditional. Both remaining
+offenders sat inside conditionals that opened further above, so the guard passed while the defect
+was live. The guard now tracks brace depth and finds a draw anywhere inside a guarded block, however
+long. That is five separate instances of the same invariant in one codebase, four of which I
+introduced or missed while explicitly trying to prevent it.
+
+**Three settings controls that were read by nothing.** The playback speed, the exact live judge
+scores and the projection path budget were all stored and all ignored. A control that changes a
+value nobody reads is worse than no control, because it tells the player they have changed
+something. All three now do what they say, and a test fails if a setting is added without a reader.
+
+**A weigh-in withdrawal that did not withdraw.** `withdraw-medical` returns before the finalisation
+that cancels the bout, so the player was told the fight was off and then fought on the night. This
+is the second instance of that exact shape; the first was fixed in wave two, in the same file.
+
+**A forfeited purse deducted from one fighter and paid to nobody.** Accepting an opponent's missed
+weight cost the player the inconvenience and paid them nothing.
+
+Also: fines were charged through the ledger and subtracted from career earnings again; the fight
+purse used a hard coded eight percent gym cut while every other path read the gym's agreed rate;
+the ranking ledger was never cleared on a weight change; refusals were a lifetime counter treated
+as a recent one; and staying out of a gym dispute was the only choice in the game with no
+consequence at all.
+
+## Gate after wave four
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | pass |
+| fast | 343 passed |
+| flow | 171 passed |
+| world | 6 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 32 passed, desktop and mobile |
+| activity bands | champions 1.57, top 2.56, ranked 2.51, unranked 2.38, all in band |
+| calibration | 93.74 / 6.26 / 0.00 |
+| perf | 0 phases over target |
+
+## The honest read on four waves
+
+Each wave found real defects in the previous wave's work. The count fell across the four, and the
+character changed: wave one found systems that were not connected to anything, wave four found a
+guard test that was not strict enough. That is the shape of converging work rather than of a
+codebase in trouble.
+
+It is not proof that nothing is left. Three of the four automated invariant guards now in place
+exist because a wave found something I had already tried to prevent by hand, which is the strongest
+argument for having them and the clearest evidence that hand checking was not enough.

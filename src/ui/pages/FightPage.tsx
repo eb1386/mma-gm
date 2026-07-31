@@ -110,7 +110,11 @@ export function FightPage() {
     setPlansState(value);
     mutate((s) => rememberPlan(s, boutId ?? null, 'preFight', value));
   };
-  const [speedKey, setSpeedKey] = useState(DEFAULT_SPEED);
+  // The saved preference is the starting speed. The control on the fight page still overrides it
+  // for this fight; without this the settings control chose a value nothing ever read.
+  const [speedKey, setSpeedKey] = useState<string>(
+    PLAYBACK_SPEEDS.some((s) => s.key === save.settings.simSpeed) ? save.settings.simSpeed : DEFAULT_SPEED
+  );
   const [visible, setVisible] = useState(0);
   const [mode, setMode] = useState<'instant' | 'live' | 'rounds'>('live');
   const [tab, setTab] = useState('play-by-play');
@@ -755,6 +759,14 @@ export function FightPage() {
                           ? `${a.name} by ${Math.abs(r.trueScoreA) > 17 ? 'a clear margin' : 'a narrow margin'}`
                           : `${b.name} by ${Math.abs(r.trueScoreA) > 17 ? 'a clear margin' : 'a narrow margin'}`}
                     </span>
+                    {/* The setting promised the exact margin and was read by nothing, so turning it
+                        on changed nothing on screen. */}
+                    {save.settings.revealLiveScores && (
+                      <span className="mono" title="Exact round margin, revealed by a setting">
+                        margin {r.trueScoreA > 0 ? '+' : ''}
+                        {r.trueScoreA.toFixed(1)}
+                      </span>
+                    )}
                   </div>
                   {r.staminaEndA !== undefined && r.staminaEndB !== undefined && (
                     <div className="row small dim">
@@ -766,6 +778,16 @@ export function FightPage() {
                   {r.statsA && r.statsB ? (
                     <div className="mt">
                       <StatsBlock a={r.statsA} b={r.statsB} nameA={a.lastName} nameB={b.lastName} />
+                      {r.damageEndA && r.damageEndB && (
+                        // Recorded per round and kept for recent fights alongside the stats, but
+                        // never shown. Accumulated damage at the horn is what the judges were
+                        // looking at, so it belongs next to the round they scored.
+                        <p className="small dim mt">
+                          Accumulated damage at the horn: {a.lastName} head {Math.round(r.damageEndA.head)}, body{' '}
+                          {Math.round(r.damageEndA.body)}; {b.lastName} head {Math.round(r.damageEndB.head)}, body{' '}
+                          {Math.round(r.damageEndB.body)}
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <p className="small faint mt">

@@ -690,7 +690,13 @@ export function FighterPage() {
                       </td>
                       <td>{p.confidence}</td>
                       <td className="small dim">{p.fetchedAt?.slice(0, 10)}</td>
-                      <td className="wrap small dim">{p.transformation ?? ''}</td>
+                      <td className="wrap small dim">
+                        {p.transformation ?? ''}
+                        {/* Recorded by the snapshot builder and previously never shown, which made
+                            a manual correction invisible to the reader it exists to inform. */}
+                        {p.manuallyOverridden ? <span className="tag warn">manually corrected</span> : null}
+                        {p.verifiedAt ? <span className="dim"> verified {p.verifiedAt.slice(0, 10)}</span> : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

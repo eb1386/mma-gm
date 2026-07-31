@@ -720,7 +720,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       fighter.ratings = applyDeltas(fighter.ratings, deltas);
       restRecovery(fighter, 1);
 
-      if (save.settings.injuriesEnabled && gym) {
+      // The roll always happens, because it draws from the shared world rng. The setting decides
+      // whether the injury is applied, not whether the draw occurs.
+      if (gym) {
         const injury = rollTrainingInjury(
           fighter,
           {
@@ -733,7 +735,7 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
           save.date,
           rng
         );
-        if (injury) {
+        if (injury && save.settings.injuriesEnabled) {
           fighter.injuries.push(injury);
           if (injury.severity >= 4) invalidatePot(save, fighter.id, 'major-injury');
           if (fighter.id === playerFighterId) headlines.push(`${injury.type} picked up in training.`);
@@ -1019,12 +1021,18 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   }
 
   // Retirements.
-  if (save.settings.retirementEnabled) {
+  //
+  // The draw happens for every eligible fighter whether or not retirement is switched on, because
+  // it comes from the shared world rng: gating the loop would make the setting shift every later
+  // draw and change fight results. This is the fifth place that mistake was made in this file.
+  {
+    const retirementsOn = save.settings.retirementEnabled;
     for (const fighter of Object.values(save.fighters)) {
       if (fighter.retired || fighter.id === playerFighterId) continue;
       if (fighter.nextBoutId) continue;
       const weekly = retirementChance(fighter, save.date) / 52;
-      if (rng.chance(weekly)) {
+      const retires = rng.chance(weekly);
+      if (retires && retirementsOn) {
         fighter.retired = true;
         fighter.retirementDate = save.date;
         fighter.activityStatus = 'retired';
@@ -1125,6 +1133,16 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       importance: 3,
     });
   }
+  // Refusals fade. Without this the counter was a lifetime total that permanently suppressed a
+  // long career's offers for decisions taken years earlier.
+  for (const fighter of Object.values(save.fighters)) {
+    if (fighter.declinedOffers <= 0) continue;
+    const since = fighter.lastDeclineOn ? daysBetween(fighter.lastDeclineOn, save.date) : 9999;
+    if (since < DECLINE_FORGIVENESS_DAYS) continue;
+    fighter.declinedOffers = Math.max(0, fighter.declinedOffers - 1);
+    fighter.lastDeclineOn = save.date;
+  }
+
   // Contender claims are reviewed before title fights are booked, so a lapsed or vacated claim
   // frees the division in the same pass rather than blocking it for another week.
   for (const note of reviewContenderClaims(save)) headlines.push(note);
@@ -1330,6 +1348,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
  */
 /** The shortest gap the promotion will accept between two meetings for the same belt. */
 const TITLE_REMATCH_MIN_GAP_DAYS = 150;
+
+/** How long the matchmaker holds a refusal against a fighter before one is forgiven. */
+const DECLINE_FORGIVENESS_DAYS = 240;
 
 function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
   const offerIds = openOfferFighterIds(save);

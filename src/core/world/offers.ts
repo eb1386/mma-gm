@@ -506,6 +506,9 @@ function declineConsequence(
   const obligated = contract ? contract.fightsRemaining > 0 : false;
 
   fighter.declinedOffers++;
+  fighter.lastDeclineOn = save.date;
+  // Refusals fade. The counter was a lifetime total treated as a recent one, so a fifteen year
+  // career carried penalties for offers turned down a decade earlier.
   const recentDeclines = fighter.declinedOffers;
 
   // A genuine reason costs almost nothing.

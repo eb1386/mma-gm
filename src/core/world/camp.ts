@@ -298,7 +298,9 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
 
   // Injury risk.
   let injured = false;
-  if (save.settings.injuriesEnabled) {
+  {
+    // The roll always happens, because it draws from the shared world rng. Gating it made the
+    // injuries setting shift every later draw and change fight results across the world.
     const injury = rollTrainingInjury(
       fighter,
       {
@@ -311,7 +313,7 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
       save.date,
       rng
     );
-    if (injury) {
+    if (injury && save.settings.injuriesEnabled) {
       fighter.injuries.push(injury);
       injured = true;
       outcomes.push({
