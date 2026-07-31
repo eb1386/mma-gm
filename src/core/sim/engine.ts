@@ -60,6 +60,16 @@ export interface FightSimOptions {
   b: FightSetupSide;
   settings: SaveSettings;
   seed: number;
+  /**
+   * The judges assigned to this bout.
+   *
+   * Omitted in a bare simulation, in which case three are drawn from the engine's own pool so
+   * the simulator stays usable without a save. A real bout always passes the persistent
+   * officials, which is what lets a judge accumulate a record.
+   */
+  judges?: JudgePersona[];
+  /** The assigned referee's stoppage tendency. Omitted falls back to a drawn value. */
+  refereeTendency?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +174,11 @@ export function setupFight(opts: FightSimOptions): { state: FightState; rng: Rng
   const rng = new Rng(opts.seed);
   const a = buildSide(0, opts.a, opts.b, opts.divisionId, opts.date, rng);
   const b = buildSide(1, opts.b, opts.a, opts.divisionId, opts.date, rng);
-  const judges = drawJudges(rng);
+  // The pool draw always happens, even when officials are supplied, so that assigning real
+  // judges consumes exactly the same rng as drawing anonymous ones. Skipping it shifted every
+  // subsequent draw and changed fight outcomes across the whole world.
+  const drawn = drawJudges(rng);
+  const judges = opts.judges && opts.judges.length === 3 ? opts.judges : drawn;
   const state: FightState = {
     a,
     b,
@@ -174,7 +188,12 @@ export function setupFight(opts: FightSimOptions): { state: FightState; rng: Rng
     scheduledRounds: opts.scheduledRounds,
     seq: 0,
     over: false,
-    refereeTendency: rng.normalClamped(1, C.stoppage.refereeTendencySd, 0.65, 1.4),
+    // The drawn value is still consumed even when a referee is assigned, so passing officials
+    // in cannot shift the rest of the simulation off its seeded path.
+    refereeTendency: (() => {
+      const drawn = rng.normalClamped(1, C.stoppage.refereeTendencySd, 0.65, 1.4);
+      return opts.refereeTendency ?? drawn;
+    })(),
     totalSeconds: 0,
   };
   updateTactics(state, a, rng);

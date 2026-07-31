@@ -460,4 +460,6 @@ export interface Bout {
   bookingReason: string;
   /** The structured matchmaking category, so the interface can label why this fight exists. */
   bookingKind?: string;
+  /** The judges and referee assigned to this bout, resolved against `save.officials`. */
+  officials?: { judgeIds: string[]; refereeId: string | null };
 }

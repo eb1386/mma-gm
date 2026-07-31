@@ -24,6 +24,7 @@ import type { InjuryTreatment } from '../world/injury-flow';
 import type { Callout, Relationship } from '../world/relationships';
 import type { MatchupInterest } from '../world/matchup-interest';
 import type { DivisionSpell } from '../world/weightclass';
+import type { Official } from '../world/officials';
 import type { WeightClassPlan } from '../world/weightclass';
 import type {
   Contract,
@@ -42,7 +43,7 @@ import type {
   TrainingCamp,
 } from './world';
 
-export const SAVE_SCHEMA_VERSION = 12;
+export const SAVE_SCHEMA_VERSION = 13;
 
 export interface SaveSettings {
   difficulty: Difficulty;
@@ -62,6 +63,39 @@ export interface SaveSettings {
   eventsPerMonth: number;
   fillRosterWithGenerated: boolean;
   retirementEnabled: boolean;
+  /**
+   * Optional systems, so an older or lower performance save stays usable.
+   *
+   * Every flag has a defensive default and every reader treats an absent flag as the default,
+   * so a save written before this existed behaves exactly as it did.
+   */
+  featureFlags?: FeatureFlags;
+}
+
+/** The optional systems the expansion adds. Absent means the default below. */
+export interface FeatureFlags {
+  historicalWorlds: boolean;
+  womensDivisions: boolean;
+  mediaDepth: boolean;
+  businessDepth: boolean;
+  antiDoping: boolean;
+  detailedCommissions: boolean;
+  persistentOfficials: boolean;
+}
+
+export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  historicalWorlds: false,
+  womensDivisions: true,
+  mediaDepth: true,
+  businessDepth: true,
+  antiDoping: false,
+  detailedCommissions: true,
+  persistentOfficials: true,
+};
+
+/** Reads a flag with its default, so no caller has to handle an absent settings block. */
+export function featureEnabled(settings: SaveSettings | undefined, key: keyof FeatureFlags): boolean {
+  return settings?.featureFlags?.[key] ?? DEFAULT_FEATURE_FLAGS[key];
 }
 
 export const DEFAULT_SETTINGS: SaveSettings = {
@@ -78,6 +112,7 @@ export const DEFAULT_SETTINGS: SaveSettings = {
   eventsPerMonth: 3.83,
   fillRosterWithGenerated: true,
   retirementEnabled: true,
+  featureFlags: { ...DEFAULT_FEATURE_FLAGS },
 };
 
 export interface SnapshotMeta {
@@ -190,6 +225,13 @@ export interface SaveGame {
   matchupInterests?: Record<string, MatchupInterest>;
   /** Every division a fighter has competed in, keyed by fighter id, oldest first. */
   divisionHistory?: Record<string, DivisionSpell[]>;
+  /**
+   * Judges and referees, keyed by id.
+   *
+   * Officials are people in the world rather than a name drawn per fight, so a judge builds a
+   * record and a controversial card stays attached to whoever turned it in.
+   */
+  officials?: Record<string, Official>;
   /**
    * Remembered game plans. The interface preselects these rather than resetting to a
    * default every time a planning screen is opened.

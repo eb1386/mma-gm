@@ -12,6 +12,8 @@ import { ensureFightWeekTasks } from '../world/fightweek';
 import { createFightOffer } from '../world/offers';
 import { checkPlayerInjuries } from '../world/injury-flow';
 import { createCamp, CAMP_PRESETS } from '../world/camp';
+import { advance, simulatePlayerBout } from '../world/tick';
+import { messageNeedsAction } from '../world/inbox';
 
 /**
  * Deterministic setup helpers for tests.
@@ -223,4 +225,33 @@ export function planCamp(save: SaveGame, fighterId: string, boutId: BoutId, pres
   });
   save.camps[camp.id] = camp;
   return camp;
+}
+
+/**
+ * Runs the world forward for a number of weeks.
+ *
+ * `advanceUntil` stops the moment the player has something to answer, which is correct for the
+ * game and useless for a world level test: a career fixture blocks within days, so a test that
+ * asked for a year of simulation was quietly getting less than a week of it. This answers
+ * whatever is blocking and keeps going, so a test that says a year gets a year.
+ */
+export function runWorld(save: SaveGame, weeks: number): { weeksRun: number; playerFights: number } {
+  let playerFights = 0;
+  let weeksRun = 0;
+  for (let w = 0; w < weeks; w++) {
+    for (const m of save.inbox) {
+      if (!messageNeedsAction(save, m)) continue;
+      m.status = 'resolved';
+      m.resolution = 'answered by the world test harness';
+      m.decisionResolvedOn = save.date;
+    }
+    save.pendingDecision = null;
+    const report = advance(save, { mode: 'week', stopOnDecision: false });
+    if (report.playerBoutPending) {
+      simulatePlayerBout(save, report.playerBoutPending, ['pressure']);
+      playerFights++;
+    }
+    weeksRun++;
+  }
+  return { weeksRun, playerFights };
 }

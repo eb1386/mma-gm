@@ -16,6 +16,7 @@ import { clampWalkingWeight } from './health';
 import { generateFighter, uniformConfidence } from './generator';
 import { scheduleEvents } from './matchmaking';
 import { pushNews } from './history';
+import { ensureOfficials } from './officials';
 
 /**
  * New game construction.
@@ -454,6 +455,10 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
     fighterIds: [],
     importance: 2,
   });
+
+  // The officials roster is part of the world, so it exists from the first day rather than
+  // appearing the first time a fight happens to need judges.
+  ensureOfficials(save);
 
   save.rng = rng.getState();
   return {

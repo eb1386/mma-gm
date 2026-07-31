@@ -4,6 +4,7 @@ import { DIVISION_BY_ID } from '@core/config/divisions';
 import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
 import { ageOn, formatClock, formatDate, formatHeight, formatMoney } from '@core/types/common';
 import { METHOD_LABEL, type FightResult, type RoundStatLine } from '@core/types/fight';
+import { allOfficials, getOfficial, officialSummary } from '@core/world/officials';
 import type { GamePlanKey } from '@core/types/world';
 import { estimateRatings } from '@core/world/scouting';
 import { simulatePlayerBout } from '@core/world/tick';
@@ -517,9 +518,13 @@ export function FightPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {result.scorecards.map((c) => (
+                  {result.scorecards.map((c) => {
+                    const judge = allOfficials(save).find((o) => o.role === 'judge' && o.name === c.judgeName);
+                    return (
                     <tr key={c.judgeName}>
-                      <td>{c.judgeName}</td>
+                      <td title={judge ? `${judge.commission} commission. ${officialSummary(judge)}` : undefined}>
+                        {judge ? <Link to={`/officials#${judge.id}`}>{c.judgeName}</Link> : c.judgeName}
+                      </td>
                       {c.rounds.map((r) => (
                         <td key={r.round} className="num mono">
                           {r.a}-{r.b}
@@ -531,10 +536,23 @@ export function FightPage() {
                         </strong>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}
+            {(() => {
+              // The referee is part of the official record of a fight, and their tendency is
+              // what decides how late a stoppage comes.
+              const refId = bout.officials?.refereeId;
+              const referee = refId ? getOfficial(save, refId) : null;
+              if (!referee) return null;
+              return (
+                <p className="small dim mt">
+                  Referee: <Link to={`/officials#${referee.id}`}>{referee.name}</Link>. {officialSummary(referee)}
+                </p>
+              );
+            })()}
             {(result.pointDeductionsA > 0 || result.pointDeductionsB > 0) && (
               <p className="small warn mt">
                 Point deductions: {a.name} {result.pointDeductionsA}, {b.name} {result.pointDeductionsB}.

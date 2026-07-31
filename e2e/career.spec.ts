@@ -159,3 +159,15 @@ test('the weight class tab states what happens to a championship', async ({ page
   // Every division option states the ranking and title consequence before anything is committed.
   await expect(page.getByText(/move type/i).first()).toBeVisible();
 });
+
+test('the officials page lists judges and referees', async ({ page }) => {
+  await startCareer(page);
+  await page.goto('/officials');
+  await expect(page.getByRole('heading', { name: 'Officials' })).toBeVisible();
+  // The roster exists from the first day, so the empty state must not be showing.
+  await expect(page.getByText(/no officials yet/i)).toHaveCount(0);
+  await expect(page.getByRole('columnheader', { name: 'Commission' })).toBeVisible();
+  // Switching to referees keeps the page rendering.
+  await page.getByLabel(/role/i).selectOption('referee');
+  await expect(page.getByRole('heading', { name: 'Officials' })).toBeVisible();
+});

@@ -1,92 +1,92 @@
 {
-  "measuredAt": "2026-07-30T17:21:51.657Z",
+  "measuredAt": "2026-07-31T04:04:37.045Z",
   "quick": true,
   "results": [
     {
       "phase": "Load snapshot index",
-      "ms": 0.3194169999999872,
+      "ms": 0.2810829999999669,
       "target": 1000
     },
     {
       "phase": "Read snapshot file from disk",
-      "ms": 3.800042000000019,
+      "ms": 3.3004589999999894,
       "target": 1000,
       "detail": "1.55 MB"
     },
     {
       "phase": "Parse snapshot JSON",
-      "ms": 3.711667000000034,
+      "ms": 3.5471670000000017,
       "target": 1000,
       "detail": "176 fighters"
     },
     {
       "phase": "New career: Spectator Mode",
-      "ms": 259.47262499999994,
+      "ms": 253.68404200000003,
       "target": 5000,
       "detail": "176 real, 364 fictional, 145 gyms"
     },
     {
       "phase": "New career: Fighter Mode",
-      "ms": 241.953666,
+      "ms": 236.197542,
       "target": 5000
     },
     {
       "phase": "New career: Coach Mode",
-      "ms": 235.66595800000005,
+      "ms": 233.2504580000001,
       "target": 5000
     },
     {
       "phase": "New career: reduced performance mode",
-      "ms": 5.688416999999845,
+      "ms": 5.615625000000136,
       "target": 2000
     },
     {
       "phase": "Advance one day",
-      "ms": 0.24033299999996416,
+      "ms": 0.22229199999992488,
       "target": 200
     },
     {
       "phase": "Advance one week",
-      "ms": 60.54754200000002,
+      "ms": 61.80820900000003,
       "target": 1000
     },
     {
       "phase": "Advance one month",
-      "ms": 102.98529099999996,
+      "ms": 104.92875000000004,
       "target": 3000
     },
     {
       "phase": "Advance to next event",
-      "ms": 96.09191699999997,
+      "ms": 82.4592909999999,
       "target": 2000,
       "detail": "1 events resolved"
     },
     {
       "phase": "Annual Pot refresh",
-      "ms": 606.712708,
+      "ms": 609.953792,
       "target": 3000,
       "detail": "493 recomputed, 47 cached"
     },
     {
       "phase": "Annual Pot refresh, second pass",
-      "ms": 0.7694169999999758,
+      "ms": 0.8079579999998714,
       "target": 500,
       "detail": "0 recomputed, 540 cached"
     },
     {
       "phase": "Serialize save to JSON",
-      "ms": 14.50608299999999,
+      "ms": 12.861916999999949,
       "target": 2000,
-      "detail": "4.47 MB"
+      "detail": "4.49 MB"
     },
     {
       "phase": "Parse save from JSON",
-      "ms": 11.689708999999993,
+      "ms": 10.861750000000029,
       "target": 2000
     },
     {
       "phase": "Migrate a loaded save",
-      "ms": 13.468458000000055,
+      "ms": 11.08462499999996,
       "target": 1000
     }
   ]

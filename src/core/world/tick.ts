@@ -39,6 +39,7 @@ import { generateSocialItems, pruneSocial, socialRng } from './social';
 import { campLifeRng, generateCampLife, seedGymRelationships } from './camp-life';
 import { decayRelationships, openCallouts, pruneCallouts, recordFightBetween, resolveCallout } from './relationships';
 import { enforceAbsentChampions, maybeSuggestMove } from './weightclass';
+import { assignOfficials, judgePersonasFor, recordOfficialOutcome, refereeTendencyFor } from './officials';
 import { evaluateAllInterests, pruneMatchupInterests } from './matchup-interest';
 import { runMatchupInterestPass } from './matchup-pass';
 import { interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
@@ -213,6 +214,15 @@ export function resolveBout(
   const b = save.fighters[bout.fighterBId];
   const event = save.events[bout.eventId];
 
+  // Officials are assigned before the fight, from the persistent roster. The assignment is
+  // derived from the bout id rather than the simulation rng, so it cannot shift the result.
+  const assignment = assignOfficials(save, bout);
+  const hostEvent = save.events[bout.eventId];
+  // A partisan crowd only exists when one fighter is at home and the other is not.
+  const aHome = Boolean(hostEvent && a.country === hostEvent.country);
+  const bHome = Boolean(hostEvent && b.country === hostEvent.country);
+  const homeAdvantage = aHome === bHome ? 0 : aHome ? 0.12 : -0.12;
+
   const prepA = prepareSide(save, bout, a, rng, save.player.fighterId === a.id ? playerPlan : undefined);
   const prepB = prepareSide(save, bout, b, rng, save.player.fighterId === b.id ? playerPlan : undefined);
 
@@ -228,6 +238,8 @@ export function resolveBout(
     contractedWeightLb: bout.contractedWeightLb,
     settings: save.settings,
     seed: rng.nextUint32(),
+    judges: judgePersonasFor(save, assignment, homeAdvantage),
+    refereeTendency: refereeTendencyFor(save, assignment) ?? undefined,
     a: { fighter: a, gamePlan: prepA.gamePlan, sharpness: prepA.sharpness, tacticalFamiliarity: prepA.tacticalFamiliarity, cutQuality: prepA.cutQuality, campQuality: prepA.campQuality, shortNotice: prepA.shortNotice },
     b: { fighter: b, gamePlan: prepB.gamePlan, sharpness: prepB.sharpness, tacticalFamiliarity: prepB.tacticalFamiliarity, cutQuality: prepB.cutQuality, campQuality: prepB.campQuality, shortNotice: prepB.shortNotice },
   };
@@ -243,6 +255,8 @@ export function resolveBout(
   applyDetail(result, detail);
 
   applyResult(save, bout, result, rng, prepA.shortNotice, prepB.shortNotice);
+  // What the officials did is recorded against them, so a judge builds a history.
+  recordOfficialOutcome(save, bout, result);
   if (event) newsForResult(save, result, event.name);
   return result;
 }

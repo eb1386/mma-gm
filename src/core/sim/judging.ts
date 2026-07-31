@@ -9,6 +9,11 @@ export interface JudgePersona {
   grapplingLean: number;
   damageLean: number;
   bias: number;
+  /**
+   * How readily this judge scores a round 10-8. 1 is the calibrated default, so a persona
+   * without the field behaves exactly as before.
+   */
+  tenEightWillingness?: number;
 }
 
 const JUDGE_FIRST = [
@@ -159,7 +164,10 @@ export function scoreRoundForJudge(
   const clearlyWon = margin >= C.judging.dominantMargin;
 
   let loserScore = 9;
-  if (clearlyWon && perceivedImpact >= C.judging.tenEightImpact) loserScore = 8;
+  // A judge who is willing to score 10-8 needs slightly less impact to do it. The threshold
+  // moves, the evidence required does not vanish.
+  const tenEightThreshold = C.judging.tenEightImpact / clamp(judge.tenEightWillingness ?? 1, 0.55, 1.45);
+  if (clearlyWon && perceivedImpact >= tenEightThreshold) loserScore = 8;
   // A 10-7 is meant to be extraordinary: the loser is nearly finished repeatedly and
   // contributes almost nothing. Three knockdowns is the gate, plus near total dominance of
   // the offense. Two knockdowns alone was still producing it in over two percent of rounds.

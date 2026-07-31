@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from './rng';
 import { addDays } from './types/common';
 import { DIVISION_BY_ID } from './config/divisions';
-import { createEvent, newCareer } from './testing/fixtures';
-import { advanceUntil } from './world/advance-target';
+import { createEvent, newCareer, runWorld } from './testing/fixtures';
 import {
   existingTitleBout,
   interimTitleJustification,
@@ -1036,7 +1035,7 @@ describe('migrating an existing save', () => {
 describe('the systems running together over time', () => {
   it('holds every invariant across a simulated year', () => {
     const f = newCareer(4901);
-    advanceUntil(f.save, { kind: 'duration', days: 365 });
+    runWorld(f.save, 52);
 
     for (const bout of Object.values(f.save.bouts)) {
       if (bout.status !== 'scheduled') continue;
@@ -1100,7 +1099,7 @@ describe('the systems running together over time', () => {
       interestScore: 60,
     });
 
-    advanceUntil(f.save, { kind: 'duration', days: 120 });
+    runWorld(f.save, 18);
     evaluateAllInterests(f.save);
     for (const interest of matchupInterestsFor(f.save, me.id)) {
       if (interest.eligibility !== 'eligible') continue;

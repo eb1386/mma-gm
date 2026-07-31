@@ -5,6 +5,7 @@ import { Rng } from '../rng';
 import { generateActivityProfile, generateFame, generatePersonality, generateSocial } from '../world/identity';
 import { repairInbox } from '../world/decisions';
 import { evaluateInterest } from '../world/matchup-interest';
+import { assignOfficials, ensureOfficials } from '../world/officials';
 import { addDays, daysBetween } from '../types/common';
 import { fightNightName, numberedEventName, PROMOTION_CONTRACTS, PROMOTION_MARKETING, PROMOTION_MATCHMAKING, PROMOTION_NAME } from '../config/branding';
 
@@ -363,6 +364,44 @@ const MIGRATION_12: Migration = {
   },
 };
 MIGRATIONS.push(MIGRATION_12);
+
+/**
+ * Schema 13: persistent officials and feature flags.
+ *
+ * The officials roster is generated deterministically from the save seed, so an existing
+ * career gets the same judges it would have had if the roster had always been there. Bouts
+ * already completed keep the judge names recorded on their scorecards; only future bouts get
+ * an assignment, because reassigning a fight that has already happened would rewrite history.
+ */
+const MIGRATION_13: Migration = {
+  to: 13,
+  describe:
+    'Adds persistent judges and referees with accumulating records, and feature flags for the optional systems. Completed fights keep the judge names already recorded on their scorecards.',
+  apply: (save) => {
+    ensureOfficials(save);
+    const flags = (save.settings as unknown as Record<string, unknown>) ?? {};
+    // Defensive defaults. Every flag is on except the ones the specification says default off.
+    if (flags.featureFlags === undefined) {
+      (save.settings as unknown as Record<string, unknown>).featureFlags = {
+        historicalWorlds: false,
+        womensDivisions: true,
+        mediaDepth: true,
+        businessDepth: true,
+        antiDoping: false,
+        detailedCommissions: true,
+        persistentOfficials: true,
+      };
+    }
+    // Only future bouts are assigned. A completed bout already has judge names on its
+    // scorecards and those are the record of what happened.
+    for (const bout of Object.values(save.bouts ?? {})) {
+      if (bout.status !== 'scheduled') continue;
+      if (bout.officials) continue;
+      assignOfficials(save, bout);
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_13);
 
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;

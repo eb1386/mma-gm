@@ -18,6 +18,7 @@ import { RosterPage } from './pages/Roster';
 import { DivisionPage } from './pages/Division';
 import { RankingsPage } from './pages/Rankings';
 import { RivalriesPage } from './pages/Rivalries';
+import { OfficialsPage } from './pages/Officials';
 import { EventPage } from './pages/EventPage';
 import { FightPage } from './pages/FightPage';
 import { FightWeekPage } from './pages/FightWeek';
@@ -92,6 +93,7 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
       {link('/roster', 'Roster')}
       {link('/gyms', 'Gyms')}
       {link('/news', 'News')}
+      {link('/officials', 'Officials')}
       <div className="nav-group">Divisions</div>
       {DIVISIONS.map((d) => link(`/division/${d.id}`, d.shortName))}
       <div className="nav-group">History</div>
@@ -233,6 +235,7 @@ function Shell() {
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/rankings" element={<RankingsPage />} />
           <Route path="/rivalries" element={<RivalriesPage />} />
+          <Route path="/officials" element={<OfficialsPage />} />
           <Route path="/roster" element={<RosterPage />} />
           <Route path="/gyms" element={<GymsPage />} />
           <Route path="/gym/:gymId" element={<GymPage />} />
