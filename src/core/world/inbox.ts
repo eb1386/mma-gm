@@ -137,10 +137,6 @@ export function messageNeedsAction(save: SaveGame, m: InboxMessage): boolean {
     const callout = save.callouts?.[m.linkedCalloutId];
     if (!callout || callout.status !== 'open') return false;
   }
-  if (m.linkedStageId) {
-    const task = save.fightWeek?.[m.linkedStageId];
-    if (!task || task.status === 'complete' || task.status === 'skipped') return false;
-  }
   if (m.linkedBoutId) {
     const bout = save.bouts[m.linkedBoutId];
     if (!bout || bout.status !== 'scheduled') return false;

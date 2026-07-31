@@ -274,8 +274,15 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
     f.previousRanking = f.ranking;
     f.ranking = e ? e.rank : null;
     if (e) {
+      const firstTimeRanked = f.highestRanking === null;
       f.weeksRanked = e.weeksRanked;
       f.highestRanking = f.highestRanking === null ? e.rank : Math.min(f.highestRanking, e.rank);
+      // Credited once, the first time this fighter is ranked anywhere, so a gym that keeps
+      // producing contenders is not measured only by whether one of them won a belt.
+      if (firstTimeRanked && f.gymId) {
+        const gym = save.gyms[f.gymId];
+        if (gym) gym.rankedProduced++;
+      }
     }
   }
 

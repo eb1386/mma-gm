@@ -200,7 +200,14 @@ export function LandingPage() {
                         <>
                           <tr>
                             <td>Career state</td>
-                            <td>{CAREER_STATE_LABEL[summary.state]}</td>
+                            <td>
+                              {CAREER_STATE_LABEL[summary.state]}
+                              {summary.stateSince ? ` since ${formatDate(summary.stateSince)}` : ''}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td>Situation</td>
+                            <td>{summary.reason ?? 'Not recorded'}</td>
                           </tr>
                           <tr>
                             <td>Next action</td>
@@ -271,6 +278,9 @@ export function LandingPage() {
 
 interface CareerSummary {
   state: CareerState;
+  /** How long the career has been in this state. Only the save knows this; it cannot be recomputed. */
+  stateSince: string | null;
+  reason: string | null;
   nextAction: string | null;
   opponent: string | null;
   fightDate: string | null;
@@ -284,8 +294,13 @@ function summarize(save: SaveGame): CareerSummary {
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
   const suspension =
     me?.antiDopingSuspension?.until ?? me?.medicalSuspension?.until ?? me?.commissionSuspension?.until ?? null;
+  // The live status is authoritative for what to do next. The persisted record is what carries
+  // how long this has been the case, which nothing can work out after the fact.
+  const persisted = save.careerState?.state === status.state ? save.careerState : null;
   return {
     state: status.state,
+    stateSince: persisted?.since ?? null,
+    reason: persisted?.reason ?? status.reason,
     nextAction: status.action?.label ?? null,
     opponent: status.opponentName,
     fightDate: status.eventDate,

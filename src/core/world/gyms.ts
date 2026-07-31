@@ -181,6 +181,9 @@ export function happinessFactors(save: SaveGame, fighter: Fighter): HappinessFac
   if (ranked >= 3 && fighter.ranking === null) factors.push({ label: 'Overlooked behind ranked teammates', delta: -4 });
 
   if (gym.championsProduced > 0) factors.push({ label: 'Team success', delta: clamp(gym.championsProduced * 2.2, 0, 8) });
+  // Belts are rare. A gym that keeps moving people into the top fifteen is a good place to be
+  // even in a period with no champion on the wall.
+  if (gym.rankedProduced > 0) factors.push({ label: 'A gym that gets people ranked', delta: clamp(gym.rankedProduced * 0.5, 0, 4) });
   if (gym.balance < 0) factors.push({ label: 'Gym financial instability', delta: -6 });
 
   return factors;

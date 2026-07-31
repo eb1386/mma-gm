@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-07-31T19:06:37.937Z",
+  "measuredAt": "2026-07-31T19:57:25.127Z",
   "config": {
     "FIVE": 4,
     "TEN": 1,
@@ -29,8 +29,8 @@
       "weightMissRate": 0.005704821494295178,
       "activityMean": 2.1325754067487854,
       "activityOverFourShare": 0,
-      "saveSizeMb": 30.37723159790039,
-      "runtimeSec": 130.405,
+      "saveSizeMb": 30.377235412597656,
+      "runtimeSec": 125.497,
       "meanPpvBuys": 809433.9402985075,
       "bonusesPerEvent": 3.960352422907489
     },
@@ -57,8 +57,8 @@
       "weightMissRate": 0.006554307116104869,
       "activityMean": 2.1577247888723257,
       "activityOverFourShare": 0,
-      "saveSizeMb": 30.232736587524414,
-      "runtimeSec": 125.187,
+      "saveSizeMb": 30.232735633850098,
+      "runtimeSec": 120.515,
       "meanPpvBuys": 822426.6615384616,
       "bonusesPerEvent": 3.963963963963964
     },
@@ -85,8 +85,8 @@
       "weightMissRate": 0.005291005291005291,
       "activityMean": 2.042715208288972,
       "activityOverFourShare": 0,
-      "saveSizeMb": 30.03949737548828,
-      "runtimeSec": 176.506,
+      "saveSizeMb": 30.039491653442383,
+      "runtimeSec": 126.358,
       "meanPpvBuys": 716440.1428571428,
       "bonusesPerEvent": 3.9680365296803655
     },
@@ -113,8 +113,8 @@
       "weightMissRate": 0.005622188905547227,
       "activityMean": 2.133359724292095,
       "activityOverFourShare": 0,
-      "saveSizeMb": 30.09370708465576,
-      "runtimeSec": 142.339,
+      "saveSizeMb": 30.09369945526123,
+      "runtimeSec": 118.187,
       "meanPpvBuys": 806225.8484848485,
       "bonusesPerEvent": 3.9642857142857144
     },
@@ -141,8 +141,8 @@
       "weightMissRate": 0.011844331641285956,
       "activityMean": 2.0591610943341947,
       "activityOverFourShare": 0.02631578947368421,
-      "saveSizeMb": 51.311588287353516,
-      "runtimeSec": 590.465,
+      "saveSizeMb": 51.31158638000488,
+      "runtimeSec": 492.22,
       "meanPpvBuys": 710620.2335766423,
       "bonusesPerEvent": 3.963203463203463
     }

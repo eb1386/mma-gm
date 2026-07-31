@@ -371,7 +371,6 @@ export interface InboxMessage {
   linkedSponsorId?: string;
   linkedSocialId?: string;
   linkedCalloutId?: string;
-  linkedStageId?: string;
   decisionCreatedOn?: IsoDate;
   decisionResolvedOn?: IsoDate;
   /** When consequences were applied. Present exactly once, so a retry cannot repeat them. */

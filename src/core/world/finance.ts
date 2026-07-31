@@ -92,10 +92,25 @@ export interface FinanceState {
   cash: number;
   careerEarnings: number;
   careerExpenses: number;
+  /**
+   * What is currently owed, which is exactly the negative part of cash.
+   *
+   * This used to be a high water mark that only ever ratcheted upward, so a fighter who dipped
+   * into overdraft once and then earned millions was still shown as carrying that old shortfall,
+   * and it was subtracted from their net worth forever.
+   */
   debt: number;
   /** Recurring monthly outgoings, recomputed as the career changes. */
   monthlyExpenses: number;
   lastMonthlyOn: IsoDate | null;
+  /**
+   * Running totals per kind, per fighter.
+   *
+   * The breakdown shown on the money page cannot be summed from the ledger, because the ledger is
+   * pruned to recent detail and a long career would silently lose its early years while the career
+   * totals printed beside it kept climbing. These counters are never pruned.
+   */
+  kindTotals?: Record<string, { in: Record<string, number>; out: Record<string, number> }>;
 }
 
 /** The ledger, stored on the save so it survives reload and export. */
@@ -182,12 +197,25 @@ export function record(
   } else {
     finance.cash -= rounded;
     finance.careerExpenses += rounded;
-    if (finance.cash < 0) {
-      finance.debt = Math.max(finance.debt, -finance.cash);
-    }
   }
+  finance.debt = Math.max(0, -finance.cash);
+  addKindTotal(finance, fighterId, direction, kind, rounded);
   save.player.balance = finance.cash;
   return entry;
+}
+
+/** Adds to the unpruned per kind totals that the money breakdown is built from. */
+function addKindTotal(
+  finance: FinanceState,
+  fighterId: FighterId,
+  direction: 'in' | 'out',
+  kind: IncomeKind | ExpenseKind,
+  amount: number
+): void {
+  if (!finance.kindTotals) finance.kindTotals = {};
+  const forFighter = (finance.kindTotals[fighterId] ??= { in: {}, out: {} });
+  const side = direction === 'in' ? forFighter.in : forFighter.out;
+  side[kind] = (side[kind] ?? 0) + amount;
 }
 
 /** Keeps only recent detail, so a decades long career does not carry every line. */
@@ -574,17 +602,18 @@ export interface FinanceSummary {
 
 export function summarize(save: SaveGame, fighterId: FighterId): FinanceSummary {
   const finance = financeState(save);
-  const entries = ledger(save).filter((e) => e.fighterId === fighterId);
-  const income = new Map<IncomeKind, number>();
-  const expense = new Map<ExpenseKind, number>();
-  for (const e of entries) {
-    if (e.direction === 'in') income.set(e.kind as IncomeKind, (income.get(e.kind as IncomeKind) ?? 0) + e.amount);
-    else expense.set(e.kind as ExpenseKind, (expense.get(e.kind as ExpenseKind) ?? 0) + e.amount);
-  }
+  // Built from the running totals rather than by summing the ledger, because the ledger only
+  // keeps recent detail. Summing it made the breakdown quietly disagree with the career totals
+  // printed directly above it once a career passed the prune threshold.
+  const totals = finance.kindTotals?.[fighterId];
+  const income = new Map<IncomeKind, number>(Object.entries(totals?.in ?? {}) as [IncomeKind, number][]);
+  const expense = new Map<ExpenseKind, number>(Object.entries(totals?.out ?? {}) as [ExpenseKind, number][]);
   const fighter = save.fighters[fighterId];
   const monthly = finance.monthlyExpenses > 0 ? finance.monthlyExpenses : fighter ? monthlyExpensesFor(save, fighter).reduce((s, i) => s + i.amount, 0) : 3000;
   const runway = monthly > 0 ? finance.cash / monthly : 99;
-  const netWorth = finance.cash - finance.debt;
+  // Cash is already negative when money is owed, so debt is the same shortfall seen from the
+  // other side. Subtracting it as well counted the same hole twice.
+  const netWorth = finance.cash;
 
   return {
     cash: Math.round(finance.cash),

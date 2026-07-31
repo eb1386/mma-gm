@@ -254,6 +254,7 @@ export function CoachPage() {
                 ['Capacity', `${roster.length} of ${gym.capacity}`],
                 ['Revenue share', `${gym.revenueSharePct}%`],
                 ['Champions produced', gym.championsProduced],
+                ['Fighters ranked', gym.rankedProduced],
                 ['Specializations', gym.specializations.map((s) => RATING_LONG_LABEL[s]).join(', ')],
               ]}
             />

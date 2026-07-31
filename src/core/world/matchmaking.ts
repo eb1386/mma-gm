@@ -711,15 +711,16 @@ export function findBestOpponent(
   scored.sort((a, b) => b.score - a.score);
 
   // The bias shifts the matchmaker toward tougher or softer assignments, which is how the
-  // difficulty setting expresses itself without touching the fight engine.
-  if (bias !== 0) {
-    const shift = clamp(Math.round(-bias), -3, 3);
-    const idx = clamp(shift, 0, Math.max(0, scored.length - 1));
-    return scored[idx];
-  }
+  // difficulty setting expresses itself without touching the fight engine. It moves which slice
+  // of the ranked candidates is drawn from rather than returning a fixed index, because a fixed
+  // index made every matchup on a non default difficulty the single same choice, removed all
+  // variety from those saves, and skipped the draw below so the stream ran differently too.
+  const shift = clamp(Math.round(-bias), -3, 3);
+  const start = clamp(shift, 0, Math.max(0, scored.length - 1));
   // A small amount of randomness among the top options keeps a long save varied.
-  const top = scored.slice(0, Math.min(4, scored.length));
-  return rng.weighted(top, (c, i) => Math.max(0.5, c.score) / (1 + i * 0.6));
+  const top = scored.slice(start, Math.min(start + 4, scored.length));
+  const choices = top.length > 0 ? top : scored;
+  return rng.weighted(choices, (c, i) => Math.max(0.5, c.score) / (1 + i * 0.6));
 }
 
 // ---------------------------------------------------------------------------

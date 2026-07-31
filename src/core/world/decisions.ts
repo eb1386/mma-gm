@@ -86,8 +86,9 @@ export function resolvePlayerDecision(save: SaveGame, request: ResolveRequest, r
   const message = save.inbox.find((m) => m.id === request.messageId);
   if (!message) return failure(request, 'That message no longer exists.');
 
-  // Already handled is a normal outcome, not a failure.
-  if (message.selectedChoiceKey || message.status === 'resolved') {
+  // Already handled is a normal outcome, not a failure. `effectsAppliedOn` is the field that
+  // records that consequences actually ran, so it is checked here rather than only written.
+  if (message.effectsAppliedOn || message.selectedChoiceKey || message.status === 'resolved') {
     const remaining = save.inbox.filter((m) => messageNeedsAction(save, m));
     return {
       ok: true,

@@ -8,6 +8,9 @@ import { createCamp, finalizeCamp, CAMP_FORM_BASELINE, estimateCampCost } from '
 import { performSocialAction, socialActionAllowance, SOCIAL_ACTIONS_PER_WEEK, decaySocial, recordSocialHistory } from './world/identity';
 import { rememberPlan, recallPlan } from './world/gameplan-memory';
 import { migrateSave } from './save/migrate';
+import { pruneLedger, record, summarize } from './world/finance';
+import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
+import { DIFFICULTY } from './config/calibration';
 import { DEFAULT_FEATURE_FLAGS, DEFAULT_SETTINGS, SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
 import type { Fighter } from './types/fighter';
@@ -21,6 +24,23 @@ import type { Fighter } from './types/fighter';
 
 function playerOf(save: SaveGame): Fighter {
   return save.fighters[save.player.fighterId!];
+}
+
+/**
+ * The soonest announced event this fighter can actually be matched onto.
+ *
+ * The next card out is usually inside the division's camp and turnaround windows, which leaves
+ * nobody to pick from and would make a matchmaking assertion vacuously true.
+ */
+function bookableEvent(save: SaveGame, fighter: Fighter) {
+  const events = Object.values(save.events)
+    .filter((e) => e.status === 'announced')
+    .sort((a, b) => a.date.localeCompare(b.date));
+  for (const event of events) {
+    const ctx: AvailabilityContext = { date: event.date, bookedFighterIds: new Set() };
+    if (findBestOpponent(save, fighter, event, ctx, new Rng(1), 0)) return { event, ctx };
+  }
+  throw new Error('no event in the horizon has an available opponent');
 }
 
 describe('the gym month can only be settled once', () => {
@@ -370,5 +390,93 @@ describe('no control lies to the player', () => {
       .filter((key) => key !== 'featureFlags')
       .filter((key) => !source.includes(`settings.${key}`) && !source.includes(`'${key}'`));
     expect(unread, `settings read by nothing: ${unread.join(', ')}`).toEqual([]);
+  });
+});
+
+describe('money reads correctly over a long career', () => {
+  it('clears debt once the shortfall is paid back', () => {
+    const f = newCareer(9801);
+    // Spend past zero, then earn it back. Debt used to be a high water mark, so a single
+    // overdraft marked the fighter as indebted for life and was deducted from net worth forever.
+    record(f.save, playerOf(f.save).id, 'out', 'lifestyle', f.save.finance!.cash + 50000, 'Overspend');
+    expect(f.save.finance!.debt).toBe(50000);
+    expect(summarize(f.save, playerOf(f.save).id).netWorthEstimate).toBe(-50000);
+    record(f.save, playerOf(f.save).id, 'in', 'show-pay', 250000, 'Show pay');
+    expect(f.save.finance!.debt).toBe(0);
+    expect(summarize(f.save, playerOf(f.save).id).netWorthEstimate).toBe(200000);
+  });
+
+  it('keeps the earnings breakdown intact when the ledger is pruned', () => {
+    const f = newCareer(9802);
+    const me = playerOf(f.save).id;
+    for (let i = 0; i < 800; i++) record(f.save, me, 'in', 'show-pay', 100, `Show pay ${i}`);
+    const beforePrune = summarize(f.save, me).incomeByKind.find((r) => r.kind === 'show-pay')?.amount ?? 0;
+    const removed = pruneLedger(f.save);
+    expect(removed).toBeGreaterThan(0);
+    const afterPrune = summarize(f.save, me).incomeByKind.find((r) => r.kind === 'show-pay')?.amount ?? 0;
+    // The breakdown is a running total, so pruning detail cannot shrink it.
+    expect(afterPrune).toBe(beforePrune);
+  });
+
+  it('keeps the breakdown adding up to the career totals', () => {
+    const f = newCareer(9803);
+    runWorld(f.save, 60);
+    const me = playerOf(f.save).id;
+    const s = summarize(f.save, me);
+    const income = s.incomeByKind.reduce((t, r) => t + r.amount, 0);
+    const expense = s.expenseByKind.reduce((t, r) => t + r.amount, 0);
+    expect(income).toBe(s.careerEarnings);
+    expect(expense).toBe(s.careerExpenses);
+  });
+});
+
+describe('difficulty changes the matchmaking without freezing it', () => {
+  it('still varies the opponent chosen on a non default difficulty', () => {
+    // The bias used to return a fixed index into the scored list, which made every matchup on a
+    // non default difficulty the same single choice and skipped the draw that keeps a save varied.
+    const f = newCareer(5501);
+    runWorld(f.save, 12);
+    const me = playerOf(f.save);
+    const { event, ctx } = bookableEvent(f.save, me);
+    const chosen = new Set<string>();
+    for (let seed = 0; seed < 24; seed++) {
+      const pick = findBestOpponent(f.save, me, event, ctx, new Rng(7000 + seed), DIFFICULTY.hard.matchmakingBias);
+      if (pick) chosen.add(pick.opponent.id);
+    }
+    expect(chosen.size).toBeGreaterThan(1);
+  });
+
+  it('assigns a harder opponent on a harder difficulty than on an easier one', () => {
+    const f = newCareer(5502);
+    runWorld(f.save, 12);
+    const me = playerOf(f.save);
+    const { event, ctx } = bookableEvent(f.save, me);
+    const meanScore = (bias: number) => {
+      let total = 0;
+      let n = 0;
+      for (let seed = 0; seed < 40; seed++) {
+        const pick = findBestOpponent(f.save, me, event, ctx, new Rng(8000 + seed), bias);
+        if (pick) {
+          total += pick.score;
+          n++;
+        }
+      }
+      return n > 0 ? total / n : 0;
+    };
+    // A lower matchmaking score is a less favourable assignment, which is what the harder
+    // difficulty is supposed to hand out.
+    expect(meanScore(DIFFICULTY.brutal.matchmakingBias)).toBeLessThan(meanScore(DIFFICULTY.easy.matchmakingBias));
+  });
+});
+
+describe('a gym is credited for the fighters it gets ranked', () => {
+  it('counts each fighter once, the first time they are ranked', () => {
+    const f = newCareer(9804);
+    runWorld(f.save, 80);
+    const total = Object.values(f.save.gyms).reduce((t, g) => t + g.rankedProduced, 0);
+    expect(total).toBeGreaterThan(0);
+    // Never more than the number of fighters who have ever been ranked and are at a gym.
+    const everRanked = Object.values(f.save.fighters).filter((x) => x.highestRanking !== null && x.gymId).length;
+    expect(total).toBeLessThanOrEqual(everRanked);
   });
 });

@@ -399,3 +399,61 @@ codebase in trouble.
 It is not proof that nothing is left. Three of the four automated invariant guards now in place
 exist because a wave found something I had already tried to prevent by hand, which is the strongest
 argument for having them and the clearest evidence that hand checking was not enough.
+
+
+---
+
+# Fifth pass, the remaining loose ends
+
+Wave four had left a list of lower severity findings unaddressed. Working through them line by
+line turned three of them into real defects rather than tidiness.
+
+**Debt was a high water mark, not a balance.** It recorded the deepest overdraft a career ever
+reached and never came down. Net worth subtracted it from cash forever, so a fighter who dipped
+fifty thousand into the red once and then earned two million was shown as carrying that shortfall
+for the rest of their life, and their retirement security was graded on the lower figure. Debt is
+now the negative part of cash, which is what the money page always claimed it was.
+
+**The money breakdown was summed from a pruned ledger.** The ledger keeps recent detail and drops
+the rest, so the earnings and expenses breakdown quietly lost a career's early years while the
+career totals printed directly above it kept counting. The two disagreed, on the same screen, with
+no way to tell which was right. The breakdown now comes from running totals that pruning cannot
+reach, and a test asserts the two agree.
+
+**Difficulty froze matchmaking.** The difficulty bias returned a fixed index into the scored
+candidate list, so on any setting other than normal, every matchup the player was offered was the
+single same choice, and the draw that keeps a long save varied was skipped entirely. Six seeds
+produced one distinct opponent. It now shifts which slice of the list is drawn from, so the bias
+still makes harder difficulties hand out worse assignments while variety survives at every
+setting. Measured: mean assignment score 67.4 on easy against 54.1 on brutal, with six distinct
+opponents rather than one.
+
+Also: gyms are now credited for the fighters they get ranked rather than only for belts, and the
+count is shown where champions produced already was; `effectsAppliedOn` is read by the
+idempotency guard instead of only being written by it; the persisted career state is shown on the
+save list, including how long the career has been in that state, which is the one thing the live
+recompute cannot work out; and `linkedStageId` was removed, being a link field no writer could
+ever set.
+
+A sweep of every field declared on the persisted types found no other case of something declared
+and read but never written.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | pass |
+| default tier | 349 passed |
+| flow | 171 passed |
+| world | 6 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 32 passed, desktop and mobile |
+| activity bands | 1.57 / 2.56 / 2.51 / 2.38, all in band |
+| calibration | 93.74 / 6.26 / 0.00 |
+
+Bands and calibration are unchanged to the decimal, which is the expected result: the matchmaking
+change is a no-op at the default difficulty and only alters the biased path.
+
+Save schema is now 20. Two migrations were added, both of which repair existing saves rather than
+only accepting them.

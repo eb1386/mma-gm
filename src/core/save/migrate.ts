@@ -536,6 +536,58 @@ const MIGRATION_18: Migration = {
 };
 MIGRATIONS.push(MIGRATION_18);
 
+/**
+ * Schema 19: money that reads correctly for a long career.
+ *
+ * Debt was a high water mark rather than a current liability, so one overdraft marked a fighter as
+ * indebted for the rest of their life and was deducted from their net worth every time. It is now
+ * simply the negative part of cash, which is what the money page was always claiming to show.
+ *
+ * The earnings and expenses breakdown was summed from the ledger, which is pruned to recent
+ * detail, so a career past the prune threshold lost its early years from the breakdown while the
+ * career totals beside it kept counting. Running totals now carry that history. Existing saves are
+ * seeded from whatever ledger detail survives, which is the most that can honestly be recovered.
+ */
+const MIGRATION_19: Migration = {
+  to: 19,
+  describe: 'Makes debt a current liability rather than a permanent mark, and moves the money breakdown onto unpruned running totals.',
+  apply: (save) => {
+    const finance = save.finance;
+    if (!finance) return;
+    finance.debt = Math.max(0, -(finance.cash ?? 0));
+    const totals: Record<string, { in: Record<string, number>; out: Record<string, number> }> = {};
+    for (const e of save.ledger ?? []) {
+      const forFighter = (totals[e.fighterId] ??= { in: {}, out: {} });
+      const side = e.direction === 'in' ? forFighter.in : forFighter.out;
+      side[e.kind] = (side[e.kind] ?? 0) + e.amount;
+    }
+    finance.kindTotals = totals;
+  },
+};
+MIGRATIONS.push(MIGRATION_19);
+
+/**
+ * Schema 20: gyms are credited for the fighters they got ranked.
+ *
+ * The counter existed on every gym and was never incremented, so it read zero for a gym that had
+ * put a dozen people into the top fifteen. Existing saves are seeded from who has ever held a
+ * ranking, which is the same thing the live counter now records.
+ */
+const MIGRATION_20: Migration = {
+  to: 20,
+  describe: 'Seeds the count of fighters each gym has got ranked.',
+  apply: (save) => {
+    for (const gym of Object.values(save.gyms ?? {})) gym.rankedProduced = 0;
+    for (const f of Object.values(save.fighters ?? {})) {
+      if (f.highestRanking === null || f.highestRanking === undefined) continue;
+      if (!f.gymId) continue;
+      const gym = save.gyms?.[f.gymId];
+      if (gym) gym.rankedProduced++;
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_20);
+
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;
   if (from > SAVE_SCHEMA_VERSION) {
