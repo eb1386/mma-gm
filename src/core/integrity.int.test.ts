@@ -11,6 +11,8 @@ import { migrateSave } from './save/migrate';
 import { pruneLedger, record, summarize } from './world/finance';
 import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
 import { DIFFICULTY } from './config/calibration';
+import { DIVISIONS } from './config/divisions';
+import { reconcileChampionFlags } from './world/rankings';
 import { ovrRaw } from './types/fighter';
 import { DEFAULT_FEATURE_FLAGS, DEFAULT_SETTINGS, SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
@@ -536,6 +538,41 @@ describe('a gym is credited for the fighters it gets ranked', () => {
     // Never more than the number of fighters who have ever been ranked and are at a gym.
     const everRanked = Object.values(f.save.fighters).filter((x) => x.highestRanking != null && x.gymId).length;
     expect(after).toBeLessThanOrEqual(everRanked);
+  });
+});
+
+describe('the ranking tables are the record of who holds a belt', () => {
+  it('clears a champion flag that no table backs', () => {
+    // The flag used to be cleared in six separate places and a path none of them covered left a
+    // deposed champion still flagged, so a division could show two champions at once.
+    const f = newCareer(9810);
+    const division = DIVISIONS[0].id;
+    const table = f.save.rankings[division];
+    const pretender = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === division && x.id !== table.championId
+    )!;
+    pretender.isChampion = true;
+    const corrections = reconcileChampionFlags(f.save);
+    expect(corrections.length).toBeGreaterThan(0);
+    expect(pretender.isChampion).toBe(false);
+    const flagged = Object.values(f.save.fighters).filter((x) => x.isChampion && x.divisionId === division);
+    expect(flagged.length).toBeLessThanOrEqual(1);
+  });
+
+  it('restores a champion flag the tables do back', () => {
+    const f = newCareer(9811);
+    const division = DIVISIONS[0].id;
+    const champion = f.save.fighters[f.save.rankings[division].championId!];
+    expect(champion).toBeDefined();
+    champion.isChampion = false;
+    reconcileChampionFlags(f.save);
+    expect(champion.isChampion).toBe(true);
+  });
+
+  it('changes nothing when the flags already agree', () => {
+    const f = newCareer(9812);
+    runWorld(f.save, 30);
+    expect(reconcileChampionFlags(f.save)).toEqual([]);
   });
 });
 

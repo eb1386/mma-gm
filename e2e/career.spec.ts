@@ -220,6 +220,47 @@ test('every navigation section renders with content and no console error', async
   }
 });
 
+/**
+ * Starts a career in a mode where the player manages no fighter of their own.
+ *
+ * Spectator and coach mode are the modes where `player.fighterId` is null, which is exactly the
+ * state a page that assumes a fighter would crash on. Nothing exercised them in a browser before.
+ */
+async function startCareerInMode(page: Page, mode: RegExp) {
+  await page.goto('/new');
+  const start = page.getByRole('button', { name: /^start career$/i });
+  await expect(start).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: mode }).first().click();
+  await expect(start).toBeEnabled({ timeout: 60_000 });
+  await start.click();
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 120_000 });
+}
+
+for (const [label, mode] of [
+  ['spectator', /spectator/i],
+  ['coach', /coach/i],
+] as const) {
+  test(`every navigation section renders in ${label} mode, where there is no player fighter`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text());
+    });
+    await startCareerInMode(page, mode);
+    // Every route, not only the ones the sidebar offers in this mode. A player can paste a URL.
+    for (const route of NAV_ROUTES) {
+      const response = await page.goto(route);
+      expect(response?.status(), `${route} returned ${response?.status()}`).toBeLessThan(400);
+      await expect(page.locator('.page'), `${route} rendered nothing in ${label} mode`).toBeVisible({
+        timeout: 15_000,
+      });
+      const text = (await page.locator('.page').innerText()).trim();
+      expect(text.length, `${route} rendered an empty page in ${label} mode`).toBeGreaterThan(20);
+    }
+    expect(errors, `console errors in ${label} mode: ${errors.join(' | ')}`).toEqual([]);
+  });
+}
+
 test('every navigation section survives a direct load and a refresh', async ({ page }) => {
   await startCareer(page);
   // A sample across the different page shapes, refreshed to prove the route works cold.
