@@ -321,11 +321,16 @@ function WeighInStagePanel({ task, busy, onComplete, mutate }: { task: FightWeek
   const me = meId ? save.fighters[meId] : null;
   const opponent = me && bout ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
 
-  let state = save.weighIns?.[task.boutId] ?? null;
-  if (!state) {
-    state = mutate((s) => beginWeighIn(s, task.boutId)) ?? null;
-  }
+  const state = save.weighIns?.[task.boutId] ?? null;
   const projection = forecast(save, task.boutId);
+
+  // Beginning the weigh in writes persisted state, so it happens in an effect rather than during
+  // render. A render that performs a side effect runs twice under strict mode and makes the
+  // component's output depend on work it has just done.
+  useEffect(() => {
+    if (state) return;
+    mutate((s) => beginWeighIn(s, task.boutId));
+  }, [state, task.boutId, mutate]);
 
   if (!state) return <SimpleStage task={task} busy={busy} onComplete={onComplete} />;
 

@@ -104,11 +104,11 @@ export function FightPage() {
   const [plans, setPlansState] = useState<GamePlanKey[]>(recalledPlan.plans);
   const planLabel = planSourceLabel(recalledPlan);
   const setPlans = (next: GamePlanKey[] | ((cur: GamePlanKey[]) => GamePlanKey[])) => {
-    setPlansState((cur) => {
-      const value = typeof next === 'function' ? next(cur) : next;
-      mutate((s) => rememberPlan(s, boutId ?? null, 'preFight', value));
-      return value;
-    });
+    // Resolved first and written once, outside the updater. React may call a setState updater more
+    // than once, which would record the same plan change twice.
+    const value = typeof next === 'function' ? next(plans) : next;
+    setPlansState(value);
+    mutate((s) => rememberPlan(s, boutId ?? null, 'preFight', value));
   };
   const [speedKey, setSpeedKey] = useState(DEFAULT_SPEED);
   const [visible, setVisible] = useState(0);

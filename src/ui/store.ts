@@ -135,6 +135,19 @@ interface GameState {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Writes any pending debounced save immediately.
+ *
+ * The 700ms debounce means a change made just before the tab closes or the career is swapped was
+ * simply lost. This is called on both.
+ */
+export function flushPendingSave(save: SaveGame | null): void {
+  if (!persistTimer) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  if (save) void saveGame(save);
+}
+
 const MODE_LABEL: Record<AdvanceMode, string> = {
   day: 'Advancing a Day',
   week: 'Advancing a Week',
@@ -177,7 +190,7 @@ export const useGame = create<GameState>((set, get) => ({
   busy: false,
   toast: null,
 
-  setSave: (save) => set({ save, revision: get().revision + 1, lastReport: null, lastResult: null, operation: null, busy: false }),
+  setSave: (save) => (flushPendingSave(get().save), set({ save, revision: get().revision + 1, lastReport: null, lastResult: null, operation: null, busy: false })),
 
   touch: () => set({ revision: get().revision + 1 }),
 
@@ -194,6 +207,7 @@ export const useGame = create<GameState>((set, get) => ({
     persistTimer = setTimeout(() => {
       const current = get().save;
       if (current) void saveGame(current);
+      persistTimer = null;
     }, 700);
     return result;
   },
@@ -242,7 +256,9 @@ export const useGame = create<GameState>((set, get) => ({
       return { ...EMPTY_RESULT, ok: false, error: message };
     }
 
-    set({ revision: get().revision + 1, lastResult: result });
+    // The same republish `mutate` does. Bumping only the revision left every page that selects
+    // `save` showing the world as it was before the operation, which is most of them.
+    set({ save: { ...save }, revision: get().revision + 1, lastResult: result });
     report('saving', 'Saving Career');
     try {
       await saveGame(save);

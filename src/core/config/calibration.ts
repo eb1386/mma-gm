@@ -221,6 +221,13 @@ export interface Calibration {
     judgeNoiseSd: number;
     /** Individual judge bias sd, drawn once per fight per judge. */
     judgeBiasSd: number;
+    /**
+     * How far a judge's willingness moves the 10-8 threshold, in impact units.
+     *
+     * An offset rather than a divisor, so both ends of the willingness range stay inside the scale
+     * `roundImpact` can actually produce.
+     */
+    tenEightWillingnessSpread: number;
   };
 
   ai: {
@@ -423,6 +430,14 @@ export const CALIBRATION: Calibration = {
     // Impact thresholds on a 0 to 1 scale. Reaching 10-8 needs real damage, a knockdown or
     // genuine submission danger. Reaching 10-7 additionally needs two knockdowns.
     tenEightImpact: 0.95,
+    /**
+     * How far a judge's willingness moves the 10-8 threshold, in impact units.
+     *
+     * Applied as an offset so both ends of the willingness range stay inside the impact scale. A
+     * divisor put the reluctant end above the ceiling, which made those judges incapable rather
+     * than conservative.
+     */
+    tenEightWillingnessSpread: 0.03,
     tenSevenImpact: 0.97,
     impactNoiseSd: 0.05,
     judgeNoiseSd: 2.5,

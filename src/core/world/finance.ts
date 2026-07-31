@@ -24,7 +24,8 @@ export type IncomeKind =
   | 'merchandise'
   | 'seminar'
   | 'coaching'
-  | 'appearance';
+  | 'appearance'
+  | 'signing-bonus';
 
 export type ExpenseKind =
   | 'manager-commission'
@@ -55,6 +56,7 @@ export const INCOME_LABEL: Record<IncomeKind, string> = {
   seminar: 'Seminars',
   coaching: 'Coaching',
   appearance: 'Appearances',
+  'signing-bonus': 'Signing bonus',
 };
 
 export const EXPENSE_LABEL: Record<ExpenseKind, string> = {
@@ -117,6 +119,44 @@ export function financeState(save: SaveGame): FinanceState {
 }
 
 /** Records money moving, exactly once, and keeps the balances consistent with it. */
+/**
+ * Pays a bonus award through the ledger.
+ *
+ * Bonus money used to be added straight to `player.balance`, which `record` then overwrote from
+ * `finance.cash` the next time any money moved, so the award silently vanished. Deductions match a
+ * purse except for fight week travel, which the fight itself has already charged once.
+ */
+/** Withholding applied to fight income. One value, used by purses and by bonus awards alike. */
+export const PURSE_TAX_RATE = 0.32;
+
+export function applyBonusAward(
+  save: SaveGame,
+  fighter: Fighter,
+  boutId: string | null,
+  amount: number,
+  note: string
+): number {
+  if (amount <= 0) return 0;
+  record(save, fighter.id, 'in', 'performance-bonus', amount, note, boutId ?? undefined);
+  let deducted = 0;
+  const manager = managerFor(save, fighter.id);
+  if (manager) {
+    const commission = Math.round((amount * manager.commissionPct) / 100);
+    record(save, fighter.id, 'out', 'manager-commission', commission, `${manager.name} commission`, boutId ?? undefined);
+    deducted += commission;
+  }
+  const gym = fighter.gymId ? save.gyms[fighter.gymId] : null;
+  if (gym) {
+    const cut = Math.round(amount * (gym.revenueSharePct / 100));
+    record(save, fighter.id, 'out', 'gym-percentage', cut, `${gym.name} percentage`, boutId ?? undefined);
+    deducted += cut;
+  }
+  const tax = Math.round(amount * PURSE_TAX_RATE);
+  record(save, fighter.id, 'out', 'taxes', tax, 'Taxes withheld', boutId ?? undefined);
+  deducted += tax;
+  return amount - deducted;
+}
+
 export function record(
   save: SaveGame,
   fighterId: FighterId,
@@ -503,7 +543,7 @@ export function applyFightPurse(
     record(save, fighter.id, 'out', 'gym-percentage', cut, `${gym.name} percentage`, boutId);
     deductions.push({ kind: 'gym-percentage', amount: cut });
   }
-  const tax = Math.round(total * 0.32);
+  const tax = Math.round(total * PURSE_TAX_RATE);
   record(save, fighter.id, 'out', 'taxes', tax, 'Taxes withheld', boutId);
   deductions.push({ kind: 'taxes', amount: tax });
 

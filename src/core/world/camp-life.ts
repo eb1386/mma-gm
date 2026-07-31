@@ -10,6 +10,7 @@ import { managerFor } from './finance';
 import { dopingState } from './antidoping';
 import { COOLDOWNS, mayNotify } from './decisions';
 import { PROMOTION_MARKETING } from '../config/branding';
+import { record } from './finance';
 
 /**
  * Career life between the fights.
@@ -577,7 +578,7 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
       text = 'You told them to leave it.';
       break;
     case 'camp-supplement-check':
-      save.finance && (save.finance.cash -= 400);
+      record(save, me.id, 'out', 'nutrition', 400, 'Camp supplies');
       text = 'It came back clean. That is money well spent.';
       break;
     case 'camp-supplement-refuse':
@@ -634,7 +635,7 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
       text = 'You kept the day for training.';
       break;
     case 'camp-doc-accept':
-      if (save.finance) save.finance.cash += 15000;
+      record(save, me.id, 'in', 'sponsorship', 15000, 'Sponsor appearance');
       if (me.fame) me.fame.recognition = clamp(me.fame.recognition + 7, 0, 100);
       me.campSharpness = clamp(me.campSharpness - 3, 0, 100);
       text = 'The crew are in the gym all week.';
@@ -657,7 +658,7 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
     case 'camp-sponsor-campaign': {
       const sponsor = sponsorsFor(save, me.id).find((s) => s.status === 'active');
       if (sponsor) sponsor.satisfaction = clamp(sponsor.satisfaction + 15, 0, 100);
-      if (save.finance) save.finance.cash += 12000;
+      record(save, me.id, 'in', 'sponsorship', 12000, 'Sponsor appearance');
       me.campSharpness = clamp(me.campSharpness - 2, 0, 100);
       text = 'The shoot went well and the cheque cleared.';
       break;

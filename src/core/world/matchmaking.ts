@@ -11,7 +11,7 @@ import { canCompete } from './health';
 import { assessTitleOpportunity, assessTitleRematch, fightCloseness, lastTitleLoss } from './title-logic';
 import { existingTitleBout, interimTitleJustification, titleShotEligibility } from './title-eligibility';
 import { fulfilInterest, interestReason, matchupPull, type MatchupInterest } from './matchup-interest';
-import { restoreContenderStatus } from './contender';
+import { currentContender, restoreContenderStatus } from './contender';
 import { bookBout, inCampFighterIds, offerBlockReason, releaseBooking, replaceSide } from './availability';
 import { resolveMessagesForBout } from './inbox';
 import { willingToFight } from './identity';
@@ -821,15 +821,27 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     for (let i = 0; i < UNRANKED_PER_BLOCK && unrankedQueue.length > 0; i++) seeds.push(unrankedQueue.shift()!);
   }
 
+  // A fighter who has earned the next title shot is not filler. Ordinary card seeding could book
+  // them into a routine bout before the title pass reached their division, which spent the claim
+  // on a fight they never asked for and made winning an eliminator worth nothing again.
+  const reservedContenders = new Set<FighterId>();
+  for (const d of DIVISIONS) {
+    const standing = currentContender(save, d.id);
+    if (standing) reservedContenders.add(standing.fighterId);
+  }
+
   for (const fighter of seeds) {
     if (bouts.length >= remainingSlots) break;
     if (booked.has(fighter.id)) continue;
+    if (reservedContenders.has(fighter.id)) continue;
     // A champion who cannot defend on this card is never a candidate at all. Choosing the best
     // opponent and then discarding the pairing threw the seeded fighter's slot away, wasting card
     // capacity and denying that fighter a fight for no stated reason.
     if (allChampionIds.has(fighter.id) && !defendableChampionIds.has(fighter.id)) continue;
     const ineligibleChampions = new Set<FighterId>();
     for (const id of allChampionIds) if (!defendableChampionIds.has(id)) ineligibleChampions.add(id);
+    // A reserved contender is not an opponent for filler either.
+    for (const id of reservedContenders) ineligibleChampions.add(id);
 
     const isPlayerFighter = save.player.fighterId === fighter.id;
     const candidate = findBestOpponent(

@@ -782,6 +782,13 @@ function summarize(session: PresserSession): string {
   }
 }
 
+/**
+ * How much a point of opponent focus moves their fight night sharpness.
+ *
+ * Small: winding somebody up makes them train with more intent, it does not transform them.
+ */
+export const OPPONENT_FOCUS_SHARPNESS = 0.004;
+
 function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSession, answer: PresserAnswer, rng: Rng): void {
   const e = answer.effects;
   if (me.fame) {
@@ -819,6 +826,14 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
   const opponent = bout ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
   if (opponent && e.opponentFocus) {
     opponent.campSharpness = Math.max(0, Math.min(100, opponent.campSharpness + e.opponentFocus));
+    // By fight week the opponent's camp has already been finalized, so their fight night sharpness
+    // is fixed and nudging camp form alone would change nothing. The completed camp is adjusted
+    // directly, which is the value `prepareSide` actually reads.
+    for (const camp of Object.values(save.camps)) {
+      if (camp.fighterId !== opponent.id || camp.boutId !== session.boutId) continue;
+      if (camp.resultingSharpness === null) continue;
+      camp.resultingSharpness = Math.max(0, Math.min(1, camp.resultingSharpness + e.opponentFocus * OPPONENT_FOCUS_SHARPNESS));
+    }
   }
 
   // Saying something a sponsor cannot stand puts the agreement at risk. Also written everywhere

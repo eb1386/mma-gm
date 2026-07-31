@@ -4,7 +4,7 @@ import { narrateResult } from '../narrative/render';
 import { applyDetail, detailForBout, shouldNarrate, shouldSummarizeRounds, type DetailContext, type SimDetail } from './detail';
 import { clamp, Rng } from '../rng';
 import { simulateFight, type FightSimOptions } from '../sim/engine';
-import type { GamePlanKey } from '../types/world';
+import type { GamePlanKey, FightCardEvent } from '../types/world';
 import { addDays, ageOn, dayOfWeek, daysBetween, formatDate, yearOf, type BoutId, type IsoDate } from '../types/common';
 import { isChampionshipBout, isFinish, type Bout, type FightResult } from '../types/fight';
 import { ovrDisplayed, type Fighter } from '../types/fighter';
@@ -31,7 +31,7 @@ import {
 import { applyReplacement, bookEvent, cancelBout, CHAMPION_TURNAROUND_DAYS, findReplacement, isAvailable, openOfferFighterIds, regionOfFighter, scheduleEvents, shouldCreateInterimTitle } from './matchmaking';
 import { inCampFighterIds } from './availability';
 import { applyFightPurse, paySponsorsForFight, runFinanceWeek } from './finance';
-import { clearExpiredSuspensions, runAntiDopingWeek } from './antidoping';
+import { clearDopingState, clearExpiredSuspensions, runAntiDopingWeek } from './antidoping';
 import { recordSocialHistory } from './identity';
 import { bookBout, FIGHT_WEEK_DAYS, hasLiveBooking, releaseBooking } from './availability';
 import { checkPlayerInjuries } from './injury-flow';
@@ -56,7 +56,7 @@ import { closeCompetingOffers, createFightOffer, expireOffers } from './offers';
 import { addInboxMessage, messageNeedsAction, reconcileInbox } from './inbox';
 import { VENUE_CITIES } from './venues';
 import { addHypeMoment, computeHype, escalateRivalry, pruneHype, updateAllHype } from './hype';
-import { computeEventBusiness } from './business';
+import { businessStore, computeEventBusiness } from './business';
 import {
   applyFameChange,
   applyFollowerChange,
@@ -69,6 +69,8 @@ import {
 } from './identity';
 import { ROSTER_TARGET_SCALE } from '../config/matchmaking';
 import { featureEnabled } from '../types/save';
+import { MATCHMAKING } from '../config/matchmaking';
+import { applyBonusAward } from './finance';
 
 /**
  * The world clock.
@@ -380,11 +382,14 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
 
     // Health.
     applyWear(fighter, wearFromFight(fighter, result, save), fighter.development.resilience);
+    // Always drawn, because it consumes the shared world rng. Gating the call made the injuries
+    // setting shift every later draw and change fight results, which is the determinism rule this
+    // codebase has now broken four times. The setting decides whether the injuries are applied.
+    const rolledInjuries = injuriesFromFight(fighter, result, rng);
     if (save.settings.injuriesEnabled) {
-      const injuries = injuriesFromFight(fighter, result, rng);
-      fighter.injuries.push(...injuries);
-      if (fighter.id === a.id) result.injuriesA = injuries.map((i) => i.type);
-      else result.injuriesB = injuries.map((i) => i.type);
+      fighter.injuries.push(...rolledInjuries);
+      if (fighter.id === a.id) result.injuriesA = rolledInjuries.map((i) => i.type);
+      else result.injuriesB = rolledInjuries.map((i) => i.type);
     }
     fighter.medicalSuspension = medicalSuspensionFor(fighter, result, rng);
 
@@ -471,6 +476,15 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
 }
 
 /** Resolves every remaining bout on an event and closes it out. */
+/** The bout a bonus belongs to, so the ledger entry points at the right fight. */
+function bonusBoutIdFor(save: SaveGame, event: FightCardEvent, fighterId: string): string | null {
+  for (const id of event.contestedBoutIds) {
+    const bout = save.bouts[id];
+    if (bout && (bout.fighterAId === fighterId || bout.fighterBId === fighterId)) return id;
+  }
+  return null;
+}
+
 export function resolveEvent(
   save: SaveGame,
   eventId: string,
@@ -517,7 +531,11 @@ export function resolveEvent(
         f.fame.favorability = clamp(f.fame.favorability + 2.5, 1, 100);
         f.fame.hardcoreRespect = clamp(f.fame.hardcoreRespect + 3, 1, 100);
       }
-      if (save.player.fighterId === fid) save.player.balance += event.bonusAmount;
+      // Through the ledger, so the money survives. Adding it to `player.balance` directly meant
+      // the next ledger write reset the balance from `finance.cash` and erased the award.
+      if (save.player.fighterId === fid) {
+        applyBonusAward(save, f, bonusBoutIdFor(save, event, fid), event.bonusAmount, `Performance of the Night, ${event.name}`);
+      }
     }
   }
   for (const note of bonuses.notes) {
@@ -543,15 +561,22 @@ export function resolveEvent(
             f.fame.favorability = clamp(f.fame.favorability + 3.5, 1, 100);
             f.fame.hardcoreRespect = clamp(f.fame.hardcoreRespect + 4.5, 1, 100);
           }
-          if (save.player.fighterId === fid) save.player.balance += event.bonusAmount;
+          if (save.player.fighterId === fid) {
+            applyBonusAward(save, f, bonuses.fightOfTheNightBoutId, event.bonusAmount, `Fight of the Night, ${event.name}`);
+          }
         }
       }
     }
   }
 
-  // Event economics is the heaviest per event computation, so a save that has it switched off
-  // skips it rather than computing figures nothing will read.
-  if (featureEnabled(save.settings, 'businessDepth')) computeEventBusiness(save, event, rng);
+  // Always computed, because it consumes the shared world rng. Gating the call itself would make
+  // a settings toggle shift every later draw and change the whole world, which is the determinism
+  // rule this codebase has broken three times. The flag decides whether the figures are kept.
+  const business = computeEventBusiness(save, event, rng);
+  if (!featureEnabled(save.settings, 'businessDepth')) {
+    delete businessStore(save)[event.id];
+  }
+  void business;
   const venue = VENUE_CITIES.find((v) => v.city === event.city);
   const drawFactor = results.reduce((s, r) => {
     const a = save.fighters[r.fighterAId];
@@ -1205,10 +1230,14 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       pruneSocial(save);
       pruneFightWeek(save);
       for (const note of runFinanceWeek(save, me)) headlines.push(note);
-      // The anti-doping system is optional and off by default. The save recorded that and nothing
-      // read it, so a player who turned it off still got tested.
+      // The pass always runs, because it draws from the shared world rng. Skipping the call would
+      // shift every later draw and make a settings toggle change fight results. The flag decides
+      // whether anything it produces reaches the player.
+      const dopingNotes = runAntiDopingWeek(save, me, rng);
       if (featureEnabled(save.settings, 'antiDoping')) {
-        for (const note of runAntiDopingWeek(save, me, rng)) headlines.push(note);
+        for (const note of dopingNotes) headlines.push(note);
+      } else {
+        clearDopingState(save, me.id);
       }
       // Career life. This is how the gym, teammates, sponsors, the manager, the media and
       // the compliance systems actually reach the player rather than sitting on a page.
@@ -1299,6 +1328,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
  * highest ranked available contender on the next suitable card, and both are reserved
  * before general matchmaking runs.
  */
+/** The shortest gap the promotion will accept between two meetings for the same belt. */
+const TITLE_REMATCH_MIN_GAP_DAYS = 150;
+
 function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
   const offerIds = openOfferFighterIds(save);
   const campIds = inCampFighterIds(save);
@@ -1362,7 +1394,13 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
       let selectionReason = '';
       let unification = false;
 
-      if (champion && isAvailable(save, champion, ctx)) {
+      // A champion campaigning in another division cannot defend this belt. They are not in the
+      // division, so booking them here would put them in two divisions at once, and the held title
+      // arrangement already has its own deadline and strip.
+      const championPresent = Boolean(champion && champion.divisionId === d.id);
+      if (champion && !championPresent) continue;
+
+      if (champion && championPresent && isAvailable(save, champion, ctx)) {
         const idleDays = champion.lastFightDate ? daysBetween(champion.lastFightDate, card.date) : 400;
         if (idleDays < CHAMPION_TURNAROUND_DAYS) continue;
         sideA = champion;
@@ -1405,6 +1443,22 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
       // past the eligibility rules.
       const challengerCheck = titleShotEligibility(save, sideB, d.id, { vacant: !champion, interim: interimBout });
       if (!challengerCheck.eligible) continue;
+      // The same limit ordinary matchmaking applies. Without it a championship pairing could be
+      // remade every cycle, which is the one place a trilogy could quietly become a quadrilogy.
+      let meetings = 0;
+      let lastMeeting: string | null = null;
+      for (const r of Object.values(save.history.results)) {
+        const pair =
+          (r.fighterAId === sideA.id && r.fighterBId === sideB.id) ||
+          (r.fighterAId === sideB.id && r.fighterBId === sideA.id);
+        if (!pair) continue;
+        meetings++;
+        if (!lastMeeting || r.date > lastMeeting) lastMeeting = r.date;
+      }
+      if (meetings >= MATCHMAKING.rematch.maxMeetings) continue;
+      // An immediate championship rematch is allowed, because a title loss carries its own rematch
+      // claim, but not one inside a couple of months.
+      if (lastMeeting && daysBetween(lastMeeting, card.date) < TITLE_REMATCH_MIN_GAP_DAYS) continue;
       if (!selectionReason) selectionReason = challengerCheck.selectionReason;
 
       const boutId = `bout-${++save.counters.bout}`;

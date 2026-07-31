@@ -322,13 +322,17 @@ export function runGymMonth(save: SaveGame, gym: Gym): { income: number; costs: 
   const overhead = gym.monthlyCosts;
   const membership = gym.fighterIds.length * 900 + gym.reputation * 220;
   let purseShare = 0;
+  // Credited once, for fights since the last settlement. A rolling one month window overlapped
+  // two consecutive settlements, so a fight near a month boundary paid the gym twice.
+  const since = gym.lastSettledOn ?? addMonthsBack(save.date);
   for (const fid of gym.fighterIds) {
     const f = save.fighters[fid];
     if (!f || !f.lastPurse) continue;
-    if (f.lastFightDate && f.lastFightDate > addMonthsBack(save.date)) {
+    if (f.lastFightDate && f.lastFightDate > since) {
       purseShare += f.lastPurse * (gym.revenueSharePct / 100);
     }
   }
+  gym.lastSettledOn = save.date;
   const income = Math.round(membership + purseShare);
   const costs = Math.round(salaries + overhead);
   gym.balance += income - costs;

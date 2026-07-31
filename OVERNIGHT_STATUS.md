@@ -264,3 +264,75 @@ See the table at the end of `docs/INTEGRATION-MAP.md`.
 - The activity bands are measured over the final twelve months of a three year run across three
   seeds. Classifying by tier at the end of a run and counting every fight ever had was the first
   measurement, and it was wrong.
+
+
+---
+
+# Third audit wave and finding closure
+
+Three audit waves in total: twelve areas, then five, then five more reviewing everything the
+earlier waves had caused me to change. 140 agents. Every finding attacked by an independent
+agent instructed to refute it. Wave three returned 43 findings of which 30 survived refutation.
+
+## The pattern worth recording
+
+**Most of wave three's criticals were caused by wave two's fixes.** Not carelessness in the
+usual sense: each fix was locally correct and globally wrong, because this codebase has a small
+number of invariants that are not obvious from any single file.
+
+- **Money has two representations.** `save.player.balance` and `save.finance.cash`, reconciled
+  only inside `record()`, which assigns one from the other. Any write touching one side is
+  silently reverted by the next ledger write. Making the player eligible for a performance bonus
+  exposed a money bug that had been unreachable, and three more of the same kind were already
+  there: social fines, the contract signing bonus and camp life payments. There is now a test
+  that fails if any production file writes either field directly.
+- **RNG must be consumed unconditionally.** Putting a call behind a feature flag or a setting
+  looks like gating a feature and is actually gating a draw, which shifts every later draw and
+  changes the whole world. I did this twice in one session, to `businessDepth` and to
+  `injuriesEnabled`, having already fixed the same class of bug twice before. Both now always
+  run and the flag decides what is kept.
+- **A React store that mutates in place needs every publisher to republish.** Fixing `mutate`
+  and not `runOperation` left the same staleness after every time advance.
+
+## What changed since the last section
+
+Every one of the 44 wave two findings and the 30 confirmed wave three findings has been either
+fixed or, where the honest answer was that a control could not work, removed with accurate copy
+in its place. Highlights beyond the list above:
+
+- A fighter who has earned the next title shot is reserved from ordinary card seeding, so the
+  claim cannot be spent on filler before the title pass reaches their division.
+- A champion holding a belt in a division they have left is no longer booked to defend it there.
+- NPC champions who change division get the same treatment as the player's.
+- The weekly title pass now applies the same repeat meeting limit as ordinary matchmaking.
+- Gym purse share was credited in two consecutive monthly settlements.
+- A judge reluctant to score 10-8 could never score one at all, because the willingness divisor
+  put their threshold above the ceiling `roundImpact` can produce. It is a bounded offset now.
+- Camp form's positive half was clipped away by the final clamp, so only the penalty reached the
+  cage. A good camp now closes part of the gap to a perfect one.
+- One fighter could take both Fight of the Night and Performance of the Night for one fight.
+- `opponentFocus` was still inert after being wired, because the opponent's camp is finalized at
+  the start of fight week, before any press conference happens.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | pass |
+| fast | 340 passed |
+| flow | 171 passed |
+| world | 6 passed |
+| `npm run build` | pass |
+| dash and terminology guards | pass |
+| `npx playwright test` | 32 passed, desktop and mobile, all 23 navigation sections |
+| `npm run activity:bands` | champions 1.57, top 2.56, ranked 2.51, unranked 2.38, all in band |
+| `npm run calibrate:scores` | 93.74 / 6.26 / 0.00, gate passes |
+| `npm run perf -- --quick` | 0 phases over target |
+| `npm run acceptance 4 1 0` | 0 metrics outside band |
+
+## Still true and worth saying plainly
+
+Three waves each found real defects in the work of the wave before. That rate is falling, but it
+has not reached zero, and a fourth wave would be the honest way to find out whether it has. The
+gates are green and the finding list is closed; that is a stronger claim than the last section
+could make and still not the same as proof that nothing is left.

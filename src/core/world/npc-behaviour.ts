@@ -9,6 +9,8 @@ import { addInboxMessage } from './inbox';
 import { COOLDOWNS, mayNotify } from './decisions';
 import { calloutPressure, getRelationship, makeCallout, relationshipState, type CalloutTone } from './relationships';
 import { adjacentDivisions } from './weightclass';
+import { forfeitContenderStatus, grantContenderStatus } from './contender';
+import { assessChampionMove } from './weightclass';
 
 /**
  * What other fighters do on their own.
@@ -223,6 +225,11 @@ export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecisio
     }
   }
 
+  // A champion who moves carries their standing with them, exactly as the player's move does.
+  // Without this an NPC champion arrived unranked with no claim on anything and was matched as a
+  // newcomer, which is the treatment the design explicitly rules out.
+  const wasChampion = oldTable?.championId === pick.f.id || pick.f.isChampion;
+
   pick.f.divisionId = target.id;
   pick.f.ranking = null;
   pick.f.previousRanking = null;
@@ -230,6 +237,15 @@ export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecisio
   if (!pick.f.eligibleDivisions.includes(target.id)) pick.f.eligibleDivisions.push(target.id);
   pick.f.walkingWeightLb = target.limitLb + Math.min(target.typicalWalkAroundOverLb, Math.max(2, pick.f.walkingWeightLb - from.limitLb));
   pick.f.weightMisses = 0;
+
+  if (wasChampion) {
+    const assessment = assessChampionMove(save, pick.f, target.id);
+    if (assessment.championshipOnTheLine) {
+      grantContenderStatus(save, pick.f, target.id, 'division-move', null);
+    }
+  }
+  // A contender position belongs to the division it was earned in.
+  forfeitContenderStatus(save, from.id, `${pick.f.name} moved to ${target.name}.`, pick.f.id);
 
   const reason = goUp
     ? pick.f.weightMisses > 0

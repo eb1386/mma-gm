@@ -422,7 +422,12 @@ export function finalizeCamp(save: SaveGame, camp: TrainingCamp, rng: Rng): { sh
   // this function then overwrote the same field with a 0 to 1 value. The two writers disagreed
   // about the scale and neither reached the cage, so every camp life choice was inert.
   const form = fighter ? clamp(fighter.campSharpness, 0, 100) : CAMP_FORM_BASELINE;
-  sharpness *= 1 + ((form - CAMP_FORM_BASELINE) / CAMP_FORM_BASELINE) * CAMP_FORM_WEIGHT;
+  const formDelta = (form - CAMP_FORM_BASELINE) / CAMP_FORM_BASELINE;
+  // A good camp closes part of the gap to a perfect one; a bad camp scales down. Multiplying by
+  // 1 + delta looked symmetrical but was not: a strong camp is already near the ceiling, so the
+  // positive half was clipped away by the final clamp and only the penalty ever reached the cage.
+  if (formDelta >= 0) sharpness += (1 - sharpness) * formDelta * CAMP_FORM_WEIGHT;
+  else sharpness *= 1 + formDelta * CAMP_FORM_WEIGHT;
 
   sharpness = clamp(sharpness + rng.normal(0, 0.05), 0, 1);
 

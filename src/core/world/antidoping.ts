@@ -272,6 +272,26 @@ export function acceptSanction(save: SaveGame, fighter: Fighter): string {
 }
 
 /** Clears expired suspensions. Called from the weekly health pass. */
+/**
+ * Removes any consequence the anti-doping system produced for a fighter.
+ *
+ * The weekly pass always runs, because it draws from the shared world rng and skipping it would
+ * shift every later draw. When the system is switched off this undoes anything it did, so the
+ * flag is honest without the simulation diverging.
+ */
+export function clearDopingState(save: SaveGame, fighterId: string): void {
+  const fighter = save.fighters[fighterId];
+  if (fighter) {
+    fighter.antiDopingSuspension = null;
+  }
+  const state = save.doping?.[fighterId];
+  if (!state) return;
+  state.findings = [];
+  state.underInvestigation = false;
+  state.appealOpen = false;
+  state.testsThisYear = 0;
+}
+
 export function clearExpiredSuspensions(save: SaveGame, fighter: Fighter): boolean {
   if (!fighter.antiDopingSuspension) return false;
   if (fighter.antiDopingSuspension.until > save.date) return false;

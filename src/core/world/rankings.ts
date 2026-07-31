@@ -174,6 +174,8 @@ export const HEAD_TO_HEAD_MAX_BONUS = 22;
 
 /** How recent a head to head win has to be to override the points order. */
 export const HEAD_TO_HEAD_WINDOW_DAYS = 730;
+/** Bounded convergence passes, so the correction always terminates. */
+export const HEAD_TO_HEAD_PASSES = 3;
 
 export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reasonBySlot: Map<FighterId, string>): RankingUpdate {
   const table = save.rankings[divisionId];
@@ -199,10 +201,22 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
   }
 
   // Head to head is folded into the sort key, so the ordering is a pure function of the points.
-  const adjusted = new Map<FighterId, number>();
-  for (const f of eligible) {
-    const { bonus } = headToHeadAdjustment(save, f, pointsOf);
-    adjusted.set(f.id, (pointsOf.get(f.id) ?? 0) + bonus);
+  // Applied against the running result rather than the raw points, and repeated a bounded number
+  // of times. Computing every bonus from the unadjusted table meant that once everybody had moved,
+  // the ordering could still contradict a head to head result, which is the one thing this exists
+  // to prevent. The pass count is fixed, so it always terminates and never depends on input order.
+  const adjusted = new Map<FighterId, number>(eligible.map((f) => [f.id, pointsOf.get(f.id) ?? 0]));
+  for (let pass = 0; pass < HEAD_TO_HEAD_PASSES; pass++) {
+    let moved = false;
+    const next = new Map(adjusted);
+    for (const f of eligible) {
+      const { bonus } = headToHeadAdjustment(save, f, adjusted);
+      if (bonus <= 0) continue;
+      next.set(f.id, (adjusted.get(f.id) ?? 0) + bonus);
+      moved = true;
+    }
+    for (const [k, v] of next) adjusted.set(k, v);
+    if (!moved) break;
   }
 
   const ordered = eligible

@@ -409,12 +409,19 @@ export function CoachPage() {
                   toDate: save.date,
                   daysAdvanced: 0,
                   eventsResolved: [],
-                  headlines: [`Month closed. Net ${formatMoney(month.net)}.`],
+                  headlines: [
+                    month.lines.some((l) => l.includes('already been settled'))
+                      ? 'This month has already been settled.'
+                      : `Month closed. Net ${formatMoney(month.net)}.`,
+                  ],
                   stoppedBecause: null,
                   navigateTo: null,
                   summary: '',
                 };
-              }).then((r) => showToast(r.headlines[0] ?? 'Month closed.', 'good'))
+              }).then((r) =>
+              // A refusal is reported as a refusal rather than in green as a success.
+              showToast(r.headlines[0] ?? 'Month closed.', r.headlines[0]?.includes('already been settled') ? 'info' : 'good')
+            )
             }
           >
             {busy ? 'Working...' : 'Close out a month manually'}

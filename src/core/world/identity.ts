@@ -476,13 +476,6 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
 
   // Record the action against this week's allowance. Going quiet does not consume one, because
   // it is the absence of an action.
-  if (key !== 'go-silent' && social) {
-    const currentWeek = save.date.slice(0, 10);
-    const previous = social.actionWeekOf ?? null;
-    const sameWeek = previous !== null ? daysBetween(previous, currentWeek) < 7 : false;
-    social.actionsThisWeek = (sameWeek ? (social.actionsThisWeek ?? 0) : 0) + 1;
-    social.actionWeekOf = sameWeek ? previous : currentWeek;
-  }
   const out: SocialActionOutcome = {
     key,
     headline: def.label,
@@ -496,6 +489,22 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
     succeeded: true,
   };
   if (!social || !fame || !personality) return out;
+  // The allowance is enforced here, not only shown in the interface. Counting without refusing
+  // left the limit as advice that any other caller could ignore.
+  if (key !== 'go-silent' && social) {
+    const allowance = socialActionAllowance(save, fighter);
+    if (allowance.remaining <= 0) {
+      out.detail = allowance.reason ?? 'You have posted enough this week.';
+      out.succeeded = false;
+      return out;
+    }
+    const currentWeek = save.date.slice(0, 10);
+    const previous = social.actionWeekOf ?? null;
+    const sameWeek = previous !== null ? daysBetween(previous, currentWeek) < 7 : false;
+    social.actionsThisWeek = (sameWeek ? (social.actionsThisWeek ?? 0) : 0) + 1;
+    social.actionWeekOf = sameWeek ? previous : currentWeek;
+  }
+
 
   const driver = personality[def.driver] as number;
   const credibility = clamp((fighter.winStreak * 8 + (fighter.ranking !== null ? 16 - fighter.ranking : 0)) / 30, 0, 1);

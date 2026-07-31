@@ -444,6 +444,24 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
   // One transaction takes ownership of both fighters. Accepting also closes every other
   // offer either fighter is holding, so an accepted bout cannot leave a competing offer
   // live in the inbox.
+  // The opponent is checked again at the moment of acceptance. An offer can sit open for days,
+  // and nothing revalidated the other side, so a player could accept a bout against somebody who
+  // had since been injured, suspended, released or booked elsewhere.
+  // The offer being accepted must not count against its own opponent, so the open offer set is
+  // built with this one excluded.
+  const otherOfferHolders = new Set<FighterId>();
+  for (const other of Object.values(save.fightOffers)) {
+    if (other.id === offer.id || other.status !== 'open') continue;
+    otherOfferHolders.add(other.fighterId);
+    otherOfferHolders.add(other.opponentId);
+  }
+  const opponentBlocked = offerBlockReason(save, opponent, {
+    eventDate: event.date,
+    isReplacementSlot: offer.isReplacementSlot,
+    openOfferFighterIds: otherOfferHolders,
+  });
+  if (opponentBlocked) return null;
+
   const booking = bookBout(save, bout);
   if (!booking.created) return null;
   // A championship offer consumes the contender claim only once it is actually accepted. Consuming

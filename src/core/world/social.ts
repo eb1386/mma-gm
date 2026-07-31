@@ -5,6 +5,7 @@ import type { SaveGame } from '../types/save';
 import { addHypeMoment, escalateRivalry, findRivalry, hypeStore } from './hype';
 import { applyRelationship } from './relationships';
 import { PROMOTION_MARKETING } from '../config/branding';
+import { record } from './finance';
 
 /**
  * Social and media items that arrive through the inbox.
@@ -694,7 +695,7 @@ function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply
   // Risk is realized here rather than being a label with no consequence.
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(2000 + rng.range(0, 8000));
-    save.player.balance -= fine;
+    record(save, me.id, 'out', 'fine', fine, 'Fine for a social media post');
     me.careerEarnings -= fine;
   }
 }

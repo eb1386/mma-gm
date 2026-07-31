@@ -133,7 +133,9 @@ export function CampPage() {
         arriveEarlyDays: arriveEarly,
       });
       s.camps[camp.id] = camp;
-      s.player.balance -= camp.cost;
+      // The camp is paid for weekly through the ledger as it runs, in `runCampWeek`. Deducting the
+      // whole cost here as well charged it twice, against two different money stores, and the
+      // off-ledger deduction was overwritten the next time the ledger recomputed the balance.
       return camp;
     }
   };
@@ -227,10 +229,15 @@ export function CampPage() {
                   type="range"
                   min={0}
                   max={100}
-                  value={Math.round((focus[k] / Math.max(0.0001, totalFocus)) * 100)}
+                  // The slider shows and writes the same quantity, the raw weight. It used to show
+                  // the normalised share and write the raw value, so the thumb jumped away from
+                  // wherever it was dragged as soon as the total changed.
+                  value={Math.round(focus[k] * 100)}
                   onChange={(e) => setFocus({ ...focus, [k]: Number(e.target.value) / 100 })}
                 />
-                <span className="num mono small">{Math.round((focus[k] / Math.max(0.0001, totalFocus)) * 100)}%</span>
+                <span className="num mono small" title="Share of camp time once every weight is taken together">
+                  {Math.round((focus[k] / Math.max(0.0001, totalFocus)) * 100)}%
+                </span>
               </div>
             ))}
 

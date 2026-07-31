@@ -247,6 +247,8 @@ export interface GymStaff {
 export interface Gym {
   /** The calendar month whose finances have already been settled, so it cannot be settled twice. */
   lastSettledMonth?: string;
+  /** The date of the last settlement, so purse share is credited once rather than in two windows. */
+  lastSettledOn?: IsoDate | null;
   id: GymId;
   name: string;
   country: string;

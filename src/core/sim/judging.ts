@@ -178,7 +178,15 @@ export function scoreRoundForJudge(
   let loserScore = 9;
   // A judge who is willing to score 10-8 needs slightly less impact to do it. The threshold
   // moves, the evidence required does not vanish.
-  const tenEightThreshold = C.judging.tenEightImpact / clamp(judge.tenEightWillingness ?? 1, 0.55, 1.45);
+  // A bounded offset rather than a divisor. Dividing pushed a reluctant judge's threshold above
+  // the ceiling that `roundImpact` can produce, so they could never score a round 10-8 however
+  // one sided it was, which is incompetence rather than a leaning.
+  const willingness = clamp(judge.tenEightWillingness ?? 1, 0.55, 1.45);
+  const tenEightThreshold = clamp(
+    C.judging.tenEightImpact + (1 - willingness) * C.judging.tenEightWillingnessSpread,
+    0.5,
+    0.99
+  );
   if (clearlyWon && perceivedImpact >= tenEightThreshold) loserScore = 8;
   // A 10-7 is meant to be extraordinary: the loser is nearly finished repeatedly and
   // contributes almost nothing. Three knockdowns is the gate, plus near total dominance of

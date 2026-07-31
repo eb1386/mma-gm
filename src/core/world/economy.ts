@@ -6,6 +6,7 @@ import { PROMOTION_NAME } from '../config/branding';
 import type { Fighter } from '../types/fighter';
 import type { Contract, ContractOffer, ContractTerms, NegotiationRound } from '../types/world';
 import type { SaveGame } from '../types/save';
+import { record } from './finance';
 
 /**
  * Money, leverage and popularity.
@@ -496,16 +497,24 @@ export function assignEventBonuses(results: FightResult[], _bonusAmount: number,
     })
     .sort((x, y) => y.score - x.score);
 
-  // Two performances normally, three when there is no Fight of the Night to award.
+  // Two performances normally, three when there is no Fight of the Night to award. A fighter who
+  // is already taking Fight of the Night is not eligible for a performance award as well: one
+  // fight earns one bonus.
   const slots = awardFotn ? 2 : 3;
+  const fotnFighterIds = awardFotn ? [best.r.fighterAId, best.r.fighterBId] : [];
   const performanceFighterIds = ranked
+    .filter((x) => Boolean(x.r.winnerId) && !fotnFighterIds.includes(x.r.winnerId!))
     .slice(0, slots)
-    .map((x) => x.r.winnerId!)
-    .filter(Boolean);
+    .map((x) => x.r.winnerId!);
   if (performanceFighterIds.length === 0) notes.push('No finish on the card earned a performance bonus.');
   if (!awardFotn && performanceFighterIds.length === 3) notes.push('A third performance bonus was awarded in place of Fight of the Night.');
 
+  // Written onto the results before anything reads them, and recorded on each result so the field
+  // is not a persisted shape that nothing ever fills in.
   if (awardFotn) best.r.fightOfTheNight = true;
+  for (const r of results) {
+    r.performanceBonusIds = performanceFighterIds.filter((id) => id === r.fighterAId || id === r.fighterBId);
+  }
   return { fightOfTheNightBoutId: awardFotn ? best.r.boutId : null, performanceFighterIds, notes };
 }
 
@@ -578,7 +587,9 @@ export function signContractOffer(save: SaveGame, fighter: Fighter, offer: Contr
   fighter.contractId = next.id;
   if (offer.terms.signingBonus > 0) {
     fighter.careerEarnings += offer.terms.signingBonus;
-    if (save.player.fighterId === fighter.id) save.player.balance += offer.terms.signingBonus;
+    if (save.player.fighterId === fighter.id) {
+      record(save, fighter.id, 'in', 'signing-bonus', offer.terms.signingBonus, 'Signing bonus');
+    }
   }
   return next;
 }

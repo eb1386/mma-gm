@@ -74,9 +74,10 @@ describe('camp form reaches fight night', () => {
     const good = build(90);
     const neutral = build(CAMP_FORM_BASELINE);
     const bad = build(10);
-    expect(good).toBeGreaterThan(bad);
-    expect(good).toBeGreaterThanOrEqual(neutral);
-    expect(neutral).toBeGreaterThanOrEqual(bad);
+    // Strict in both directions: a good camp is worth more than a neutral one, not merely no
+    // worse. The positive half used to be clipped away by the final clamp.
+    expect(good).toBeGreaterThan(neutral);
+    expect(neutral).toBeGreaterThan(bad);
   });
 
   it('resets form when a camp begins, so a previous camp does not follow the fighter', () => {
@@ -241,5 +242,35 @@ describe('migrations stay safe', () => {
       expect(Object.keys(migrated.history.results).length, `from schema ${from}`).toBe(results);
       expect(Object.entries(migrated.rankings).map(([d, t]) => `${d}:${t.championId}`), `from schema ${from}`).toEqual(champions);
     }
+  });
+});
+
+describe('money always moves through the ledger', () => {
+  it('has no production code writing the player balance directly', async () => {
+    // `record` reconciles player.balance from finance.cash, so any write that touches one side
+    // only is silently reverted by the next ledger write. This has caused three separate money
+    // bugs: bonus awards, social fines and the contract signing bonus.
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const offenders: string[] = [];
+    for (const dir of ['src/core/world', 'src/ui/pages']) {
+      for (const name of readdirSync(dir)) {
+        if (!name.endsWith('.ts') && !name.endsWith('.tsx')) continue;
+        if (name.includes('.test.') || name === 'finance.ts') continue;
+        const text = readFileSync(join(dir, name), 'utf8');
+        for (const [i, line] of text.split('\n').entries()) {
+          if (/player\.balance\s*[+-]?=/.test(line)) offenders.push(`${name}:${i + 1}`);
+          if (/finance(\.|\?\.)cash\s*[+-]?=/.test(line)) offenders.push(`${name}:${i + 1}`);
+        }
+      }
+    }
+    expect(offenders, `money written outside the ledger at ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  it('keeps the balance and the ledger cash in step through a career', () => {
+    const f = newCareer(9701);
+    runWorld(f.save, 40);
+    // The two representations must agree, because one is derived from the other.
+    expect(f.save.player.balance).toBe(f.save.finance!.cash);
   });
 });

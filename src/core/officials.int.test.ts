@@ -37,8 +37,9 @@ function roundInput(overrides: Partial<RoundScoreInput> = {}): RoundScoreInput {
     // judge's, which is the discrimination this test is about.
     statsA: { ...emptyStats(), sigStrikesLanded: 40, knockdowns: 2 },
     statsB: { ...emptyStats(), sigStrikesLanded: 8 },
-    damageA: 10,
-    damageB: 60,
+    // damageA is the damage A inflicted. A wins this round, so A is the one doing damage.
+    damageA: 60,
+    damageB: 10,
     aggressionA: 0.7,
     aggressionB: 0.3,
     cageControlA: 0.7,
