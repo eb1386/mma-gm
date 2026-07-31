@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-07-30T17:30:39.370Z",
+  "measuredAt": "2026-07-31T03:32:30.037Z",
   "config": {
     "FIVE": 4,
     "TEN": 1,
@@ -30,7 +30,7 @@
       "activityMean": 2.0697305747932497,
       "activityOverFourShare": 0,
       "saveSizeMb": 30.96062469482422,
-      "runtimeSec": 67.52,
+      "runtimeSec": 66.397,
       "meanPpvBuys": 731376.1818181818,
       "bonusesPerEvent": 3.9779735682819384
     },
@@ -58,7 +58,7 @@
       "activityMean": 1.9479478281679996,
       "activityOverFourShare": 0,
       "saveSizeMb": 31.284706115722656,
-      "runtimeSec": 62.565,
+      "runtimeSec": 60.37,
       "meanPpvBuys": 687039.8615384615,
       "bonusesPerEvent": 3.9864864864864864
     },
@@ -86,7 +86,7 @@
       "activityMean": 1.9846667235883366,
       "activityOverFourShare": 0,
       "saveSizeMb": 30.49323844909668,
-      "runtimeSec": 62.392,
+      "runtimeSec": 60.282,
       "meanPpvBuys": 706616.0317460317,
       "bonusesPerEvent": 3.990867579908676
     },
@@ -114,7 +114,7 @@
       "activityMean": 2.023774783280399,
       "activityOverFourShare": 0,
       "saveSizeMb": 30.593697547912598,
-      "runtimeSec": 62.6,
+      "runtimeSec": 59.872,
       "meanPpvBuys": 782110.5303030303,
       "bonusesPerEvent": 3.986607142857143
     },
@@ -142,7 +142,7 @@
       "activityMean": 1.9694450245379562,
       "activityOverFourShare": 0.0031847133757961785,
       "saveSizeMb": 53.21401786804199,
-      "runtimeSec": 271.233,
+      "runtimeSec": 253.199,
       "meanPpvBuys": 807165.9338235294,
       "bonusesPerEvent": 3.9805194805194803
     }

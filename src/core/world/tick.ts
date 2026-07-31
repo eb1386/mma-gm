@@ -49,7 +49,7 @@ import './decision-handlers';
 import { PROMOTION_CONTRACTS } from '../config/branding';
 import { applyResultToRankings, applyTitleOutcome, recomputeDivision, recomputePfp } from './rankings';
 import { generateFighter } from './generator';
-import { createFightOffer, expireOffers } from './offers';
+import { closeCompetingOffers, createFightOffer, expireOffers } from './offers';
 import { addInboxMessage, messageNeedsAction, reconcileInbox } from './inbox';
 import { VENUE_CITIES } from './venues';
 import { addHypeMoment, computeHype, escalateRivalry, pruneHype, updateAllHype } from './hype';
@@ -1196,7 +1196,15 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
       // A championship bout still has to fit on the card. A full card is passed over in
       // favour of the next suitable one rather than being stretched beyond its shape.
       if (card.plannedBouts > 0 && scheduledOnCard >= card.plannedBouts) continue;
-      const ctx = { date: card.date, bookedFighterIds: booked, openOfferFighterIds: offerIds, inCampFighterIds: campIds };
+      // A championship booking outranks a routine offer, so a contender holding an ordinary
+      // offer is still considered rather than being passed over for another six months.
+      const ctx = {
+        date: card.date,
+        bookedFighterIds: booked,
+        openOfferFighterIds: offerIds,
+        inCampFighterIds: campIds,
+        isChampionshipBooking: true,
+      };
 
       // A vacant title is filled by the two highest ranked available contenders.
       let sideA: Fighter | null = null;
@@ -1310,6 +1318,10 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
         const opp = self.id === sideA.id ? sideB : sideA;
         releaseBooking(save, self.id, boutId);
         releaseBooking(save, opp.id, boutId);
+        // The routine offer the player was holding is pulled, because the title shot replaces
+        // it. Leaving it open would make the title offer itself impossible to create.
+        closeCompetingOffers(save, self.id, '', 'Withdrawn: a championship opportunity came up instead.');
+        self.offerCooldownUntil = null;
         bout.status = 'canceled';
         bout.cancelReason = 'converted into an offer for the player';
         card.boutIds = card.boutIds.filter((id) => id !== boutId);

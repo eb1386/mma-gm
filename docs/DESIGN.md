@@ -570,3 +570,44 @@ single debut fight. The original championship is kept temporarily, kept for a do
 attempt, or vacated, and `enforceAbsentChampions` strips a belt held by somebody who left the
 division and never came back. A champion cannot silently disappear from a division while
 remaining its champion forever.
+
+---
+
+## 38. Measure the player's experience, not the rules
+
+The title shot work in decision 35 was tested two ways: the eligibility rules in isolation,
+and the world invariants over a simulated year. Both passed. The acceptance run reported 1.62
+title fights per division per year, inside the band. Every one of those measurements was
+about the world. None of them answered the only question a player asks, which is whether a
+title shot ever arrives for them.
+
+It did not. `tools/title-shot-probe.ts` walks a real career forward, answering offers and
+fighting the fights, and reports why a title fight did not happen on every weekly pass. The
+first run said zero title offers in six careers of six years. The cause was not the title
+logic at all.
+
+**Two of the three causes were in the measurement, and finding that out was the point.** The
+first probe counted offers without accepting them, so the player never fought and never
+climbed; best rank was exactly 7 in all six runs, which is the starting rank. The second
+accepted offers but never signed a contract renewal, and a fighter with no active contract is
+refused by every offer path, so the career froze. Correcting only that took the same three
+seeds from 11 ordinary offers to 52, from a best rank of 5 to a best rank of 1, and from no
+title shots to two.
+
+**The third cause was real.** A fighter holding an ordinary open offer was unavailable to the
+weekly title pass, so being offered a preliminary bout on Monday silently cost a top
+contender the title shot decided on Tuesday, and the belt went elsewhere for another six
+months. `isChampionshipBooking` now relaxes the ordinary offer and the offer cooldown for a
+championship booking only. Health, an existing booking and a competing championship offer
+still block, and the player's routine offer is withdrawn when the title shot replaces it.
+
+**A rejected fix is worth recording too.** The same flag initially bypassed `willingToFight`
+as well, on the reasoning that nobody turns down a championship. That made every division
+book title fights faster, which crowded the player out rather than helping them: best rank
+across three seeds went from 1, 1, 2 to 7, 1, 7. The bypass was reverted. A three seed sample
+was also not enough to tell a regression from noise, which is why the figures above are over
+eight.
+
+**Being out of contract is now stated, not implied.** It produced no symptom other than
+fights quietly never arriving. The career state names the consequence: no fights can be
+offered until a new deal is signed.

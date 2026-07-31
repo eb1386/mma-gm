@@ -359,15 +359,27 @@ export function careerStatus(save: SaveGame): CareerStatus {
   }
 
   const contract = me.contractId ? save.contracts[me.contractId] : null;
-  if (!contract || contract.status !== 'active') {
-    return finish('free-agent', `${me.name} is not under contract.`, {
-      kind: 'navigate',
-      label: 'Review Contract Options',
-      route: '/contract',
-      detail: 'No active promotional contract.',
-      blocking: false,
-      key: 'free-agent',
-    });
+  if (!contract || contract.status !== 'active' || contract.fightsRemaining <= 0) {
+    // Being out of contract is not a passive state. Every offer path refuses a fighter with
+    // no active deal, so a player who does not notice this simply stops receiving fights with
+    // no other symptom. The consequence is stated rather than implied.
+    const pendingOffer = Object.values(save.contractOffers).some((o) => o.fighterId === me.id && o.status === 'open');
+    return finish(
+      'free-agent',
+      pendingOffer
+        ? `${me.name} is out of contract. No fights can be offered until a new deal is signed.`
+        : `${me.name} is out of contract. No fights can be offered until the promotion sends a new deal.`,
+      {
+        kind: 'navigate',
+        label: pendingOffer ? 'Sign a New Contract' : 'Review Contract Options',
+        route: '/contract',
+        detail: pendingOffer
+          ? 'An offer is waiting. Until it is signed you cannot be matched, and a title shot cannot be offered.'
+          : 'No active promotional contract, so the matchmaker cannot approach you. A new offer arrives within a month.',
+        blocking: false,
+        key: 'free-agent',
+      }
+    );
   }
 
   const open = openOffersFor(save, me.id);

@@ -238,6 +238,8 @@ export function rollingYearCounts(save: SaveGame, on: IsoDate): { events: number
 
 export interface AvailabilityContext {
   date: IsoDate;
+  /** A championship booking, which outranks a routine offer the fighter is holding. */
+  isChampionshipBooking?: boolean;
   /** Bouts already booked, used to avoid double booking. */
   bookedFighterIds: Set<FighterId>;
   /**
@@ -274,10 +276,13 @@ export function isAvailable(save: SaveGame, f: Fighter, ctx: AvailabilityContext
     takenFighterIds: ctx.bookedFighterIds,
     openOfferFighterIds: ctx.openOfferFighterIds,
     inCampFighterIds: ctx.inCampFighterIds,
+    isChampionshipBooking: ctx.isChampionshipBooking,
   });
   if (blocked) return false;
   // Fighters do not all compete at the same rate. A fighter inside their own preferred
-  // turnaround, or already at their yearly target, is a harder booking.
+  // turnaround, or already at their yearly target, is a harder booking. This still applies to
+  // a championship: bypassing it made every division book title fights faster and pushed the
+  // measured title fight rate up, which crowded the player out rather than helping them.
   if (!willingToFight(save, f, daysBetween(save.date, ctx.date), ctx.date)) return false;
   return true;
 }

@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { Rng } from '@core/rng';
 import { formatDate, formatMoney } from '@core/types/common';
 import type { ContractTerms } from '@core/types/world';
-import { computeLeverage, respondToCounter } from '@core/world/economy';
-import { PROMOTION_NAME } from '@core/config/branding';
+import { computeLeverage, respondToCounter, signContractOffer } from '@core/world/economy';
 import { useGame } from '../store';
 import { Bar, KeyValues, Notice, Panel } from '../components';
 
@@ -34,32 +33,8 @@ export function ContractPage() {
       s.rng = rng.getState();
       setLog((l) => [response.message, ...l]);
       if (response.outcome === 'accepted') {
-        const c = s.contracts[fighter.contractId ?? ''] ?? null;
-        const next = {
-          id: `contract-${fighter.id}-${s.date}`,
-          fighterId: fighter.id,
-          promotion: PROMOTION_NAME,
-          startDate: s.date,
-          endCondition: 'fights-exhausted' as const,
-          endDate: null,
-          terms: { ...offer.terms },
-          fightsRemaining: offer.terms.fights,
-          status: 'active' as const,
-          isSimulated: true,
-          minimumTurnaroundDays: 42,
-          injuryExtension: true,
-          championClause: fighter.isChampion,
-          weightClassClause: fighter.divisionId,
-          negotiationHistory: [...(c?.negotiationHistory ?? []), response.round],
-          signedOn: s.date,
-          note: 'Simulated game contract agreed through negotiation. Real fighter contract terms are not public.',
-        };
-        s.contracts[next.id] = next;
-        s.fighters[fighter.id].contractId = next.id;
-        if (offer.terms.signingBonus > 0) {
-          s.fighters[fighter.id].careerEarnings += offer.terms.signingBonus;
-          s.player.balance += offer.terms.signingBonus;
-        }
+        // One core transaction owns signing, so the screen and the simulation agree.
+        signContractOffer(s, s.fighters[fighter.id], offer, response.round);
       }
     });
   };

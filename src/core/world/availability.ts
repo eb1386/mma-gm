@@ -90,6 +90,16 @@ export interface AvailabilityOptions {
   isReplacementSlot?: boolean;
   /** Allows an offer for an event beyond the expected return of a blocking injury. */
   allowMedicallyContingent?: boolean;
+  /**
+   * This is a championship booking.
+   *
+   * A title shot outranks a routine fight, so an ordinary open offer and a recent offer
+   * cooldown no longer disqualify the fighter. Without this, being offered a preliminary bout
+   * on Monday silently cost a top contender the title shot that was decided on Tuesday, and
+   * the belt went elsewhere for another six months. Health, an existing booking and an open
+   * championship offer still block.
+   */
+  isChampionshipBooking?: boolean;
 }
 
 /** True when a bout id still refers to a bout this fighter is actually scheduled for. */
@@ -196,14 +206,22 @@ export function offerBlockReason(save: SaveGame, fighter: Fighter, opts: Availab
   if (fighter.commissionSuspension && fighter.commissionSuspension.until > eventDate) return 'commission-suspension';
   if (fighter.antiDopingSuspension && fighter.antiDopingSuspension.until > eventDate) return 'anti-doping-suspension';
 
-  const offers = opts.openOfferFighterIds
-    ? opts.openOfferFighterIds.has(fighter.id)
-      ? ['x']
-      : []
-    : openOffersFor(save, fighter.id);
-  if (offers.length > 0) return 'open-offer';
+  if (opts.isChampionshipBooking) {
+    // Only another championship offer stands in the way of this one.
+    const competingTitleOffer = Object.values(save.fightOffers).some(
+      (o) => o.status === 'open' && (o.fighterId === fighter.id || o.opponentId === fighter.id) && (o.isTitleFight || o.isInterimTitleFight)
+    );
+    if (competingTitleOffer) return 'open-offer';
+  } else {
+    const offers = opts.openOfferFighterIds
+      ? opts.openOfferFighterIds.has(fighter.id)
+        ? ['x']
+        : []
+      : openOffersFor(save, fighter.id);
+    if (offers.length > 0) return 'open-offer';
 
-  if (fighter.offerCooldownUntil && fighter.offerCooldownUntil > save.date) return 'offer-cooldown';
+    if (fighter.offerCooldownUntil && fighter.offerCooldownUntil > save.date) return 'offer-cooldown';
+  }
 
   const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
   if (!contract || contract.status !== 'active') return 'no-contract';

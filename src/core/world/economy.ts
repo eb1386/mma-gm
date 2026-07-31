@@ -542,3 +542,43 @@ export function contractSummaryLine(c: Contract): string {
 export function nextContractDate(c: Contract, from: IsoDate): IsoDate {
   return c.endDate ?? addDays(from, 365);
 }
+
+/**
+ * Signs an agreed contract offer.
+ *
+ * This used to live inside the contract screen, which meant the one state transition that
+ * decides whether a fighter can be booked at all had no test coverage and no other caller
+ * could reach it. A fighter with no active contract is refused by every offer path, so a
+ * player who never completes this step is quietly frozen out of the sport.
+ */
+export function signContractOffer(save: SaveGame, fighter: Fighter, offer: ContractOffer, round: NegotiationRound | null): Contract {
+  const current = fighter.contractId ? save.contracts[fighter.contractId] : null;
+  const next: Contract = {
+    id: `contract-${fighter.id}-${save.date}`,
+    fighterId: fighter.id,
+    promotion: PROMOTION_NAME,
+    startDate: save.date,
+    endCondition: 'fights-exhausted',
+    endDate: null,
+    terms: { ...offer.terms },
+    fightsRemaining: offer.terms.fights,
+    status: 'active',
+    isSimulated: true,
+    minimumTurnaroundDays: 42,
+    injuryExtension: true,
+    championClause: fighter.isChampion,
+    weightClassClause: fighter.divisionId,
+    negotiationHistory: [...(current?.negotiationHistory ?? []), ...(round ? [round] : [])],
+    signedOn: save.date,
+    note: 'Simulated game contract agreed through negotiation. Real fighter contract terms are not public.',
+  };
+  // The previous deal is closed rather than left sitting alongside the new one.
+  if (current && current.status !== 'expired') current.status = 'expired';
+  save.contracts[next.id] = next;
+  fighter.contractId = next.id;
+  if (offer.terms.signingBonus > 0) {
+    fighter.careerEarnings += offer.terms.signingBonus;
+    if (save.player.fighterId === fighter.id) save.player.balance += offer.terms.signingBonus;
+  }
+  return next;
+}

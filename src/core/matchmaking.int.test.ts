@@ -22,8 +22,10 @@ import {
 import { runMatchupInterestPass } from './world/matchup-pass';
 import { assessChampionMove, commitMove, explore, pickDebutOpponent, enforceAbsentChampions } from './world/weightclass';
 import { applyRelationship, makeCallout, resolveCallout } from './world/relationships';
-import { bookEvent, findBestOpponent, openOfferFighterIds } from './world/matchmaking';
+import { bookEvent, findBestOpponent, isAvailable, openOfferFighterIds } from './world/matchmaking';
 import { createFightOffer } from './world/offers';
+import { careerStatus } from './world/career';
+import { createContractOffer, signContractOffer } from './world/economy';
 import { migrateSave } from './save/migrate';
 import { SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
@@ -1109,5 +1111,161 @@ describe('the systems running together over time', () => {
       expect(other.nextBoutId).toBeFalsy();
       expect(caller.divisionId).toBe(other.divisionId);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. The player actually receiving a title shot
+// ---------------------------------------------------------------------------
+
+describe('a contender actually receiving the offer', () => {
+  it('does not pass over a contender who is holding an ordinary offer', () => {
+    const f = newCareer(5101);
+    const me = makeAvailable(playerOf(f.save));
+    const table = f.save.rankings[me.divisionId];
+    const event = createEvent(f.save, addDays(f.save.date, 70));
+
+    // The player is the clear number one contender.
+    me.ranking = 1;
+    me.lossStreak = 0;
+    me.winStreak = 4;
+    const entry = table.entries.find((e) => e.fighterId === me.id);
+    if (entry) entry.rank = 1;
+    else table.entries.unshift({ fighterId: me.id, rank: 1, previousRank: 2, weeksAtRank: 4 } as never);
+
+    // A routine offer arrives first, which is the ordinary weekly outcome.
+    const filler = makeAvailable(divisionRoster(f.save, me.divisionId).find((x) => x.id !== me.id && x.id !== table.championId)!);
+    const ordinary = createFightOffer(f.save, me, filler, event, new Rng(1), {
+      isMainEvent: false,
+      isTitleFight: false,
+      isInterimTitleFight: false,
+      scheduledRounds: 3,
+      reason: 'a divisional matchup',
+      isReplacementSlot: false,
+    })!;
+    expect(ordinary.status).toBe('open');
+
+    // A routine offer used to make the fighter unavailable for the whole champion cycle, so
+    // the belt went elsewhere for six months. A championship booking now outranks it.
+    const ordinaryCtx = {
+      date: event.date,
+      bookedFighterIds: new Set<string>(),
+      openOfferFighterIds: openOfferFighterIds(f.save),
+    };
+    expect(isAvailable(f.save, me, ordinaryCtx)).toBe(false);
+    expect(isAvailable(f.save, me, { ...ordinaryCtx, isChampionshipBooking: true })).toBe(true);
+  });
+
+  it('still refuses a contender already holding a championship offer', () => {
+    const f = newCareer(5102);
+    const me = makeAvailable(playerOf(f.save));
+    const table = f.save.rankings[me.divisionId];
+    const event = createEvent(f.save, addDays(f.save.date, 70));
+    const champion = makeAvailable(f.save.fighters[table.championId!]);
+
+    const titleOffer = createFightOffer(f.save, me, champion, event, new Rng(2), {
+      isMainEvent: true,
+      isTitleFight: true,
+      isInterimTitleFight: false,
+      scheduledRounds: 5,
+      reason: 'a title fight',
+      isReplacementSlot: false,
+    })!;
+    expect(titleOffer.status).toBe('open');
+
+    // One championship offer at a time. This is the case the relaxation must not break.
+    expect(
+      isAvailable(f.save, me, {
+        date: event.date,
+        bookedFighterIds: new Set<string>(),
+        isChampionshipBooking: true,
+      })
+    ).toBe(false);
+  });
+
+  it('never lets a championship booking bypass health or an existing booking', () => {
+    const f = newCareer(5103);
+    const me = makeAvailable(playerOf(f.save));
+    const event = createEvent(f.save, addDays(f.save.date, 70));
+    const ctx = { date: event.date, bookedFighterIds: new Set<string>(), isChampionshipBooking: true };
+
+    me.medicalSuspension = { until: addDays(f.save.date, 120), reason: 'concussion protocol', clearanceRequired: true };
+    expect(isAvailable(f.save, me, ctx)).toBe(false);
+
+    makeAvailable(me);
+    me.nextBoutId = 'bout-elsewhere';
+    expect(isAvailable(f.save, me, ctx)).toBe(false);
+  });
+});
+
+describe('being out of contract', () => {
+  it('blocks every offer, which is why it has to be stated plainly', () => {
+    const f = newCareer(5201);
+    const me = makeAvailable(playerOf(f.save));
+    const opponent = makeAvailable(divisionRoster(f.save, me.divisionId).find((x) => x.id !== me.id)!);
+    const event = createEvent(f.save, addDays(f.save.date, 70));
+
+    const contract = f.save.contracts[me.contractId!];
+    contract.status = 'expired';
+
+    // No offer of any kind can be created.
+    expect(
+      createFightOffer(f.save, me, opponent, event, new Rng(3), {
+        isMainEvent: false,
+        isTitleFight: false,
+        isInterimTitleFight: false,
+        scheduledRounds: 3,
+        reason: 'a divisional matchup',
+        isReplacementSlot: false,
+      })
+    ).toBeNull();
+
+    // The career state says so, and names the consequence rather than only the state.
+    const status = careerStatus(f.save);
+    expect(status.state).toBe('free-agent');
+    expect(`${status.reason} ${status.action?.detail ?? ''}`.toLowerCase()).toContain('no fights can be offered');
+  });
+
+  it('signing a new deal makes the fighter bookable again', () => {
+    const f = newCareer(5202);
+    const me = makeAvailable(playerOf(f.save));
+    const opponent = makeAvailable(divisionRoster(f.save, me.divisionId).find((x) => x.id !== me.id)!);
+    const event = createEvent(f.save, addDays(f.save.date, 70));
+
+    const contract = f.save.contracts[me.contractId!];
+    contract.status = 'expired';
+    contract.fightsRemaining = 0;
+
+    const offer = createContractOffer(me, f.save, new Rng(4));
+    f.save.contractOffers[offer.id] = offer;
+    const signed = signContractOffer(f.save, me, offer, null);
+
+    expect(signed.status).toBe('active');
+    expect(me.contractId).toBe(signed.id);
+    expect(signed.fightsRemaining).toBeGreaterThan(0);
+    // The previous deal is closed rather than left alongside the new one.
+    expect(contract.status).toBe('expired');
+    expect(careerStatus(f.save).state).not.toBe('free-agent');
+
+    expect(
+      createFightOffer(f.save, me, opponent, event, new Rng(5), {
+        isMainEvent: false,
+        isTitleFight: false,
+        isInterimTitleFight: false,
+        scheduledRounds: 3,
+        reason: 'a divisional matchup',
+        isReplacementSlot: false,
+      })
+    ).not.toBeNull();
+  });
+
+  it('treats a contract with no fights left as out of contract', () => {
+    const f = newCareer(5203);
+    const me = makeAvailable(playerOf(f.save));
+    const contract = f.save.contracts[me.contractId!];
+    contract.status = 'active';
+    contract.fightsRemaining = 0;
+    // Exhausted and expired are the same thing to a player: no fights arrive.
+    expect(careerStatus(f.save).state).toBe('free-agent');
   });
 });
