@@ -7,6 +7,7 @@ import type { SaveGame } from '../types/save';
 import { healthyCutFor, simulateWeightCut } from './health';
 import { addHypeMoment, hypeStore } from './hype';
 import { completeStage, openSecondAttempt } from './fightweek';
+import { cancelBout } from './matchmaking';
 
 /**
  * The weigh in as a playable sequence.
@@ -446,6 +447,12 @@ function applyRuling(save: SaveGame, state: WeighInState, me: Fighter, opponent:
 
   if (state.boutStatus === 'canceled') {
     state.rulingText = state.rulingText ?? 'The bout has been canceled.';
+    // The ruling has to actually cancel the bout. Setting only the local status told the player
+    // the fight was off and then left it scheduled, so it went ahead on fight night anyway.
+    // cancelBout owns the booking pointers, the event card, the camps and the inbox messages.
+    if (boutRecord.status === 'scheduled') {
+      cancelBout(save, boutRecord, state.rulingText);
+    }
     return;
   }
 

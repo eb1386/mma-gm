@@ -169,3 +169,98 @@ out of band.
 
 Complete the persistent officials slice: roster, assignment, history, migration, interface and
 tests. Then reassess the execution order against remaining time.
+
+
+---
+
+# Full audit and improvement pass
+
+A twelve area parallel audit followed by a second five area wave, each finding adversarially
+verified by an independent agent instructed to refute it. 49 agents in the second wave alone.
+Findings were applied centrally rather than by the agents, so the systems stayed coherent.
+
+## Confirmed defects fixed
+
+### Title shots and contenders
+- Winning a title eliminator conferred nothing. The category was a label on the bout that no
+  later code read, so the promise that winning it puts you next was never kept. `contender.ts`
+  is the earned, forfeitable claim, and it is the highest input to `titleShotEligibility`.
+- A champion promised a championship bout on changing division received a non title fight,
+  because `matchup-pass.ts` hardcoded `isTitleFight: false`. The move now grants a real claim.
+- The claim was consumed when a title bout was created, so a player who declined lost the
+  position they had earned. It is consumed on acceptance and restored if the bout is cancelled.
+- Granting a claim froze the division: `rankChallengers` builds its pool from the ranked table,
+  and a champion arriving from another division is unranked by definition.
+- Vacant and interim championships became unbookable, because they need two eligible fighters.
+- A unification bout could be blocked by a claim earned afterwards.
+- An eliminator winner from another division could take a claim they had not earned there.
+
+### Matchmaking
+- Loss streaks, championship history, strength of schedule and promotional momentum were not
+  considered at all. All four are now inputs, with every weight named in `config/matchmaking.ts`.
+- `findReplacement` re-implemented availability and would book a commission suspended, anti
+  doping suspended or out of contract fighter. It now uses the shared gate.
+- A reigning champion could be booked as short notice cover with no turnaround gate.
+- Choosing the best opponent and then discarding the pairing when it turned out to be an
+  undefendable champion threw the seeded fighter's card slot away.
+- Card seeding could create a second championship bout for a belt already booked.
+- A title offer made last week did not stop a second being created for the same belt.
+
+### Rankings
+- The points ledger and the fifteen slot display list were the same object, so a fighter who
+  dropped out had their entire results history erased and restarted from zero.
+- A fighter could be ranked below somebody they had just beaten. `applyHeadToHead` corrects it
+  in bounded passes.
+- The permanent ledger could accumulate unbounded negative totals with no way back.
+
+### Fight simulation
+- `roundImpact` read the damage fields with the opposite convention to `trueRoundScore`, so the
+  damage term clamped to zero for a dominant winner and contributed nothing to a wide round.
+- Round scoring was fed cumulative fight damage while the stat lines reset each round.
+- The 10-10 early return skipped an rng draw, so toggling a scoring setting changed fight
+  outcomes. This is the third instance of that class of bug found in this codebase.
+- Doctor, corner and retirement stoppages were recorded as decision wins, contradicting
+  `isFinish` and every finish rate derived from it.
+
+### Career loop
+- Fight week read its blocking flag from the first pending stage rather than the first mandatory
+  one, so an optional stage at the front let the calendar walk past a due weigh in.
+- The official weigh in was simulated again at fight time and overwrote the ruling the player was
+  shown, including a second attempt they had taken.
+- A weigh in ruling that cancelled the bout left it scheduled, so the fight happened anyway.
+- Releasing a booking left the camp running against a fight that no longer existed.
+- A camp could run past its planned length.
+- Training camps were never charged for.
+
+### Interface
+- The Career page primary action navigated to the dashboard for any action that was not a
+  navigation, so the main button did nothing whenever the next step was to advance time.
+- Four buttons consumed randomness without writing the advanced state back, so repeating them
+  produced the same result forever.
+- `mutate` bumped a revision counter that only three of twenty four pages read, so most pages
+  showed stale state after an in page action.
+- The camp cost estimate called `createCamp` during render, incrementing a persisted counter.
+- The Settings save button showed a success message and wrote nothing.
+- Social posting was an unlimited button with no downside; going quiet counted as posting and
+  cancelled the decay it was supposed to cause.
+- The dashboard counted actionable inbox items with its own predicate and contradicted the badge.
+- The weekly headline named the opening preliminary winner as the main event winner.
+
+### Test infrastructure
+- The browser suite served a prebuilt `dist` without building, so it could pass against code
+  that no longer existed.
+- `advanceUntil` stops at the first player decision, so a test asking for a year of simulation
+  was getting about six days.
+
+## Balance values now exposed as configuration
+
+See the table at the end of `docs/INTEGRATION-MAP.md`.
+
+## Honest notes
+
+- One audit agent overwrote `src/core/world/matchmaking.ts` mid session and reverted it to a
+  partial state, losing that file's edits. They were reapplied and verified item by item. Agents
+  in future waves should be read only.
+- The activity bands are measured over the final twelve months of a three year run across three
+  seeds. Classifying by tier at the end of a run and counting every fight ever had was the first
+  measurement, and it was wrong.

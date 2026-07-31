@@ -611,3 +611,78 @@ eight.
 **Being out of contract is now stated, not implied.** It produced no symptom other than
 fights quietly never arriving. The career state names the consequence: no fights can be
 offered until a new deal is signed.
+
+---
+
+## 39. Winning an eliminator has to mean something
+
+A title eliminator was a `BookingKind` written onto `bout.bookingKind` and read by nothing
+afterwards. The game told the player that winning it would put them next, and then the
+matchmaker chose a challenger with no knowledge that the fight had happened. The promise was
+never kept because there was nothing to keep it with.
+
+`ContenderStatus` in `contender.ts` is the missing object: one earned, persistent claim per
+division, with a source, an expiry, and a recorded reason for every way it can end. It is the
+highest claim in `titleShotEligibility`, and while it stands every other challenger is refused
+with a named blocker. That is the guarantee.
+
+**The exceptions are enumerated rather than emergent.** A claim gives way when the holder is
+booked elsewhere, retires, leaves the division, lets it lapse, loses, or stays unavailable past
+a grace period measured from the day they became unavailable. Everything else waits.
+
+**Three of the first four bugs in this system were mine, and an adversarial review found them
+before a player would have.** Granting a claim froze the entire division, because
+`rankChallengers` builds its pool from the ranked table and a champion arriving from another
+division is unranked by definition, so the contender was invisible while everybody else was
+blocked. A vacant or interim belt takes two fighters and could not be booked with only one
+eligible name. A claim was consumed the moment a title bout was created, so a player who
+declined the offer lost the position they had earned. Each is now covered by a test.
+
+---
+
+## 40. Measure the tier at the time of the fight
+
+The activity bands are stated per tier: champions one to two fights a year, ranked contenders
+two to three, unranked two to four. The first measurement classified every fighter by the tier
+they were in at the end of the run and counted every fight they had ever had, so a contender
+who spent two years climbing and then won the belt was counted as a champion fighting 2.5 times
+a year. That measurement said champions were far too active when they were not.
+
+`tools/activity-bands.ts` now counts only the final twelve months and classifies by current
+tier, which attributes fights to the right band without reconstructing every historical ranking
+table.
+
+**Champion activity is set almost entirely by one constant.** Measured, it comes out at 365
+divided by `CHAMPION_TURNAROUND_DAYS`, because the gate binds on essentially every reign. At 180
+that is 2.03 fights a year, just outside the band; at 205 it is 1.78, inside it, and the title
+fights per division per year metric stays inside its own band.
+
+**The unranked band is a supply problem, not a matchmaking one.** The calendar produces about 46
+events of 12 bouts, which is 1104 fighter slots a year. Divided by the roster that fixes the
+average at about two fights per fighter, and once champions and ranked contenders take their
+share there is nothing left for the unranked tier. `ROSTER_TARGET_SCALE` is the named lever, and
+two slot-wasting defects were fixed alongside it: an undefendable champion being chosen as the
+best opponent discarded the seeded fighter's slot entirely, and the replacement finder had no
+turnaround gate at all.
+
+---
+
+## 41. The damage term in round scoring was inverted and cumulative
+
+Two independent defects in the same input, both found by reading the code rather than by
+watching the output.
+
+`trueRoundScore` treats `damageA` as the damage A inflicted. `roundImpact` documented it as the
+damage A took and indexed it the other way round, so for a round the winner dominated the term
+came out negative and clamped to zero. The damage contribution to a wide round was dead, and the
+10-8 calibration had been tuned around its absence.
+
+Separately, the stat lines reset every round but the damage pools do not, so the scoring input
+mixed a per round measure with a whole fight measure and damage from round one kept scoring
+rounds three, four and five.
+
+**Fixing both changed the distribution from 7.8 percent 10-8 rounds to 36 percent, which is the
+measure of how wrong the input had been.** Recalibration reduced the damage weight and raised the
+threshold to 0.95, landing at 93.74 percent 10-9 and 6.26 percent 10-8 with no 10-7 rounds. The
+numbers look similar to before; the difference is that they now come from a term that is
+actually being read.

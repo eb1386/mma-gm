@@ -33,7 +33,9 @@ const emptyStats = emptyStatLine;
 
 function roundInput(overrides: Partial<RoundScoreInput> = {}): RoundScoreInput {
   return {
-    statsA: { ...emptyStats(), sigStrikesLanded: 40, knockdowns: 1 },
+    // Two knockdowns puts the round above the willing judge's threshold and below the reluctant
+    // judge's, which is the discrimination this test is about.
+    statsA: { ...emptyStats(), sigStrikesLanded: 40, knockdowns: 2 },
     statsB: { ...emptyStats(), sigStrikesLanded: 8 },
     damageA: 10,
     damageB: 60,

@@ -73,7 +73,9 @@ function tryBook(save: SaveGame, interest: MatchupInterest, player: Fighter, rng
       scheduledRounds: interest.interestScore >= 70 ? 5 : 3,
       reason: interestReason(save, interest),
       isReplacementSlot: false,
-      bookingKind: interest.source,
+      // A contender bout must be labelled as an eliminator so that winning it grants the number
+      // one contender position. The interest source alone is not a matchmaking category.
+      bookingKind: interest.source === 'title-claim' ? 'eliminator' : interest.source,
       matchupInterestId: interest.id,
     });
     if (offer) {

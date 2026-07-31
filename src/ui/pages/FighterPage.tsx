@@ -10,7 +10,14 @@ import { deriveFighterStatus, FIGHTER_STATUS_LABEL, statusTone } from '@core/wor
 import { estimateRatings, scoutingReport } from '@core/world/scouting';
 import { happinessFactors } from '@core/world/gyms';
 import { Rng } from '@core/rng';
-import { activityReport, performSocialAction, publicLabelText, SOCIAL_ACTIONS } from '@core/world/identity';
+import {
+  activityReport,
+  performSocialAction,
+  publicLabelText,
+  socialActionAllowance,
+  SOCIAL_ACTIONS,
+  SOCIAL_ACTIONS_PER_WEEK,
+} from '@core/world/identity';
 import { totalFollowers } from '@core/types/identity';
 import { computeLeverage } from '@core/world/economy';
 import { useGame } from '../store';
@@ -532,6 +539,9 @@ export function FighterPage() {
 
           <Panel title="Social reach">
             {fighter.social ? (
+              (() => {
+                const allowance = socialActionAllowance(save, fighter);
+                return (
               <>
                 <KeyValues
                   rows={[
@@ -550,12 +560,19 @@ export function FighterPage() {
                     <p className="small dim">
                       Every action that can work can also fail. A failed post reads as desperate, forced or embarrassing.
                     </p>
+                    {allowance.reason && <p className="small warn">{allowance.reason}</p>}
+                    <p className="small faint">
+                      {allowance.remaining} of {SOCIAL_ACTIONS_PER_WEEK} posts left this week.
+                    </p>
                     <div className="row" style={{ gap: 4 }}>
                       {SOCIAL_ACTIONS.map((a) => (
                         <button
                           key={a.key}
                           className="small"
                           title={a.description}
+                          // Going quiet is always available; posting is limited, because an
+                          // unlimited button that only ever adds followers is not a decision.
+                          disabled={a.key !== 'go-silent' && allowance.remaining <= 0}
                           onClick={() => {
                             const outcome = mutate((s) => {
                               const rng = new Rng(s.rng);
@@ -583,6 +600,8 @@ export function FighterPage() {
                   </>
                 )}
               </>
+                );
+              })()
             ) : (
               <p className="dim small">No social data on this record.</p>
             )}

@@ -273,7 +273,11 @@ export function careerStatus(save: SaveGame): CareerStatus {
     // Fight week owns the flow once it starts.
     if (daysToFight !== null && daysToFight <= FIGHT_WEEK_DAYS) {
       const stages = pendingStages(save, bout.id);
-      const next = stages[0] ?? null;
+      // A mandatory stage that is due takes precedence over whatever happens to be first in the
+      // list. Reading the blocking flag off stages[0] meant that when an optional stage such as
+      // an open workout sat at the front, the calendar walked straight past a due weigh in.
+      const mandatoryDue = stages.find((t) => t.mandatory && t.dueOn <= save.date) ?? null;
+      const next = mandatoryDue ?? stages[0] ?? null;
       if (next) {
         return finish(
           'fight-week',
@@ -283,7 +287,7 @@ export function careerStatus(save: SaveGame): CareerStatus {
             label: next.actionLabel,
             route: `/fightweek/${bout.id}`,
             detail: next.detail,
-            blocking: next.mandatory && next.dueOn <= save.date,
+            blocking: Boolean(mandatoryDue),
             key: `stage-${bout.id}-${next.stage}`,
           },
           { fightWeekStage: next.stage }

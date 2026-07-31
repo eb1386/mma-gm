@@ -10,6 +10,7 @@ import { addInboxMessage, resolveMessagesForOffer } from './inbox';
 import { regionOfFighter } from './matchmaking';
 import { travelDistanceKm, VENUE_CITIES } from './venues';
 import { canCompete } from './health';
+import { fulfilContenderStatus } from './contender';
 import { PROMOTION_MATCHMAKING } from '../config/branding';
 import { bookBout, findExistingOffer, offerBlockReason, offerKey, OFFER_COOLDOWN_DAYS, recentlyDeclined, type OfferIdentity } from './availability';
 
@@ -434,6 +435,9 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
     weighInA: null,
     weighInB: null,
     bookingReason: offer.reason,
+    // The category has to survive acceptance. Without it a player who accepted an eliminator
+    // would win it and be credited with nothing.
+    bookingKind: offer.bookingKind,
   };
   void contractA;
 
@@ -442,6 +446,9 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
   // live in the inbox.
   const booking = bookBout(save, bout);
   if (!booking.created) return null;
+  // A championship offer consumes the contender claim only once it is actually accepted. Consuming
+  // it when the offer was made would lose the position for a player who declined.
+  if (isChampionshipBout(bout)) fulfilContenderStatus(save, bout.divisionId, fighter.id, bout.id);
   closeCompetingOffers(save, fighter.id, offer.id, `${fighter.name} accepted another bout.`);
   closeCompetingOffers(save, opponent.id, offer.id, `${opponent.name} accepted another bout.`);
   return bout;

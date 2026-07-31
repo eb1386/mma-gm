@@ -40,9 +40,10 @@ import { campLifeRng, generateCampLife, seedGymRelationships } from './camp-life
 import { decayRelationships, openCallouts, pruneCallouts, recordFightBetween, resolveCallout } from './relationships';
 import { enforceAbsentChampions, maybeSuggestMove } from './weightclass';
 import { assignOfficials, judgePersonasFor, recordOfficialOutcome, refereeTendencyFor } from './officials';
+import { applyResultToContenders, forfeitContenderStatus, fulfilContenderStatus, reviewContenderClaims } from './contender';
 import { evaluateAllInterests, pruneMatchupInterests } from './matchup-interest';
 import { runMatchupInterestPass } from './matchup-pass';
-import { interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
+import { existingTitleOffer, interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
 import { cancelStaleDivisionBouts, enforceDivisionInvariant, runNpcCallouts, runNpcWeightClassMoves } from './npc-behaviour';
 import { pruneGamePlans } from './gameplan-memory';
 import { syncCareerState } from './career';
@@ -65,6 +66,7 @@ import {
   fameFromResult,
   socialFromResult,
 } from './identity';
+import { ROSTER_TARGET_SCALE } from '../config/matchmaking';
 
 /**
  * The world clock.
@@ -161,14 +163,31 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
     rng
   );
   applyWear(fighter, cut.wear, fighter.development.resilience);
-  fighter.lastWeightCutQuality = cut.cutQuality;
 
   const isA = bout.fighterAId === fighter.id;
-  const weighIn = { madeWeight: cut.madeWeight, weightLb: cut.weightLb, cutQuality: cut.cutQuality };
+
+  // If this fighter already stepped on the official scale during fight week, that reading is the
+  // record. Re-simulating the cut here overwrote the ruling the player was shown, discarded a
+  // second attempt they had taken, and could turn a made weight into a miss after the fact.
+  const officialState = save.weighIns?.[bout.id];
+  const officialReading =
+    officialState?.player?.fighterId === fighter.id
+      ? officialState.player
+      : officialState?.opponent?.fighterId === fighter.id
+        ? officialState.opponent
+        : null;
+
+  const madeWeight = officialReading ? officialReading.madeWeight : cut.madeWeight;
+  const weightLb = officialReading ? officialReading.weightLb : cut.weightLb;
+  const cutQuality = officialReading ? officialReading.cutQuality : cut.cutQuality;
+
+  fighter.lastWeightCutQuality = cutQuality;
+  const weighIn = { madeWeight, weightLb, cutQuality };
   if (isA) bout.weighInA = weighIn;
   else bout.weighInB = weighIn;
 
-  if (!cut.madeWeight) {
+  // A miss that the official weigh in already recorded has had its consequences applied there.
+  if (!madeWeight && !officialReading) {
     fighter.weightMisses++;
     bout.isCatchweight = true;
     // A fighter who misses weight cannot win or keep a championship in this bout, but the
@@ -195,7 +214,7 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
   return {
     sharpness: sharpness ?? 0.5,
     tacticalFamiliarity: familiarity ?? 0.4,
-    cutQuality: cut.cutQuality,
+    cutQuality,
     campQuality: clamp((camp?.weeksCompleted ?? (shortNotice ? 2 : 7)) / 8, 0.2, 1),
     shortNotice,
     gamePlan: playerPlan ?? camp?.gamePlan ?? gamePlanForAi(fighter, rng),
@@ -287,9 +306,23 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
       fighter.ufcRecord.wins++;
       fighter.winStreak++;
       fighter.lossStreak = 0;
-      if (result.method === 'ko' || result.method === 'tko-strikes' || result.method === 'tko-ground-strikes') fighter.methods.koWins++;
-      else if (result.method === 'submission' || result.method === 'technical-submission') fighter.methods.subWins++;
-      else fighter.methods.decWins++;
+      // A doctor, corner or retirement stoppage is a stoppage win, which `isFinish` has always
+      // agreed with. Counting it as a decision made a fighter's finish rate, their derived public
+      // labels and the finish record books all disagree with the result they actually got.
+      if (
+        result.method === 'ko' ||
+        result.method === 'tko-strikes' ||
+        result.method === 'tko-ground-strikes' ||
+        result.method === 'doctor-stoppage' ||
+        result.method === 'corner-stoppage' ||
+        result.method === 'retirement'
+      ) {
+        fighter.methods.koWins++;
+      } else if (result.method === 'submission' || result.method === 'technical-submission') {
+        fighter.methods.subWins++;
+      } else {
+        fighter.methods.decWins++;
+      }
       fighter.momentum = clamp(fighter.momentum + 12, 0, 100);
       fighter.morale = clamp(fighter.morale + 8, 0, 100);
     } else if (drew) {
@@ -301,9 +334,22 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
       fighter.ufcRecord.losses++;
       fighter.lossStreak++;
       fighter.winStreak = 0;
-      if (result.method === 'ko' || result.method === 'tko-strikes' || result.method === 'tko-ground-strikes') fighter.methods.koLosses++;
-      else if (result.method === 'submission' || result.method === 'technical-submission') fighter.methods.subLosses++;
-      else fighter.methods.decLosses++;
+      // The loss side classifies exactly as the win side does, so a fight cannot be a stoppage
+      // for the winner and a decision for the loser.
+      if (
+        result.method === 'ko' ||
+        result.method === 'tko-strikes' ||
+        result.method === 'tko-ground-strikes' ||
+        result.method === 'doctor-stoppage' ||
+        result.method === 'corner-stoppage' ||
+        result.method === 'retirement'
+      ) {
+        fighter.methods.koLosses++;
+      } else if (result.method === 'submission' || result.method === 'technical-submission') {
+        fighter.methods.subLosses++;
+      } else {
+        fighter.methods.decLosses++;
+      }
       fighter.momentum = clamp(fighter.momentum - 16, 0, 100);
       fighter.morale = clamp(fighter.morale - 12, 0, 100);
     }
@@ -377,6 +423,19 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
   // Rankings and titles.
   applyResultToRankings(save, result, shortNoticeA, shortNoticeB);
   const titleNotes = applyTitleOutcome(save, result);
+  // Winning an eliminator earns the number one contender position, and the standing contender
+  // losing gives it up. Without this an eliminator was a label that meant nothing.
+  for (const note of applyResultToContenders(save, bout, result)) {
+    titleNotes.push(note);
+    pushNews(save, {
+      date: save.date,
+      headline: note,
+      body: note,
+      tags: ['title', bout.divisionId],
+      fighterIds: [bout.fighterAId, bout.fighterBId],
+      importance: 3,
+    });
+  }
   for (const note of titleNotes) {
     pushNews(save, { date: result.date, headline: note, body: result.narrativeSummary, tags: ['title'], fighterIds: [a.id, b.id], importance: 5 });
   }
@@ -412,7 +471,9 @@ export function resolveEvent(save: SaveGame, eventId: string, rng: Rng, detailCt
   const results: FightResult[] = [];
 
   event.weighInBoutIds = event.boutIds.filter((id) => save.bouts[id]?.status === 'scheduled');
-  // Prelims first so the main event closes the card.
+  // Highest bout order first, which is the main event. The resolution order is part of the seeded
+  // sequence, so it is deliberately left alone: changing it would change every fight in every
+  // existing save. Anything that wants the main event must find it by its flag, not by position.
   const ordered = [...event.boutIds]
     .map((id) => save.bouts[id])
     .filter((b): b is Bout => Boolean(b) && b.status === 'scheduled')
@@ -908,9 +969,25 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
         fighter.retirementDate = save.date;
         fighter.activityStatus = 'retired';
         const table = save.rankings[fighter.divisionId];
+        // A retiring fighter gives up whatever they hold. Clearing only the undisputed belt left a
+        // retired fighter listed as interim champion, and the strip pass would later promote them
+        // into the vacancy they had just created.
+        if (table.interimChampionId === fighter.id) {
+          table.interimChampionId = null;
+          fighter.isInterimChampion = false;
+          const interimReign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null && r.isInterim);
+          if (interimReign) {
+            interimReign.lostOn = save.date;
+            interimReign.endReason = 'retired';
+          }
+        }
+        // A contender position is given up too, so the division is not left waiting on somebody
+        // who will never fight again.
+        forfeitContenderStatus(save, fighter.divisionId, `${fighter.name} has retired.`, fighter.id);
         if (table.championId === fighter.id) {
           table.championId = null;
-          const reign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null);
+          fighter.isChampion = false;
+          const reign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null && !r.isInterim);
           if (reign) {
             reign.lostOn = save.date;
             reign.endReason = 'retired';
@@ -937,10 +1014,13 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
 
   // New prospects entering the roster.
   const activeCount = Object.values(save.fighters).filter((f) => !f.retired && f.activityStatus === 'active').length;
-  const targetCount = DIVISIONS.reduce((s, d) => s + d.targetRosterSize, 0);
+  // The roster is scaled against what the calendar can actually give people to do. See
+  // ROSTER_TARGET_SCALE for the arithmetic that ties it to the activity bands.
+  const divisionTarget = (d: { targetRosterSize: number }) => Math.round(d.targetRosterSize * ROSTER_TARGET_SCALE);
+  const targetCount = DIVISIONS.reduce((s, d) => s + divisionTarget(d), 0);
   if (activeCount < targetCount && rng.chance(0.55)) {
     const shortDivisions = DIVISIONS.filter(
-      (d) => Object.values(save.fighters).filter((f) => f.divisionId === d.id && !f.retired && f.activityStatus === 'active').length < d.targetRosterSize
+      (d) => Object.values(save.fighters).filter((f) => f.divisionId === d.id && !f.retired && f.activityStatus === 'active').length < divisionTarget(d)
     );
     if (shortDivisions.length > 0) {
       const d = rng.pick(shortDivisions);
@@ -985,6 +1065,10 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       importance: 3,
     });
   }
+  // Contender claims are reviewed before title fights are booked, so a lapsed or vacated claim
+  // frees the division in the same pass rather than blocking it for another week.
+  for (const note of reviewContenderClaims(save)) headlines.push(note);
+
   // Every live matchmaking interest is re-evaluated against the world once a week, so a
   // blocked matchup becomes eligible again the moment its blocker clears.
   evaluateAllInterests(save);
@@ -1033,6 +1117,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
               scheduledRounds: b.scheduledRounds,
               reason: b.bookingReason,
               isReplacementSlot: false,
+              // Without this the category was lost on conversion, so a player who accepted an
+              // eliminator from a card could never be credited with winning one.
+              bookingKind: b.bookingKind,
             });
           }
         }
@@ -1184,11 +1271,14 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
   for (const d of DIVISIONS) {
     const table = save.rankings[d.id];
 
-    // Skip divisions that already have a title bout on the books.
+    // Skip divisions that already have a title bout on the books, or a title offer already sitting
+    // with the player. Checking only scheduled bouts meant that a title offer made last week, which
+    // the player had not yet answered, did not stop a second one being created for the same belt.
     const alreadyBooked = Object.values(save.bouts).some(
       (b) => b.status === 'scheduled' && b.divisionId === d.id && (b.isTitleFight || b.isInterimTitleFight)
     );
     if (alreadyBooked) continue;
+    if (existingTitleOffer(save, d.id)) continue;
 
     const champion = table.championId ? save.fighters[table.championId] : null;
     const interim = table.interimChampionId ? save.fighters[table.interimChampionId] : null;
@@ -1349,6 +1439,8 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
           bookingKind: bout.bookingKind,
         });
       } else {
+        // The bout stands, so the claim is honoured now.
+        fulfilContenderStatus(save, d.id, sideB.id, boutId);
         for (const f of [sideA, sideB]) autoCampFor(save, f, boutId, card.date, rng);
       }
 
@@ -1544,7 +1636,10 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
       const results = resolveEvent(save, ev.id, rng);
       if (results.length > 0) {
         eventsResolved.push(ev.name);
-        const main = results[results.length - 1];
+        // The main event is identified by its bout, not by its position in the results array.
+        // resolveEvent returns the card in descending bout order, so the last entry is the opening
+        // preliminary; taking it named a prelim winner as the main event winner every week.
+        const main = results.find((r) => save.bouts[r.boutId]?.isMainEvent) ?? results[0];
         if (main) {
           const w = main.winnerId ? save.fighters[main.winnerId]?.name : null;
           headlines.push(`${ev.name}: ${w ? `${w} wins the main event` : 'the main event went to a draw'}.`);

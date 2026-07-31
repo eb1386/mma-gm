@@ -12,6 +12,7 @@ import { PROMOTION_MATCHMAKING } from '../config/branding';
 import { assessTitleOpportunity } from './title-logic';
 import { existingTitleBout, interimTitleJustification, rankChallengers, type InterimReason } from './title-eligibility';
 import { evaluateInterest, matchupInterestsFor, recordMatchupInterest } from './matchup-interest';
+import { forfeitContenderStatus, grantContenderStatus } from './contender';
 
 /**
  * Moving up or down a division.
@@ -547,6 +548,9 @@ export function commitMove(save: SaveGame, fighter: Fighter, announce: boolean):
     }
   }
 
+  // A contender position belongs to the division it was earned in.
+  forfeitContenderStatus(save, from.id, `${fighter.name} moved to ${to.name}.`, fighter.id);
+
   fighter.divisionId = to.id;
   fighter.ranking = null;
   fighter.previousRanking = null;
@@ -589,10 +593,33 @@ export function commitMove(save: SaveGame, fighter: Fighter, announce: boolean):
   // The debut is seeded as a real matchmaking candidate. Without it a moved fighter would sit
   // in the unranked pool waiting to be noticed, which is exactly what made a division change
   // look like nothing had happened.
+  if (championAssessment && championAssessment.championshipOnTheLine) {
+    // The promised championship bout is granted as a real, earned contender position in the new
+    // division. The weekly title pass then books it through the single eligibility gate, so the
+    // explanation the player was shown and the fight they actually get are the same thing.
+    const grant = grantContenderStatus(save, fighter, to.id, 'division-move', null);
+    if (!grant.granted) {
+      // The gate refused, so the player is told rather than being left with a promise that
+      // quietly evaporated.
+      addInboxMessage(save, {
+        sender: 'matchmaker',
+        senderName: PROMOTION_MATCHMAKING,
+        subject: `Your ${to.name} debut`,
+        body: `${grant.message} The matchmaker will build a divisional debut instead.`,
+        category: 'career',
+        requiresAction: false,
+        deadline: null,
+        choices: [],
+        linkedFighterId: fighter.id,
+      });
+    }
+  }
+
+  const wantsEliminator = championAssessment?.path === 'title-eliminator';
   const debutOpponentId = championAssessment?.opponentId ?? pickDebutOpponent(save, fighter, to.id);
-  if (debutOpponentId) {
+  if (debutOpponentId && !(championAssessment?.championshipOnTheLine ?? false)) {
     recordMatchupInterest(save, {
-      source: championAssessment && championAssessment.championshipOnTheLine ? 'title-claim' : 'division-debut',
+      source: wantsEliminator ? 'title-claim' : 'division-debut',
       caller: fighter,
       target: save.fighters[debutOpponentId],
       requestedConditions: `A ${to.name} debut.`,

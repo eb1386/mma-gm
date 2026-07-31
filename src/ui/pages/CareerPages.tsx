@@ -317,7 +317,12 @@ export function ManagementPage() {
             disabled={busy}
             onClick={() =>
               void act('Looking for representation', () => {
-                const created = mutate((st) => generateManager(st, new Rng(st.rng)));
+                const created = mutate((st) => {
+                  const rng = new Rng(st.rng);
+                  const out = generateManager(st, rng);
+                  st.rng = rng.getState();
+                  return out;
+                });
                 return created ? `${created.name} is interested in representing you.` : 'Nobody new is interested.';
               })
             }
@@ -389,7 +394,12 @@ export function CompliancePage() {
                 disabled={busy}
                 onClick={() =>
                   void act('Appealing the sanction', () => {
-                    const outcome = mutate((st) => appealSanction(st, st.fighters[me.id], new Rng(st.rng)));
+                    const outcome = mutate((st) => {
+                        const rng = new Rng(st.rng);
+                        const out = appealSanction(st, st.fighters[me.id], rng);
+                        st.rng = rng.getState();
+                        return out;
+                      });
                     return outcome?.message ?? 'Done.';
                   })
                 }
@@ -464,6 +474,8 @@ export function CareerPage() {
   const mutate = useGame((s) => s.mutate);
   const status = useCareerStatus();
   const navigate = useNavigate();
+  // The one executor that understands every CareerAction kind, shared with the advance bar.
+  const runAction = useGame((s) => s.runAction);
   const { act, busy } = useAct();
   const [tab, setTab] = useState('state');
   const [tone, setTone] = useState<CalloutTone>('confident');
@@ -534,7 +546,10 @@ export function CareerPage() {
             ]}
           />
           {status.action && (
-            <button className="primary mt" disabled={busy} onClick={() => navigate(status.action!.kind === 'navigate' ? status.action!.route : '/dashboard')}>
+            // The action is a discriminated union. Navigating for anything that is not a
+            // navigate action sent the player to the dashboard and ran nothing, so the primary
+            // button on this page did nothing at all whenever the next step was to advance time.
+            <button className="primary mt" disabled={busy} onClick={() => void runAction(status.action!, navigate)}>
               {status.action.label}
             </button>
           )}
@@ -613,7 +628,12 @@ export function CareerPage() {
                     disabled={busy}
                     onClick={() =>
                       void act('Asking the promotion', () => {
-                        const updated = mutate((st) => requestApproval(st, st.fighters[me.id], new Rng(st.rng)));
+                        const updated = mutate((st) => {
+                          const rng = new Rng(st.rng);
+                          const out = requestApproval(st, st.fighters[me.id], rng);
+                          st.rng = rng.getState();
+                          return out;
+                        });
                         return updated?.promotionResponse ?? 'The promotion has been asked.';
                       })
                     }
@@ -874,7 +894,12 @@ export function CareerPage() {
                   disabled={busy}
                   onClick={() =>
                     void act('Calling them out', () => {
-                      const callout = mutate((st) => makeCallout(st, me.id, chosen!.id, tone, new Rng(st.rng)));
+                      const callout = mutate((st) => {
+                        const rng = new Rng(st.rng);
+                        const out = makeCallout(st, me.id, chosen!.id, tone, rng);
+                        st.rng = rng.getState();
+                        return out;
+                      });
                       return callout ? `You called out ${chosen!.name}. ${callout.text}` : 'That callout could not be made.';
                     })
                   }

@@ -84,9 +84,93 @@ export interface RankingUpdate {
  * Recomputes one division's ranked list from accumulated points. Points are the memory of
  * results; the ordering is derived from them plus recency and activity.
  */
+/**
+ * The accumulated points ledger for a division, keyed by fighter.
+ *
+ * Points used to live only on the ranked entries, which are truncated to the top fifteen. That
+ * made the display list and the results memory the same object, so a fighter who slipped to
+ * sixteenth had their entire career record silently erased and restarted from zero, and could
+ * never climb back on merit. The ledger is now separate and keeps every fighter's history.
+ */
+export function rankingLedger(save: SaveGame, divisionId: DivisionId): Record<FighterId, number> {
+  if (!save.rankingPoints) save.rankingPoints = {};
+  if (!save.rankingPoints[divisionId]) {
+    // Seed from the current table so an existing save keeps the standings it already had.
+    const seeded: Record<FighterId, number> = {};
+    for (const e of save.rankings[divisionId]?.entries ?? []) seeded[e.fighterId] = e.points;
+    save.rankingPoints[divisionId] = seeded;
+  }
+  return save.rankingPoints[divisionId];
+}
+
+/** Adds points to a fighter's running total, which survives dropping out of the rankings. */
+export function addRankingPoints(save: SaveGame, divisionId: DivisionId, fighterId: FighterId, points: number): number {
+  const ledger = rankingLedger(save, divisionId);
+  // Floored, because the ledger is permanent now. Without a floor a fighter on a bad run
+  // accumulated a total so negative that no realistic number of wins could bring them back into
+  // the rankings, which is a worse failure than the truncation this ledger replaced.
+  ledger[fighterId] = Math.max(RANKING_POINTS_FLOOR, (ledger[fighterId] ?? 0) + points);
+  return ledger[fighterId];
+}
+
+/**
+ * The lowest a fighter's accumulated total can go.
+ *
+ * Deep enough that a losing run genuinely costs standing, shallow enough that a winning run can
+ * climb out of it within a few fights.
+ */
+export const RANKING_POINTS_FLOOR = -30;
+
+/**
+ * Corrects orderings that contradict a recent head to head result.
+ *
+ * Points alone can leave a fighter ranked below somebody they have just beaten, which reads as
+ * broken however defensible the arithmetic is. A recent, undisputed win over the fighter directly
+ * above is honoured by swapping them. Bounded passes, so this can never loop.
+ */
+export function applyHeadToHead(save: SaveGame, order: Fighter[]): Fighter[] {
+  const result = [...order];
+  const recentWinOver = (winner: Fighter, loser: Fighter): boolean => {
+    let latest: { date: IsoDate; winnerId: FighterId | null } | null = null;
+    for (const id of winner.boutIds) {
+      const r = save.history.results[id];
+      if (!r) continue;
+      const pair = (r.fighterAId === winner.id && r.fighterBId === loser.id) || (r.fighterAId === loser.id && r.fighterBId === winner.id);
+      if (!pair) continue;
+      if (!latest || r.date > latest.date) latest = { date: r.date, winnerId: r.winnerId };
+    }
+    if (!latest) return false;
+    if (latest.winnerId !== winner.id) return false;
+    return daysBetween(latest.date, save.date) <= HEAD_TO_HEAD_WINDOW_DAYS;
+  };
+
+  for (let pass = 0; pass < HEAD_TO_HEAD_PASSES; pass++) {
+    let swapped = false;
+    for (let i = 1; i < result.length; i++) {
+      const above = result[i - 1];
+      const below = result[i];
+      // Only a clean, recent win counts, and only when the loser has not since beaten somebody
+      // materially better, which the points gap already expresses.
+      if (recentWinOver(below, above)) {
+        result[i - 1] = below;
+        result[i] = above;
+        swapped = true;
+      }
+    }
+    if (!swapped) break;
+  }
+  return result;
+}
+
+/** How recent a head to head win has to be to override the points order. */
+export const HEAD_TO_HEAD_WINDOW_DAYS = 730;
+/** Bounded correction passes, so the ordering can never oscillate. */
+export const HEAD_TO_HEAD_PASSES = 4;
+
 export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reasonBySlot: Map<FighterId, string>): RankingUpdate {
   const table = save.rankings[divisionId];
   const previous = new Map(table.entries.map((e) => [e.fighterId, e.rank]));
+  const ledger = rankingLedger(save, divisionId);
 
   const eligible = Object.values(save.fighters).filter(
     (f) =>
@@ -99,13 +183,14 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
 
   const pointsOf = new Map<FighterId, number>();
   for (const f of eligible) {
-    const entry = table.entries.find((e) => e.fighterId === f.id);
-    let pts = entry?.points ?? 0;
-    pts += inactivityDecay(f, save.date);
-    pointsOf.set(f.id, pts);
+    // The ledger is the memory, not the truncated display list, so a fighter outside the top
+    // fifteen keeps everything they have earned.
+    const decayed = Math.max(RANKING_POINTS_FLOOR, (ledger[f.id] ?? 0) + inactivityDecay(f, save.date));
+    ledger[f.id] = decayed;
+    pointsOf.set(f.id, decayed);
   }
 
-  const sorted = eligible
+  const ordered = eligible
     .slice()
     .sort((a, b) => {
       const pa = pointsOf.get(a.id) ?? 0;
@@ -116,8 +201,11 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
       const rb = b.lastFightDate ? daysBetween(b.lastFightDate, save.date) : 9999;
       if (ra !== rb) return ra - rb;
       return b.ufcRecord.wins - a.ufcRecord.wins;
-    })
-    .slice(0, RANKED_SLOTS);
+    });
+
+  // A recent head to head result outranks the points arithmetic, so nobody sits below a fighter
+  // they have just beaten.
+  const sorted = applyHeadToHead(save, ordered).slice(0, RANKED_SLOTS);
 
   const entries: RankingEntry[] = sorted.map((f, i) => {
     const prevEntry = table.entries.find((e) => e.fighterId === f.id);
@@ -245,25 +333,14 @@ export function applyResultToRankings(save: SaveGame, result: FightResult, short
       ownRank: rankOf(self),
     });
 
+    // Points go to the ledger, which every fighter has, ranked or not. The entry is only the
+    // display row and is rebuilt on the next recompute.
+    addRankingPoints(save, result.divisionId, self.id, pts);
+    const reason = won ? `beat ${other.name}` : isDraw ? `drew with ${other.name}` : `lost to ${other.name}`;
     const entry = table.entries.find((e) => e.fighterId === self.id);
     if (entry) {
-      entry.points += pts;
-      entry.movementReason = won
-        ? `beat ${other.name}`
-        : isDraw
-          ? `drew with ${other.name}`
-          : `lost to ${other.name}`;
-    } else if (pts > 0) {
-      // A fighter outside the top fifteen who beats a ranked opponent enters with the
-      // points from that win alone.
-      table.entries.push({
-        fighterId: self.id,
-        rank: RANKED_SLOTS + 1,
-        previousRank: null,
-        points: pts + 4,
-        weeksRanked: 0,
-        movementReason: `beat ${other.name}`,
-      });
+      entry.points = rankingLedger(save, result.divisionId)[self.id] ?? entry.points;
+      entry.movementReason = reason;
     }
     notes.push(`${self.name} ${won ? 'gains' : 'loses'} ${Math.abs(pts).toFixed(1)} ranking points`);
   }

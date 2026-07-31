@@ -5,6 +5,7 @@ import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { canCompete } from './health';
 import { assessTitleOpportunity, unbeatenRun } from './title-logic';
+import { CONTENDER_SOURCE_TEXT, currentContender, mayBypassContender } from './contender';
 
 /**
  * The single gate every championship booking passes through.
@@ -26,6 +27,7 @@ export type TitleBlocker =
   | 'belt-already-contested'
   | 'unranked-without-claim'
   | 'coming-off-loss'
+  | 'contender-ahead'
   | 'no-championship-to-contest';
 
 export const TITLE_BLOCKER_TEXT: Record<TitleBlocker, string> = {
@@ -38,6 +40,7 @@ export const TITLE_BLOCKER_TEXT: Record<TitleBlocker, string> = {
   'belt-already-contested': 'That championship is already on the line in a scheduled bout.',
   'unranked-without-claim': 'They are unranked and have no standing claim to a title shot.',
   'coming-off-loss': 'They are coming off a loss with nothing else to justify the shot.',
+  'contender-ahead': 'Another fighter holds an earned number one contender position and is available.',
   'no-championship-to-contest': 'There is no championship to contest in that division.',
 };
 
@@ -134,6 +137,28 @@ export function titleShotEligibility(
   // ---- Claim routes. Any one of them satisfies the standing requirement. ----
   let hasClaim = false;
   const rank = isUndisputedChampion ? 0 : challenger.ranking;
+
+  // An earned number one contender position outranks everything else. This is the route that
+  // makes winning an eliminator mean something, and it is deliberately first so that no other
+  // consideration can quietly outweigh it.
+  const standing = currentContender(save, divisionId);
+  if (standing && standing.fighterId === challenger.id) {
+    hasClaim = true;
+    claim += 200;
+    reasons.push(`They are the number one contender: they ${CONTENDER_SOURCE_TEXT[standing.source]}.`);
+  } else if (standing && !opts.vacant && !opts.interim && !isInterimChampion) {
+    // Somebody else holds the position. Passing them over needs one of the stated reasons.
+    //
+    // A vacant or interim championship is exempt because it takes two fighters to contest one.
+    // Blocking everybody except the standing contender left those bouts with a single eligible
+    // name and made them impossible to book at all.
+    //
+    // The interim champion is exempt too. Unification is a debt the division already owes, and a
+    // contender claim earned afterwards must not stop the two belts being merged.
+    const bypass = mayBypassContender(save, divisionId);
+    if (!bypass.allowed) blockers.push('contender-ahead');
+    else if (bypass.reason) reasons.push(`The number one contender cannot take the fight: ${bypass.reason}`);
+  }
 
   if (isInterimChampion) {
     hasClaim = true;
@@ -254,6 +279,12 @@ export function rankChallengers(
   const pool = new Set<FighterId>();
   for (const e of table?.entries ?? []) pool.add(e.fighterId);
   if (table?.interimChampionId) pool.add(table.interimChampionId);
+  // The standing contender must always be considered, even when they are not in the ranked
+  // entries. A champion who has just arrived from another division is unranked by definition,
+  // and leaving them out of the pool while the contender-ahead blocker refused everybody else
+  // would freeze the division with no challenger at all.
+  const standing = currentContender(save, divisionId);
+  if (standing) pool.add(standing.fighterId);
   for (const id of pool) {
     const f = save.fighters[id];
     if (!f || !filter(f)) continue;

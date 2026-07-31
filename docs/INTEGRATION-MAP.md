@@ -85,3 +85,54 @@ is what prevents an interim championship existing for a scheduling reason.
 | Why a belt is interim | `InterimJustification.explanation` | Bout `bookingReason`, champion move panel |
 | Why a callout has not produced a fight | `MatchupInterest.blockers` | Career page, Rivalries page, weekly inbox update |
 | What happens to a championship on a move | `TitleDecision` and `ChampionMovePath` | Weight class panel, move confirmation message |
+
+---
+
+## The number one contender position
+
+One earned claim per division, and the single highest input to championship eligibility.
+
+| Producer | Source recorded |
+| --- | --- |
+| Winning a bout whose `bookingKind` is `eliminator` | `eliminator-win` |
+| A reigning champion completing a division move where the belt is on the line | `division-move` |
+| The promotion naming a challenger directly | `promotion-decision` |
+
+| Consumer | Effect |
+| --- | --- |
+| `titleShotEligibility` | Adds the largest claim in the system, and blocks every other challenger with `contender-ahead` |
+| `rankChallengers` | Adds the holder to the pool even when they are unranked, so a division cannot freeze |
+| `bookTitleFights` | Consumes the claim when the bout stands |
+| `acceptOffer` | Consumes it when the player accepts a championship offer, not when it is made |
+| `cancelBout` | Gives it back when a championship bout never happens |
+| `reviewContenderClaims` | Weekly upkeep: lapses, retirements, division changes, long absences |
+
+Exceptions that permit looking past the holder, all named in `mayBypassContender`: they are
+booked elsewhere, they are unavailable beyond the grace period, the belt is vacant, or the bout
+is an interim or unification bout that the division already owes.
+
+## Ranking points
+
+| Concern | Owner |
+| --- | --- |
+| Accumulated points, every fighter, ranked or not | `save.rankingPoints`, via `rankingLedger` |
+| The visible top fifteen | `save.rankings[division].entries` |
+| Ordering correction against a recent head to head result | `applyHeadToHead`, bounded passes |
+| Floor so a bad run remains recoverable | `RANKING_POINTS_FLOOR` |
+
+Keeping these separate is the fix for a fighter who left the top fifteen having their entire
+results history erased and restarted from zero.
+
+## Balance values exposed as configuration
+
+| Value | Where | What it controls |
+| --- | --- | --- |
+| `CHAMPION_TURNAROUND_DAYS` | `matchmaking.ts` | Champion fights per year, almost exactly 365 divided by it |
+| `REPLACEMENT_MIN_TURNAROUND_DAYS` | `matchmaking.ts` | How soon a fighter can take short notice cover |
+| `ROSTER_TARGET_SCALE` | `config/matchmaking.ts` | Roster size against card supply, which sets the unranked band |
+| `MATCHMAKING` | `config/matchmaking.ts` | Every weight in candidate scoring, previously bare literals |
+| `CONTENDER_CLAIM_DAYS`, `CONTENDER_INJURY_GRACE_DAYS` | `contender.ts` | How long a claim survives and how long a division waits |
+| `RANKING_POINTS_FLOOR` | `rankings.ts` | How far a losing run can sink a fighter |
+| `HEAD_TO_HEAD_WINDOW_DAYS`, `HEAD_TO_HEAD_PASSES` | `rankings.ts` | Recency and bound on the ordering correction |
+| `SOCIAL_ACTIONS_PER_WEEK` | `identity.ts` | Weekly cap on deliberate social actions |
+| `tenEightImpact` | `config/calibration.ts` | The 10-8 threshold, recalibrated after the damage fix |

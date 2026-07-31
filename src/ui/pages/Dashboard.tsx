@@ -10,6 +10,7 @@ import { useCareerStatus, useGame } from '../store';
 import { CAREER_STATE_LABEL } from '@core/world/career';
 import { stageLabel } from '@core/world/fightweek';
 import { Bar, FighterLink, KeyValues, Notice, Panel, Rating, RealTag } from '../components';
+import { actionableMessages } from '@core/world/inbox';
 
 export function DashboardPage() {
   const save = useGame((s) => s.save)!;
@@ -22,7 +23,10 @@ export function DashboardPage() {
   const gym = save.player.gymId ? save.gyms[save.player.gymId] : null;
   const nextBout = fighter?.nextBoutId ? save.bouts[fighter.nextBoutId] : null;
   const opponent = nextBout ? save.fighters[nextBout.fighterAId === fighter?.id ? nextBout.fighterBId : nextBout.fighterAId] : null;
-  const actionable = save.inbox.filter((m) => m.requiresAction && (m.status === 'unread' || m.status === 'read'));
+  // The one authoritative selector, shared with the sidebar badge and the advance gate. A local
+  // predicate here disagreed with them, so the dashboard could show a count that the inbox and the
+  // navigation badge both contradicted.
+  const actionable = actionableMessages(save);
   const injuries = fighter ? activeInjuries(fighter, save.date) : [];
 
   return (

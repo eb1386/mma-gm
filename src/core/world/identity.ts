@@ -411,11 +411,47 @@ export const SOCIAL_ACTIONS: SocialActionDefinition[] = [
  * Resolves a social action. Every action that can succeed can also fail, and a failed
  * post reads as desperate, forced, or embarrassing rather than simply doing nothing.
  */
+/**
+ * How many deliberate social actions a fighter can take in a week.
+ *
+ * Without a limit the interface offered an unlimited button that only ever added followers, so
+ * reach and engagement could be maximised without a single day passing. Posting more than a few
+ * times a week is also the behaviour that makes an account look desperate.
+ */
+export const SOCIAL_ACTIONS_PER_WEEK = 3;
+
+/** Whether the fighter has any social actions left this week, and why not. */
+export function socialActionAllowance(save: SaveGame, fighter: Fighter): { remaining: number; reason: string | null } {
+  const s = fighter.social;
+  if (!s) return { remaining: SOCIAL_ACTIONS_PER_WEEK, reason: null };
+  const used = s.actionsThisWeek ?? 0;
+  const weekOf = s.actionWeekOf ?? null;
+  const currentWeek = save.date.slice(0, 10);
+  // The counter is keyed to a week, so a stale counter from a previous week does not carry over.
+  const sameWeek = weekOf !== null && daysBetween(weekOf, currentWeek) < 7;
+  const spent = sameWeek ? used : 0;
+  const remaining = Math.max(0, SOCIAL_ACTIONS_PER_WEEK - spent);
+  return {
+    remaining,
+    reason: remaining > 0 ? null : 'You have posted enough this week. Posting again now would look desperate.',
+  };
+}
+
 export function performSocialAction(save: SaveGame, fighter: Fighter, key: SocialActionKey, rng: Rng): SocialActionOutcome {
   const def = SOCIAL_ACTIONS.find((a) => a.key === key)!;
   const personality = fighter.personality;
   const social = fighter.social;
   const fame = fighter.fame;
+
+  // Record the action against this week's allowance. Going quiet does not consume one, because
+  // it is the absence of an action.
+  if (key !== 'go-silent' && social) {
+    const currentWeek = save.date.slice(0, 10);
+    const previous = social.actionWeekOf ?? null;
+    const sameWeek = previous !== null ? daysBetween(previous, currentWeek) < 7 : false;
+    social.actionsThisWeek = (sameWeek ? (social.actionsThisWeek ?? 0) : 0) + 1;
+    social.actionWeekOf = sameWeek ? previous : currentWeek;
+  }
   const out: SocialActionOutcome = {
     key,
     headline: def.label,
@@ -548,7 +584,10 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
   fame.recognition = clamp(fame.recognition + out.recognitionChange, 1, 100);
   fame.drawingPower = computeDrawingPower(fighter);
   fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker + out.matchmakerChange, 0, 100);
-  social.lastPostOn = save.date;
+  // Going quiet is not posting. Recording it as a post was self defeating: the one action whose
+  // entire purpose is to let attention fade was also the action that reset the idle clock, so the
+  // decay it is supposed to cause could never begin. Hiring a manager is not a post either.
+  if (key !== 'go-silent' && key !== 'hire-social-manager') social.lastPostOn = save.date;
   // Repeated choices gradually shape identity rather than switching it instantly.
   personality.identityDrift = clamp(personality.identityDrift + 0.02, 0, 1);
   return out;

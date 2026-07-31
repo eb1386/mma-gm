@@ -25,6 +25,7 @@ import type { Callout, Relationship } from '../world/relationships';
 import type { MatchupInterest } from '../world/matchup-interest';
 import type { DivisionSpell } from '../world/weightclass';
 import type { Official } from '../world/officials';
+import type { ContenderStatus } from '../world/contender';
 import type { WeightClassPlan } from '../world/weightclass';
 import type {
   Contract,
@@ -43,7 +44,7 @@ import type {
   TrainingCamp,
 } from './world';
 
-export const SAVE_SCHEMA_VERSION = 13;
+export const SAVE_SCHEMA_VERSION = 15;
 
 export interface SaveSettings {
   difficulty: Difficulty;
@@ -232,6 +233,21 @@ export interface SaveGame {
    * record and a controversial card stays attached to whoever turned it in.
    */
   officials?: Record<string, Official>;
+  /**
+   * The standing number one contender per division, keyed by division id.
+   *
+   * A title eliminator used to confer nothing. This is the earned, forfeitable claim on the next
+   * title shot, and it is what makes "win this and you are next" a promise the game keeps.
+   */
+  contenders?: Record<string, ContenderStatus>;
+  /**
+   * Accumulated ranking points per division, keyed by fighter id.
+   *
+   * Separate from the ranked table because that table is truncated to fifteen slots. Keeping the
+   * points here means a fighter who drops out of the rankings keeps the record of what they have
+   * achieved and can climb back on merit.
+   */
+  rankingPoints?: Record<string, Record<string, number>>;
   /**
    * Remembered game plans. The interface preselects these rather than resetting to a
    * default every time a planning screen is opened.

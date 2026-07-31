@@ -23,9 +23,12 @@ export default defineConfig({
     { name: 'mobile', use: { ...devices['Pixel 5'], viewport: { width: 390, height: 844 } } },
   ],
   webServer: {
-    command: 'npm run preview -- --port 4173 --strictPort',
+    // The preview server serves the prebuilt dist. Without building first the browser suite can
+    // silently test stale code and pass against a version that no longer exists in the source,
+    // which is exactly the failure this suite is meant to catch.
+    command: 'npm run build && npm run preview -- --port 4173 --strictPort',
     url: 'http://localhost:4173',
     reuseExistingServer: true,
-    timeout: 120_000,
+    timeout: 240_000,
   },
 });

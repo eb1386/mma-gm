@@ -327,6 +327,22 @@ export function releaseBooking(save: SaveGame, fighterId: FighterId, boutId: Bou
   const f = save.fighters[fighterId];
   if (!f) return;
   if (f.nextBoutId === boutId) f.nextBoutId = null;
+
+  // A camp exists for a specific bout. Releasing the booking without closing it left a camp
+  // running forever against a fight that was no longer happening, which the load time repair then
+  // silently abandoned, so loading a save changed it. Closing it here means no caller can leak one.
+  for (const camp of Object.values(save.camps)) {
+    if (camp.fighterId !== fighterId || camp.boutId !== boutId) continue;
+    if (camp.status !== 'planned' && camp.status !== 'running') continue;
+    camp.status = 'abandoned';
+    camp.outcomes.push({
+      week: camp.weeksCompleted,
+      key: 'camp-closed',
+      headline: 'Camp closed',
+      detail: 'The bout this camp was built for is no longer on the books.',
+      severity: 'bad',
+    });
+  }
 }
 
 /**

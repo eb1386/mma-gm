@@ -185,10 +185,15 @@ export const useGame = create<GameState>((set, get) => ({
     const save = get().save;
     if (!save) return undefined;
     const result = fn(save);
-    set({ revision: get().revision + 1 });
+    // A new top level reference is published so that every page selecting `save` re-renders.
+    // Bumping only the revision counter left twenty one of the twenty four pages showing stale
+    // state after an in page action, because they never read the counter. The copy is shallow, so
+    // it costs one object and every nested structure stays shared with the core.
+    set({ save: { ...save }, revision: get().revision + 1 });
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
-      void saveGame(save);
+      const current = get().save;
+      if (current) void saveGame(current);
     }, 700);
     return result;
   },

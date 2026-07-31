@@ -222,6 +222,10 @@ export interface SocialProfile {
   /** Recent posting cadence, 0 to 1. */
   activity: number;
   lastPostOn: IsoDate | null;
+  /** Deliberate social actions taken in the current week, so posting is not unlimited. */
+  actionsThisWeek?: number;
+  /** The week the counter belongs to, so it resets rather than accumulating forever. */
+  actionWeekOf?: IsoDate | null;
   history: { date: IsoDate; total: number }[];
 }
 

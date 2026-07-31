@@ -170,6 +170,11 @@ function buildSide(
   };
 }
 
+/** The single damage figure used for scoring: head, then body, then legs, weighted. */
+export function damageScalar(d: Parameters<typeof totalLegDamage>[0]): number {
+  return d.head + d.body * 0.5 + totalLegDamage(d) * 0.4;
+}
+
 export function setupFight(opts: FightSimOptions): { state: FightState; rng: Rng; judges: JudgePersona[] } {
   const rng = new Rng(opts.seed);
   const a = buildSide(0, opts.a, opts.b, opts.divisionId, opts.date, rng);
@@ -329,6 +334,10 @@ export class FightSimulator {
   private finish: StoppageVerdict | null = null;
   private submissionName: SubmissionName | null = null;
   private finishingStrike: StrikeAction | null = null;
+  /** Damage already on each fighter when the current round opened, so a round can be scored on
+   * the damage inflicted inside it rather than on the whole fight so far. */
+  private roundOpenDamageOnA = 0;
+  private roundOpenDamageOnB = 0;
   private roundAggressionA = 0;
   private roundAggressionB = 0;
   private roundCageA = 0;
@@ -573,11 +582,17 @@ export class FightSimulator {
 
   private closeRound(finished = false): void {
     const st = this.state;
+    // Damage dealt in THIS round. The stat lines are reset every round, but the damage pools are
+    // not, so passing the raw pools mixed a per round measure with a whole fight measure and let
+    // damage from round one keep scoring rounds three, four and five.
+    const damageOnBNow = damageScalar(st.b.damage);
+    const damageOnANow = damageScalar(st.a.damage);
     const input = {
       statsA: st.a.roundStats,
       statsB: st.b.roundStats,
-      damageA: st.b.damage.head + st.b.damage.body * 0.5 + totalLegDamage(st.b.damage) * 0.4,
-      damageB: st.a.damage.head + st.a.damage.body * 0.5 + totalLegDamage(st.a.damage) * 0.4,
+      // By the shared convention, damageA is the damage A inflicted.
+      damageA: Math.max(0, damageOnBNow - this.roundOpenDamageOnB),
+      damageB: Math.max(0, damageOnANow - this.roundOpenDamageOnA),
       aggressionA: this.roundAggressionA,
       aggressionB: this.roundAggressionB,
       cageControlA: this.roundCageA,
@@ -656,6 +671,9 @@ export class FightSimulator {
 
     st.round++;
     st.clock = C.round.seconds;
+    // The damage window reopens after between round recovery has been applied.
+    this.roundOpenDamageOnA = damageScalar(st.a.damage);
+    this.roundOpenDamageOnB = damageScalar(st.b.damage);
     resetToStanding(st.position, 'long');
     this.roundAggressionA = 0;
     this.roundAggressionB = 0;

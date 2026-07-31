@@ -7,6 +7,7 @@ import type { SaveGame } from '../types/save';
 import { applyDeltas, developWeek, evenFocus, type DevelopmentInput } from './development';
 import { applyWear, rollTrainingInjury, trainingCapacityOf } from './health';
 import { planCoherence } from '../sim/plan';
+import { record } from './finance';
 
 /**
  * Training camps.
@@ -132,13 +133,25 @@ export interface CampSetup {
   arriveEarlyDays: number;
 }
 
-export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): TrainingCamp {
+/**
+ * What a camp would cost, without creating one.
+ *
+ * The interface previously priced a camp by calling `createCamp` during render, which incremented
+ * the persisted camp counter on every keystroke and every re-render. This is the same arithmetic
+ * with no side effect, so the quoted price and the charged price cannot drift apart.
+ */
+export function estimateCampCost(save: SaveGame, setup: CampSetup): { weeks: number; cost: number } {
   const weeks = Math.max(0, Math.floor(daysBetween(setup.startDate, setup.endDate) / 7));
   const gym = setup.gymId ? save.gyms[setup.gymId] : null;
   const baseCost = gym ? gym.monthlyCosts * 0.06 : 2000;
   const typeMultiplier =
     setup.campType === 'visiting' ? 2.2 : setup.campType === 'split' ? 2.6 : setup.campType === 'near-event' ? 1.8 : setup.campType === 'solo' ? 0.3 : 1;
   const specialistCost = setup.specialistHired ? 12000 : 0;
+  return { weeks, cost: Math.round(weeks * baseCost * typeMultiplier + specialistCost) };
+}
+
+export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): TrainingCamp {
+  const { weeks, cost } = estimateCampCost(save, setup);
 
   return {
     id: `camp-${++save.counters.camp}`,
@@ -161,7 +174,7 @@ export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): 
     resultingTacticalFamiliarity: null,
     resultingGains: null,
     overtrained: false,
-    cost: Math.round(weeks * baseCost * typeMultiplier + specialistCost),
+    cost,
   };
 }
 
@@ -207,6 +220,13 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
   const fighter = save.fighters[camp.fighterId];
   const outcomes: CampOutcome[] = [];
   if (!fighter) return { outcomes, ratingDeltas: {}, injured: false };
+
+  // A camp cannot run past its planned length. Without this the weekly pass kept incrementing a
+  // camp that was already complete, and the load time repair then silently clamped the overrun,
+  // which made loading a save change it and broke the round trip guarantee.
+  if (camp.weeks > 0 && camp.weeksCompleted >= camp.weeks) {
+    return { outcomes, ratingDeltas: {}, injured: false };
+  }
 
   const week = camp.weeksCompleted + 1;
   const quality = gymQualityFor(save, camp);
@@ -340,6 +360,14 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
   camp.weeksCompleted = week;
   camp.outcomes.push(...outcomes);
   camp.status = 'running';
+
+  // The camp is paid for. `camp-costs` was a declared ledger category that nothing ever wrote, so
+  // a player could run the most expensive camp available at no charge. Charging weekly rather than
+  // up front means a camp cut short is only paid for as far as it got.
+  if (save.player.fighterId === fighter.id && camp.weeks > 0 && camp.cost > 0) {
+    const weekly = Math.round(camp.cost / camp.weeks);
+    if (weekly > 0) record(save, fighter.id, 'out', 'camp-costs', weekly, `Camp week ${week}`, camp.boutId ?? undefined);
+  }
   fighter.ratings = applyDeltas(fighter.ratings, deltas);
 
   return { outcomes, ratingDeltas: deltas, injured };

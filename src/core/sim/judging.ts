@@ -90,9 +90,12 @@ export function trueRoundScore(input: RoundScoreInput): number {
 export function roundImpact(input: RoundScoreInput, aWins: boolean): number {
   const winner = aWins ? input.statsA : input.statsB;
   const loser = aWins ? input.statsB : input.statsA;
-  // Damage figures are the damage each fighter took, so the loser's intake is what counts.
-  const damageTaken = aWins ? input.damageB : input.damageA;
-  const damageDealtBack = aWins ? input.damageA : input.damageB;
+  // By the shared convention used everywhere else, damageA is the damage A inflicted. The loser's
+  // intake is therefore the winner's output. This previously read the fields the other way round,
+  // which inverted the term: a round the winner dominated produced a negative value that clamped
+  // to zero, so damage contributed nothing to a wide score at all.
+  const damageTaken = aWins ? input.damageA : input.damageB;
+  const damageDealtBack = aWins ? input.damageB : input.damageA;
 
   const knockdowns = winner.knockdowns;
   const stuns = winner.stuns;
@@ -103,7 +106,10 @@ export function roundImpact(input: RoundScoreInput, aWins: boolean): number {
   // is therefore not a 10-8, or a fifth of all rounds would be scored wide.
   const knockdownImpact = knockdowns >= 3 ? 1 : knockdowns === 2 ? 0.86 : knockdowns === 1 ? 0.42 : 0;
   const stunImpact = Math.min(0.18, stuns * 0.06);
-  const damageImpact = clamp01((damageTaken - damageDealtBack) / 70);
+  // Scaled so a single lopsided round cannot saturate the term on its own. With the convention
+  // corrected the damage figure is live for the first time, and at the old scale it pinned to one
+  // in a third of rounds, which turned every dominant round into a 10-8.
+  const damageImpact = clamp01((damageTaken - damageDealtBack) / 120);
   const submissionImpact = Math.min(0.34, subs * 0.14);
 
   // Sustained one sided offense contributes only once it is genuinely lopsided. Measured
@@ -112,9 +118,9 @@ export function roundImpact(input: RoundScoreInput, aWins: boolean): number {
   const winnerOffense = winner.sigStrikesLanded + winner.takedownsLanded * 3 + winner.submissionAttempts * 2;
   const loserOffense = loser.sigStrikesLanded + loser.takedownsLanded * 3 + loser.submissionAttempts * 2;
   const share = winnerOffense + loserOffense > 8 ? winnerOffense / (winnerOffense + loserOffense) : 0.5;
-  const dominanceImpact = clamp01((share - 0.86) / 0.12) * 0.32;
+  const dominanceImpact = clamp01((share - 0.86) / 0.12) * 0.24;
 
-  return clamp01(knockdownImpact + stunImpact + damageImpact * 0.5 + submissionImpact + dominanceImpact);
+  return clamp01(knockdownImpact + stunImpact + damageImpact * 0.3 + submissionImpact + dominanceImpact);
 }
 
 function clamp01(v: number): number {
@@ -152,14 +158,20 @@ export function scoreRoundForJudge(
   const margin = Math.abs(perceived);
   const aWins = perceived > 0;
 
+  // Impact decides the wide scores. A judge reads impact slightly differently from the
+  // next judge, but they do not disagree about a knockdown.
+  //
+  // The noise is drawn before the even round check so that turning the 10-10 setting on or off
+  // cannot change how much rng this function consumes. Returning early past a draw would shift
+  // every subsequent draw in the fight and make a scoring preference alter results.
+  const impact = roundImpact(input, aWins);
+  const impactNoise = rng.normal(0, C.judging.impactNoiseSd);
+
   if (settings.allowTenTen && margin < C.judging.evenMargin * 0.3) {
     return { a: 10, b: 10 };
   }
 
-  // Impact decides the wide scores. A judge reads impact slightly differently from the
-  // next judge, but they do not disagree about a knockdown.
-  const impact = roundImpact(input, aWins);
-  const perceivedImpact = impact + judge.damageLean * 0.06 + rng.normal(0, C.judging.impactNoiseSd);
+  const perceivedImpact = impact + judge.damageLean * 0.06 + impactNoise;
   // A round has to be clearly won before it can be scored wide at all.
   const clearlyWon = margin >= C.judging.dominantMargin;
 

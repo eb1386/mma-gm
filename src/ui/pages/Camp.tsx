@@ -4,7 +4,7 @@ import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
 import { addDays, daysBetween, formatDate, formatMoney } from '@core/types/common';
 import { RATING_KEYS, RATING_LONG_LABEL, type RatingKey } from '@core/types/fighter';
 import type { CampFocus, GamePlanKey, TrainingCamp } from '@core/types/world';
-import { CAMP_PRESETS, campLengthLabel, createCamp, normalizeFocus } from '@core/world/camp';
+import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus } from '@core/world/camp';
 import { activeInjuries, trainingCapacityOf } from '@core/world/health';
 import { useGame } from '../store';
 import { planSourceLabel, recallPlan, rememberPlan } from '@core/world/gameplan-memory';
@@ -326,7 +326,7 @@ export function CampPage() {
               <span className="dim small">
                 Camp length: {campLengthLabel(weeksAvailable)}. Estimated cost{' '}
                 {formatMoney(
-                  createCamp(save, fighter, {
+                  estimateCampCost(save, {
                     boutId: bout.id,
                     startDate: save.date,
                     endDate: addDays(bout.date, -7),

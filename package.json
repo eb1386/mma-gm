@@ -28,7 +28,10 @@
     "ingest:build": "node tools/ingest/build-snapshot.mjs",
     "calibrate": "node --experimental-strip-types tools/calibrate.ts",
     "test:flow": "VITEST_TIER=flow vitest run",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "activity:bands": "vite-node tools/activity-bands.ts",
+    "calibrate:scores": "vite-node tools/score-calibration.ts",
+    "acceptance": "vite-node tools/acceptance.ts"
   },
   "dependencies": {
     "idb-keyval": "^6.2.1",

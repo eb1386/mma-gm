@@ -403,6 +403,81 @@ const MIGRATION_13: Migration = {
 };
 MIGRATIONS.push(MIGRATION_13);
 
+/**
+ * Schema 14: the number one contender position.
+ *
+ * Existing saves have no contender record because the concept did not exist. Rather than inventing
+ * a claim nobody earned, the migration looks for evidence already in the save: a completed title
+ * eliminator whose winner is still in the division, unbeaten since, and not the champion. That is
+ * a claim the fighter demonstrably earned under the old rules, so honouring it is restoring a
+ * promise rather than fabricating one. Divisions with no such evidence simply start with no
+ * standing contender, which is a valid state.
+ */
+const MIGRATION_14: Migration = {
+  to: 14,
+  describe:
+    'Adds the number one contender position. An existing save recovers a claim only where a completed title eliminator provides evidence for it; no claim is invented.',
+  apply: (save) => {
+    save.contenders = save.contenders ?? {};
+    const results = Object.values(save.history?.results ?? {}).sort((a, b) => (a.date < b.date ? 1 : -1));
+    for (const result of results) {
+      const bout = save.bouts?.[result.boutId];
+      if (!bout) continue;
+      if (bout.bookingKind !== 'eliminator' && bout.bookingKind !== 'title-eliminator') continue;
+      if (result.isTitleFight || result.isInterimTitleFight) continue;
+      const divisionId = bout.divisionId;
+      if (save.contenders[divisionId]) continue;
+      const winnerId = result.winnerId;
+      if (!winnerId) continue;
+      const winner = save.fighters?.[winnerId];
+      if (!winner || winner.retired || winner.activityStatus !== 'active') continue;
+      if (winner.divisionId !== divisionId) continue;
+      if (save.rankings?.[divisionId]?.championId === winner.id) continue;
+      // Only if they have not lost since, because a later loss would have ended the claim.
+      if (winner.lossStreak > 0) continue;
+      save.contenders[divisionId] = {
+        fighterId: winner.id,
+        divisionId,
+        source: 'eliminator-win',
+        earnedOn: result.date,
+        earnedBoutId: bout.id,
+        expiresOn: addDays(result.date, 550),
+        fulfilledOn: null,
+        fulfilledBoutId: null,
+        forfeitedOn: null,
+        forfeitReason: null,
+        note: `${winner.name} won a number one contender bout.`,
+      };
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_14);
+
+/**
+ * Schema 15: the ranking points ledger.
+ *
+ * Points previously lived only on the fifteen ranked entries, so a fighter who dropped out lost
+ * their entire accumulated record. The ledger is seeded from whatever the table currently holds,
+ * which preserves every existing standing exactly while giving unranked fighters somewhere to
+ * accumulate from now on.
+ */
+const MIGRATION_15: Migration = {
+  to: 15,
+  describe:
+    'Moves ranking points into a per division ledger so a fighter who leaves the top fifteen keeps their record. Existing standings are preserved exactly.',
+  apply: (save) => {
+    save.rankingPoints = save.rankingPoints ?? {};
+    for (const [divisionId, table] of Object.entries(save.rankings ?? {})) {
+      const ledger = save.rankingPoints[divisionId] ?? {};
+      for (const entry of table.entries ?? []) {
+        if (ledger[entry.fighterId] === undefined) ledger[entry.fighterId] = entry.points;
+      }
+      save.rankingPoints[divisionId] = ledger;
+    }
+  },
+};
+MIGRATIONS.push(MIGRATION_15);
+
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;
   if (from > SAVE_SCHEMA_VERSION) {
@@ -483,7 +558,11 @@ export function migrateSave(save: SaveGame): SaveGame {
     });
     if (table.championId) {
       const champ = save.fighters?.[table.championId];
-      if (!champ || champ.divisionId !== divisionId) table.championId = null;
+      // A champion campaigning in another division while keeping this belt is a legitimate,
+      // deliberate state with its own deadline. Stripping on a division mismatch alone undid
+      // that arrangement on every load and quietly vacated the title.
+      const holdsUnderArrangement = Boolean(champ && champ.heldTitleDivisionId === divisionId);
+      if (!champ || (champ.divisionId !== divisionId && !holdsUnderArrangement)) table.championId = null;
     }
   }
 

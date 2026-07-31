@@ -422,7 +422,7 @@ export const CALIBRATION: Calibration = {
     overwhelmingMargin: 30,
     // Impact thresholds on a 0 to 1 scale. Reaching 10-8 needs real damage, a knockdown or
     // genuine submission danger. Reaching 10-7 additionally needs two knockdowns.
-    tenEightImpact: 0.71,
+    tenEightImpact: 0.95,
     tenSevenImpact: 0.97,
     impactNoiseSd: 0.05,
     judgeNoiseSd: 2.5,

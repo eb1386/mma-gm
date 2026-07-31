@@ -391,7 +391,14 @@ function WeighInStagePanel({ task, busy, onComplete, mutate }: { task: FightWeek
         {state.stage === 'catchweight-negotiation' && (
           <div className="row">
             <p>The request has gone to the other camp at {state.catchweightLb} lb.</p>
-            <button className="primary" disabled={busy} onClick={() => mutate((s) => resolveOpponentDecision(s, task.boutId, new Rng(s.rng)))}>
+            <button className="primary" disabled={busy} onClick={() =>
+                mutate((s) => {
+                  const rng = new Rng(s.rng);
+                  const out = resolveOpponentDecision(s, task.boutId, rng);
+                  s.rng = rng.getState();
+                  return out;
+                })
+              }>
               Hear their answer
             </button>
           </div>

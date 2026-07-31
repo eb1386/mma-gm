@@ -157,6 +157,7 @@ export function SettingsPage() {
   const save = useGame((s) => s.save)!;
   const mutate = useGame((s) => s.mutate);
   const showToast = useGame((s) => s.showToast);
+  const persist = useGame((s) => s.persist);
   const [theme, setTheme] = useState(document.documentElement.getAttribute('data-theme') ?? 'dark');
 
   const set = <K extends keyof typeof save.settings>(key: K, value: (typeof save.settings)[K]) => {
@@ -303,7 +304,12 @@ export function SettingsPage() {
           <button
             className="mt"
             onClick={() => {
-              showToast('Saved.', 'good');
+              // This used to show a success toast without writing anything, which is worse than
+              // having no button: it told the player their world was safe when it was not.
+              void persist().then(
+                () => showToast('Saved.', 'good'),
+                () => showToast('The save could not be written.', 'bad')
+              );
             }}
           >
             Save now

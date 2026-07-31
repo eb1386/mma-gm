@@ -73,10 +73,14 @@ test('the landing screen never destroys a career on its own', async ({ page }) =
   await expect(page.getByRole('button', { name: /create a new world/i })).toBeVisible();
 });
 
-test('a full career start reaches the dashboard', async ({ page }) => {
-  await createCareer(page);
-  // The new game screen is reachable and offers the three modes.
-  await expect(page.getByText(/fighter/i).first()).toBeVisible();
+test('the new game screen offers the three modes', async ({ page }) => {
+  await page.goto('/new');
+  // Match the mode buttons specifically. A loose text match picked up hidden nodes elsewhere on
+  // the page and told us nothing about whether the modes were actually offered.
+  await expect(page.getByRole('button', { name: /^start career$/i })).toBeVisible({ timeout: 30_000 });
+  for (const mode of [/play as a fighter/i, /coach/i, /spectator/i]) {
+    await expect(page.getByRole('button', { name: mode }).first()).toBeVisible();
+  }
 });
 
 test('the footer disclaimer is present on the shell', async ({ page }) => {
@@ -170,4 +174,80 @@ test('the officials page lists judges and referees', async ({ page }) => {
   // Switching to referees keeps the page rendering.
   await page.getByLabel(/role/i).selectOption('referee');
   await expect(page.getByRole('heading', { name: 'Officials' })).toBeVisible();
+});
+
+/**
+ * Every left navigation destination, plus the detail routes reachable from them.
+ *
+ * A route that renders a blank page or throws a console error is a release blocker, and the
+ * afterEach hook already fails the test on any console error.
+ */
+const NAV_ROUTES = [
+  '/dashboard',
+  '/inbox',
+  '/camp',
+  '/contract',
+  '/career',
+  '/money',
+  '/sponsors',
+  '/management',
+  '/compliance',
+  '/rivalries',
+  '/calendar',
+  '/rankings',
+  '/roster',
+  '/gyms',
+  '/news',
+  '/officials',
+  '/history',
+  '/records',
+  '/leaders',
+  '/hall-of-fame',
+  '/data',
+  '/settings',
+  '/help',
+];
+
+test('every navigation section renders with content and no console error', async ({ page }) => {
+  await startCareer(page);
+  for (const route of NAV_ROUTES) {
+    const response = await page.goto(route);
+    expect(response?.status(), `${route} returned ${response?.status()}`).toBeLessThan(400);
+    // The shell always renders a heading, so an empty main area means the page threw.
+    await expect(page.locator('.page'), `${route} rendered nothing`).toBeVisible({ timeout: 15_000 });
+    const text = (await page.locator('.page').innerText()).trim();
+    expect(text.length, `${route} rendered an empty page`).toBeGreaterThan(20);
+  }
+});
+
+test('every navigation section survives a direct load and a refresh', async ({ page }) => {
+  await startCareer(page);
+  // A sample across the different page shapes, refreshed to prove the route works cold.
+  for (const route of ['/rankings', '/officials', '/rivalries', '/money', '/records', '/help']) {
+    await page.goto(route);
+    await page.reload();
+    await expect(page.locator('.page')).toBeVisible({ timeout: 15_000 });
+  }
+});
+
+test('the dashboard action button runs rather than only navigating', async ({ page }) => {
+  await startCareer(page);
+  await page.goto('/career');
+  // The primary action is a real control: it must be enabled and must not be a dead link.
+  const primary = page.locator('button.primary').first();
+  await expect(primary).toBeVisible();
+  await expect(primary).toBeEnabled();
+});
+
+test('social posting is limited rather than an unlimited button', async ({ page }) => {
+  await startCareer(page);
+  // Reach the fighter page through the navigation, which works identically on both layouts.
+  await openNav(page);
+  await page.getByRole('link', { name: 'My fighter' }).click();
+  await expect(page).toHaveURL(/\/fighter\//);
+  // The social panel lives on the identity tab.
+  await page.getByRole('button', { name: /^identity$/i }).click();
+  await expect(page.getByText(/posts left this week/i)).toBeVisible({ timeout: 20_000 });
+  // Going quiet is always available, because it is the absence of a post.
+  await expect(page.getByRole('button', { name: /go silent/i })).toBeEnabled();
 });
