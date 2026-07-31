@@ -232,15 +232,18 @@ export function repairInbox(save: SaveGame): { resolvedStale: number; deduped: n
   let deduped = 0;
   let fixedIdentity = 0;
 
-  // A choice was recorded but the item never closed.
+  // A choice was recorded, or consequences ran, but the item never closed. Both fields are
+  // checked because the resolution guard accepts either, and a message the guard treats as
+  // handled while the inbox still demands an answer is a career that cannot be advanced.
   for (const m of save.inbox) {
-    if (m.selectedChoiceKey && m.status !== 'resolved' && m.status !== 'expired') {
+    const handled = m.selectedChoiceKey || m.effectsAppliedOn;
+    if (handled && m.status !== 'resolved' && m.status !== 'expired') {
       m.status = 'resolved';
       if (!m.decisionResolvedOn) m.decisionResolvedOn = m.date;
       if (!m.resolution) m.resolution = 'Handled.';
       fixedIdentity++;
     }
-    if (m.selectedChoiceKey && !m.decisionResolvedOn) {
+    if (handled && !m.decisionResolvedOn) {
       m.decisionResolvedOn = m.date;
       fixedIdentity++;
     }

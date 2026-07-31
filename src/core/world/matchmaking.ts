@@ -4,6 +4,7 @@ import { contractedWeight, DIVISIONS, DIVISION_BY_ID, type DivisionId } from '..
 import { clamp, hashString, Rng } from '../rng';
 import { addDays, ageOn, daysBetween, dayOfWeek, type BoutId, type EventId, type FighterId, type IsoDate } from '../types/common';
 import { isChampionshipBout, isFinish, type Bout } from '../types/fight';
+import { ovrRaw } from '../types/fighter';
 import type { Fighter } from '../types/fighter';
 import type { FightCardEvent, EventTier } from '../types/world';
 import type { SaveGame } from '../types/save';
@@ -697,6 +698,17 @@ export function findBestOpponent(
         c.reason = 'a rivalry the fans have been asking for';
       }
     }
+    // Difficulty, applied where opponent quality is known rather than as an index into the
+    // finished list. A positive bias favours the softer assignment and a negative one the harder.
+    // At the default difficulty the bias is zero and this term does nothing, so an existing save
+    // scores exactly as it did.
+    if (bias !== 0) {
+      const edge = ovrRaw(opp.ratings) - ovrRaw(fighter.ratings);
+      // The gap is softened before the bias scales it, using plain arithmetic rather than a
+      // transcendental so the result is identical on every machine that opens the save.
+      const softened = edge / (1 + Math.abs(edge) / M.difficultyOvrCap);
+      c.score -= softened * bias * M.difficultyPerOvrPoint;
+    }
     if (rematchTarget && opp.id === rematchTarget) c.score += 30;
     // A fighter with strong leverage is steered toward meaningful opposition.
     if (leverage.score >= 62) {
@@ -710,17 +722,11 @@ export function findBestOpponent(
   if (scored.length === 0) return null;
   scored.sort((a, b) => b.score - a.score);
 
-  // The bias shifts the matchmaker toward tougher or softer assignments, which is how the
-  // difficulty setting expresses itself without touching the fight engine. It moves which slice
-  // of the ranked candidates is drawn from rather than returning a fixed index, because a fixed
-  // index made every matchup on a non default difficulty the single same choice, removed all
-  // variety from those saves, and skipped the draw below so the stream ran differently too.
-  const shift = clamp(Math.round(-bias), -3, 3);
-  const start = clamp(shift, 0, Math.max(0, scored.length - 1));
-  // A small amount of randomness among the top options keeps a long save varied.
-  const top = scored.slice(start, Math.min(start + 4, scored.length));
-  const choices = top.length > 0 ? top : scored;
-  return rng.weighted(choices, (c, i) => Math.max(0.5, c.score) / (1 + i * 0.6));
+  // A small amount of randomness among the top options keeps a long save varied. The difficulty
+  // bias has already been applied to the scores above, so every setting draws the same way and
+  // none of them collapses to a single fixed choice.
+  const top = scored.slice(0, Math.min(4, scored.length));
+  return rng.weighted(top, (c, i) => Math.max(0.5, c.score) / (1 + i * 0.6));
 }
 
 // ---------------------------------------------------------------------------

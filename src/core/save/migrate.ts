@@ -6,6 +6,7 @@ import { generateActivityProfile, generateFame, generatePersonality, generateSoc
 import { repairInbox } from '../world/decisions';
 import { evaluateInterest } from '../world/matchup-interest';
 import { assignOfficials, ensureOfficials } from '../world/officials';
+import { seedRankedProduced } from '../world/gyms';
 import { addDays, daysBetween } from '../types/common';
 import { fightNightName, numberedEventName, PROMOTION_CONTRACTS, PROMOTION_MARKETING, PROMOTION_MATCHMAKING, PROMOTION_NAME } from '../config/branding';
 
@@ -26,7 +27,7 @@ const MIGRATIONS: Migration[] = [
     apply: (save) => {
       if (!save.pfp) save.pfp = { entries: [], updatedOn: save.date, fromOfficialSnapshot: false };
       if (!save.counters) {
-        save.counters = { fighter: 0, gym: 0, staff: 0, event: 0, bout: 0, camp: 0, news: 0, message: 0, offer: 0, ppvNumber: 320 };
+        save.counters = { fighter: 0, gym: 0, staff: 0, event: 0, bout: 0, camp: 0, news: 0, message: 0, offer: 0, ppvNumber: 320, ledger: 0 };
       }
     },
   },
@@ -561,7 +562,10 @@ const MIGRATION_19: Migration = {
       const side = e.direction === 'in' ? forFighter.in : forFighter.out;
       side[e.kind] = (side[e.kind] ?? 0) + e.amount;
     }
-    finance.kindTotals = totals;
+    // Assigned only when absent. Overwriting would replace unpruned history with the sum of the
+    // pruned window, which is the opposite of what this migration is for, and this file's contract
+    // is that every step is safe to run on a save that is already partly upgraded.
+    if (!finance.kindTotals) finance.kindTotals = totals;
   },
 };
 MIGRATIONS.push(MIGRATION_19);
@@ -577,16 +581,30 @@ const MIGRATION_20: Migration = {
   to: 20,
   describe: 'Seeds the count of fighters each gym has got ranked.',
   apply: (save) => {
-    for (const gym of Object.values(save.gyms ?? {})) gym.rankedProduced = 0;
-    for (const f of Object.values(save.fighters ?? {})) {
-      if (f.highestRanking === null || f.highestRanking === undefined) continue;
-      if (!f.gymId) continue;
-      const gym = save.gyms?.[f.gymId];
-      if (gym) gym.rankedProduced++;
-    }
+    seedRankedProduced(save);
   },
 };
 MIGRATIONS.push(MIGRATION_20);
+
+/**
+ * Schema 21: ledger ids that cannot repeat.
+ *
+ * The id was derived from the ledger length, and pruning is the one thing that shortens it, so
+ * after the first prune the counter walked back over numbers that surviving entries already held.
+ * The next payment of the same kind on the same day collided and was dropped: no ledger line, no
+ * cash movement, and the caller told the money had gone out. The sequence now lives on the save
+ * and only ever rises. Seeding it from the current length is safe because every retained id was
+ * numbered at or below that.
+ */
+const MIGRATION_21: Migration = {
+  to: 21,
+  describe: 'Moves the ledger id onto a monotonic counter, so pruning can no longer make a real payment collide with a retained entry and vanish.',
+  apply: (save) => {
+    if (!save.counters) return;
+    save.counters.ledger = Math.max(save.counters.ledger ?? 0, (save.ledger ?? []).length);
+  },
+};
+MIGRATIONS.push(MIGRATION_21);
 
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;
@@ -626,6 +644,28 @@ export function migrateSave(save: SaveGame): SaveGame {
   if (!save.callouts) save.callouts = {};
   if (!save.weightClassPlans) save.weightClassPlans = {};
   if (!save.injuryTreatments) save.injuryTreatments = {};
+  // The save list reads this before the world is ticked, so it has to exist on every save, not
+  // only on ones that came through the migration that introduced it.
+  if (!save.careerState) {
+    save.careerState = { state: 'available', reason: 'Not yet recorded for this career.', since: save.date, actionKey: null };
+  }
+  // Repaired here as well as in the migration that introduced it, because a save that skipped
+  // that step would otherwise reach the money page with no balances at all.
+  if (!save.finance) {
+    const me = save.player?.fighterId ? save.fighters?.[save.player.fighterId] : null;
+    save.finance = {
+      cash: save.player?.balance ?? 0,
+      careerEarnings: me?.careerEarnings ?? 0,
+      careerExpenses: 0,
+      debt: Math.max(0, -(save.player?.balance ?? 0)),
+      monthlyExpenses: 0,
+      lastMonthlyOn: null,
+      kindTotals: {},
+    };
+  }
+  if (save.counters && save.counters.ledger === undefined) {
+    save.counters.ledger = (save.ledger ?? []).length;
+  }
   // Camp records repaired defensively: a camp pointing at a bout that is gone, or running
   // past its own end date, would otherwise leave the career stuck in camp forever.
   const activeByFighter = new Map<string, string>();

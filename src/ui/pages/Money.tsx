@@ -105,8 +105,9 @@ export function MoneyPage() {
               ]}
             />
             <p className="small faint mt">
-              The ledger is the record. Cash, career earnings and net worth are all derived from it, so they cannot
-              drift apart from what actually happened.
+              Every figure here moves through the ledger, so cash, career totals and the breakdown below can only
+              change when money actually changes hands. The ledger list keeps recent detail; the totals keep the
+              whole career.
             </p>
           </Panel>
         </div>

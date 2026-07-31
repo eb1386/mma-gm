@@ -84,7 +84,7 @@ export function GymPage() {
               ['Revenue share', `${gym.revenueSharePct}%`],
               ['Balance', formatMoney(gym.balance)],
               ['Champions produced', gym.championsProduced],
-              ['Fighters ranked', gym.rankedProduced],
+              ['Ranked fighters produced', gym.rankedProduced],
               ['Specializations', gym.specializations.map((s) => RATING_LONG_LABEL[s]).join(', ')],
             ]}
           />

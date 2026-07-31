@@ -433,6 +433,9 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
 
   // Rankings and titles.
   applyResultToRankings(save, result, shortNoticeA, shortNoticeB);
+  // Read before the title outcome is applied, so a gym can be credited for crowning a champion
+  // rather than for every title bout that champion subsequently wins.
+  const championBefore = save.rankings[bout.divisionId]?.championId ?? null;
   const titleNotes = applyTitleOutcome(save, result);
   // Winning an eliminator earns the number one contender position, and the standing contender
   // losing gives it up. Without this an eliminator was a label that meant nothing.
@@ -450,9 +453,12 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
   for (const note of titleNotes) {
     pushNews(save, { date: result.date, headline: note, body: result.narrativeSummary, tags: ['title'], fighterIds: [a.id, b.id], importance: 5 });
   }
-  if (result.isTitleFight && result.winnerId) {
+  if (result.isTitleFight && result.winnerId && result.winnerId !== championBefore) {
+    // Counted once, when a fighter first takes a belt. It used to be counted on every title bout
+    // won, so a champion with five defences added six to their gym's total on their own and the
+    // figure stopped meaning the number of champions the gym had produced.
     const winner = save.fighters[result.winnerId];
-    if (winner.gymId) {
+    if (winner.gymId && winner.titleReigns <= 1) {
       const gym = save.gyms[winner.gymId];
       if (gym) gym.championsProduced++;
     }

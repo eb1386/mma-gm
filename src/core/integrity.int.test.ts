@@ -11,6 +11,7 @@ import { migrateSave } from './save/migrate';
 import { pruneLedger, record, summarize } from './world/finance';
 import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
 import { DIFFICULTY } from './config/calibration';
+import { ovrRaw } from './types/fighter';
 import { DEFAULT_FEATURE_FLAGS, DEFAULT_SETTINGS, SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
 import type { Fighter } from './types/fighter';
@@ -418,6 +419,40 @@ describe('money reads correctly over a long career', () => {
     expect(afterPrune).toBe(beforePrune);
   });
 
+  it('does not drop a payment made after the ledger has been pruned', () => {
+    // The ledger id used to be derived from the ledger length, and pruning is the only thing that
+    // shortens it, so afterwards the counter walked back over numbers that surviving entries
+    // already held. A real payment then collided and vanished: no entry, no cash movement, and
+    // the caller told the money had gone out.
+    const f = newCareer(9807);
+    const me = playerOf(f.save).id;
+    for (let i = 0; i < 640; i++) record(f.save, me, 'out', 'nutrition', 10, `Supplies ${i}`);
+    expect(pruneLedger(f.save)).toBeGreaterThan(0);
+    const cashBefore = f.save.finance!.cash;
+    const entriesBefore = f.save.ledger!.length;
+    // Same date and same kind as entries that survived the prune.
+    const entry = record(f.save, me, 'out', 'nutrition', 400, 'Camp supplies');
+    expect(entry).not.toBeNull();
+    expect(f.save.ledger!.length).toBe(entriesBefore + 1);
+    expect(f.save.finance!.cash).toBe(cashBefore - 400);
+  });
+
+  it('records money only for the fighter the player is managing', () => {
+    // The ledger totals are per fighter but cash and the career totals are one pot, so a ledger
+    // entry naming anyone else would move the player's money and be invisible in their breakdown.
+    const f = newCareer(9809);
+    runWorld(f.save, 60);
+    const others = f.save.ledger!.filter((e) => e.fighterId !== f.save.player.fighterId);
+    expect(others.map((e) => `${e.kind}:${e.note}`)).toEqual([]);
+  });
+
+  it('never writes two ledger entries with the same id', () => {
+    const f = newCareer(9808);
+    runWorld(f.save, 90);
+    const ids = f.save.ledger!.map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('keeps the breakdown adding up to the career totals', () => {
     const f = newCareer(9803);
     runWorld(f.save, 60);
@@ -446,37 +481,79 @@ describe('difficulty changes the matchmaking without freezing it', () => {
     expect(chosen.size).toBeGreaterThan(1);
   });
 
-  it('assigns a harder opponent on a harder difficulty than on an easier one', () => {
-    const f = newCareer(5502);
-    runWorld(f.save, 12);
-    const me = playerOf(f.save);
-    const { event, ctx } = bookableEvent(f.save, me);
-    const meanScore = (bias: number) => {
+  it('assigns a stronger opponent on a harder difficulty than on an easier one', () => {
+    // Averaged over several careers. On any single save two neighbouring settings can happen to
+    // order the same four candidates the same way and draw identically, which says nothing about
+    // whether the setting works.
+    const meanOpponentOvr = (bias: number) => {
       let total = 0;
       let n = 0;
-      for (let seed = 0; seed < 40; seed++) {
-        const pick = findBestOpponent(f.save, me, event, ctx, new Rng(8000 + seed), bias);
-        if (pick) {
-          total += pick.score;
-          n++;
+      for (const careerSeed of [5502, 5503, 5504]) {
+        const f = newCareer(careerSeed);
+        runWorld(f.save, 12);
+        const me = playerOf(f.save);
+        const { event, ctx } = bookableEvent(f.save, me);
+        for (let seed = 0; seed < 30; seed++) {
+          const pick = findBestOpponent(f.save, me, event, ctx, new Rng(8000 + seed), bias);
+          if (pick) {
+            total += ovrRaw(pick.opponent.ratings);
+            n++;
+          }
         }
       }
-      return n > 0 ? total / n : 0;
+      expect(n).toBeGreaterThan(0);
+      return total / n;
     };
-    // A lower matchmaking score is a less favourable assignment, which is what the harder
-    // difficulty is supposed to hand out.
-    expect(meanScore(DIFFICULTY.brutal.matchmakingBias)).toBeLessThan(meanScore(DIFFICULTY.easy.matchmakingBias));
+    // Every step up in difficulty is a step up in the opponent handed out, and none of the four
+    // settings is a duplicate of another. Two of them used to be inert.
+    const easy = meanOpponentOvr(DIFFICULTY.easy.matchmakingBias);
+    const normal = meanOpponentOvr(0);
+    const hard = meanOpponentOvr(DIFFICULTY.hard.matchmakingBias);
+    const brutal = meanOpponentOvr(DIFFICULTY.brutal.matchmakingBias);
+    expect(easy).toBeLessThan(normal);
+    expect(normal).toBeLessThan(hard);
+    expect(hard).toBeLessThan(brutal);
   });
 });
 
 describe('a gym is credited for the fighters it gets ranked', () => {
-  it('counts each fighter once, the first time they are ranked', () => {
+  it('credits the starting roster, which arrives already ranked', () => {
+    // The live counter only fires the first time a fighter is ranked, and every imported fighter
+    // already carries a highest ranking, so without seeding at creation every real gym read zero
+    // for the life of the save.
     const f = newCareer(9804);
-    runWorld(f.save, 80);
     const total = Object.values(f.save.gyms).reduce((t, g) => t + g.rankedProduced, 0);
-    expect(total).toBeGreaterThan(0);
+    const everRankedAtAGym = Object.values(f.save.fighters).filter((x) => x.highestRanking != null && x.gymId).length;
+    expect(total).toBe(everRankedAtAGym);
+  });
+
+  it('counts each fighter once, the first time they are ranked', () => {
+    const f = newCareer(9805);
+    const before = Object.values(f.save.gyms).reduce((t, g) => t + g.rankedProduced, 0);
+    runWorld(f.save, 80);
+    const after = Object.values(f.save.gyms).reduce((t, g) => t + g.rankedProduced, 0);
+    expect(after).toBeGreaterThanOrEqual(before);
     // Never more than the number of fighters who have ever been ranked and are at a gym.
-    const everRanked = Object.values(f.save.fighters).filter((x) => x.highestRanking !== null && x.gymId).length;
-    expect(total).toBeLessThanOrEqual(everRanked);
+    const everRanked = Object.values(f.save.fighters).filter((x) => x.highestRanking != null && x.gymId).length;
+    expect(after).toBeLessThanOrEqual(everRanked);
+  });
+});
+
+describe('a gym is credited once per champion, not once per title win', () => {
+  it('does not add to the total when a champion defends', () => {
+    const f = newCareer(9806);
+    runWorld(f.save, 120);
+    // A gym cannot have produced more champions than it has had distinct fighters hold a belt.
+    for (const gym of Object.values(f.save.gyms)) {
+      const everChampion = Object.values(f.save.fighters).filter(
+        (x) => x.gymId === gym.id && (x.isChampion || x.titleReigns > 0)
+      ).length;
+      const defencesHere = Object.values(f.save.fighters)
+        .filter((x) => x.gymId === gym.id)
+        .reduce((t, x) => t + x.titleDefenses, 0);
+      // The old counter added one per title bout won, so any gym with a defending champion
+      // would exceed the number of fighters who have ever held a belt there.
+      if (defencesHere > 0) expect(gym.championsProduced).toBeLessThanOrEqual(everChampion);
+    }
   });
 });

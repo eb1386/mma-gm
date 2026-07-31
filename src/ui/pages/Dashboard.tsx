@@ -160,7 +160,7 @@ export function DashboardPage() {
                 ['Staff', gym.staffIds.length],
                 ['Balance', formatMoney(gym.balance)],
                 ['Champions produced', gym.championsProduced],
-                ['Fighters ranked', gym.rankedProduced],
+                ['Ranked fighters produced', gym.rankedProduced],
               ]}
             />
           </Panel>

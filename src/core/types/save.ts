@@ -44,7 +44,7 @@ import type {
   TrainingCamp,
 } from './world';
 
-export const SAVE_SCHEMA_VERSION = 20;
+export const SAVE_SCHEMA_VERSION = 21;
 
 export interface SaveSettings {
   difficulty: Difficulty;

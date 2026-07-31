@@ -274,9 +274,11 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
     f.previousRanking = f.ranking;
     f.ranking = e ? e.rank : null;
     if (e) {
-      const firstTimeRanked = f.highestRanking === null;
+      // Loose equality on purpose: an absent value from an old save means never ranked, and
+      // the strict check would read it as already counted and then produce NaN below.
+      const firstTimeRanked = f.highestRanking == null;
       f.weeksRanked = e.weeksRanked;
-      f.highestRanking = f.highestRanking === null ? e.rank : Math.min(f.highestRanking, e.rank);
+      f.highestRanking = firstTimeRanked ? e.rank : Math.min(f.highestRanking!, e.rank);
       // Credited once, the first time this fighter is ranked anywhere, so a gym that keeps
       // producing contenders is not measured only by whether one of them won a belt.
       if (firstTimeRanked && f.gymId) {

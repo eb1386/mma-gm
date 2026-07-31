@@ -147,6 +147,41 @@ export const MATCHMAKING = {
 
   /** Random jitter so a long save stays varied. Applied last. */
   jitter: 7,
+
+  /**
+   * How the difficulty setting expresses itself in matchmaking.
+   *
+   * Score added per Ovr point of gap between the player and a candidate, times the difficulty
+   * bias. A harder setting pulls stronger opponents up the list and a softer one pulls them down.
+   *
+   * This replaced shifting an index into the sorted candidate list. That could only ever make a
+   * fight harder, because the list is sorted by what the matchmaker wants and index zero is its
+   * floor, so both softer settings were inert and did nothing at all. Ovr gap is the measure
+   * because it is the one thing that says how hard an assignment actually is, independent of
+   * whether the matchmaker happens to like the pairing.
+   *
+   * Measured over three careers at a player Ovr of about 79.6, mean opponent Ovr comes out at
+   * 62.7 / 68.4 / 72.4 / 73.7 across easy, normal, hard and brutal, with at least three distinct
+   * opponents drawn at every setting. A larger value widens that spread but starts collapsing the
+   * hardest setting onto a single opponent, which is the variety the draw exists to protect.
+   */
+  difficultyPerOvrPoint: 1,
+
+  /**
+   * Ceiling on the Ovr gap the difficulty adjustment will consider, in rating points.
+   *
+   * The gap is bounded before the bias multiplies it, not after. Bounding the finished product
+   * compresses the difference between a strong candidate and a very strong one at exactly the
+   * settings that are supposed to care about it most, which made the hardest setting less
+   * discriminating than the one below it. Bounding the gap keeps the shape identical at every
+   * setting and lets the bias scale it, so a harder setting is always more aggressive.
+   *
+   * At the hardest setting the adjustment therefore tops out near this value times the bias times
+   * the per point weight, which stays under the 38 point gap between a championship pairing and
+   * an ordinary ranked one. Difficulty picks among reasonable opponents. It does not get to
+   * overrule what kind of fight is on offer.
+   */
+  difficultyOvrCap: 10,
 } as const;
 
 /**

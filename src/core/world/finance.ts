@@ -184,9 +184,17 @@ export function record(
   if (amount <= 0) return null;
   const rounded = Math.round(amount);
   const entries = ledger(save);
-  const id = `ledger-${entries.length + 1}-${save.date}-${kind}`;
-  // A repeated call with the same identity is ignored rather than double counting.
-  if (entries.some((e) => e.id === id && e.boutId === boutId)) return null;
+  // Monotonic, never derived from the ledger length.
+  //
+  // The length is the one thing pruning changes, so a length derived id walked back over numbers
+  // already held by surviving entries. The next payment of the same kind on the same day then
+  // collided with a retained entry and was dropped: no ledger line, no cash movement, no career
+  // total, while the caller was told the money had gone out. The guard that dropped it could
+  // never have caught a genuine repeat either, because a successful write changes the length and
+  // therefore the id, so it only ever fired on a false positive.
+  if (!save.counters) save.counters = {};
+  save.counters.ledger = (save.counters.ledger ?? entries.length) + 1;
+  const id = `ledger-${save.counters.ledger}-${save.date}-${kind}`;
   const entry: LedgerEntry = { id, date: save.date, fighterId, direction, kind, amount: rounded, note, boutId };
   entries.push(entry);
 

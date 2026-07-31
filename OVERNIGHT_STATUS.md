@@ -457,3 +457,84 @@ change is a no-op at the default difficulty and only alters the biased path.
 
 Save schema is now 20. Two migrations were added, both of which repair existing saves rather than
 only accepting them.
+
+
+---
+
+# Sixth pass, verifying the fifth
+
+Every wave so far has found defects caused by the previous wave's fixes, so the fifth pass was
+verified the same way: four reviewers, each given one part of the diff and told to be adversarial.
+They found seven things. Three were mine, from the day before. Two were older and worse than
+anything the wave was looking for.
+
+**A real payment could vanish, and had been able to for the life of the project.** The ledger id
+was built from the ledger's own length, and pruning is the one thing that shortens it. After the
+first prune the counter walked back over numbers that surviving entries already held, so the next
+payment of the same kind on the same day collided with a retained entry and was silently dropped:
+no ledger line, no cash movement, no career total, while the caller was told the money had gone
+out. The guard that dropped it could never have caught a genuine repeat either, because a
+successful write changes the length and therefore the id, so the only behaviour it had was the
+false positive. The sequence now lives on the save and only ever rises.
+
+**Champions produced counted title bouts, not champions.** It incremented on every title fight
+won, so a champion with five defences added six to their gym's total on their own, and an interim
+bout counted as well. It is now credited once, when a fighter first takes a belt. This mattered
+more after the fifth pass, which put a second counter next to it in three panels.
+
+**The new gym counter was zero on every new game.** The live counter fires the first time a
+fighter is ranked, and every fighter imported from the snapshot already carries a highest ranking,
+so it never fired for any of them. A gym with twelve ranked fighters read zero. Worse, a save
+migrated from an older build got all of them credited, so two saves of the same world disagreed by
+a hundred and fifty five. The rule is now one function used by the migration and by world
+creation alike, called after gym affiliation is settled rather than before.
+
+**The difficulty fix from the day before was wrong twice more.** Capping the adjustment made the
+two hardest settings identical for any gap past twelve rating points, which is the same dead
+setting problem in a new place. Bounding the finished product instead compressed the difference
+between a strong candidate and a very strong one at exactly the settings that care about it most,
+which made the hardest setting less discriminating than the one below it and was caught only
+because the test averages over several careers. The gap is now bounded before the bias scales it,
+which keeps the shape identical at every setting.
+
+Also: the marker that records a decision's consequences as applied is now written by every path
+that applies them and read by the repair pass as well as the guard, so a half applied decision
+cannot leave a career unadvanceable; the career state has a defensive default so the save list
+cannot meet a save without one; the money page no longer claims the breakdown is derived from the
+ledger, which stopped being true when it moved onto running totals; and the migration that seeds
+those totals no longer overwrites them, per this file's own contract that every step is safe to
+re-run.
+
+## What the sixth pass says about the fifth
+
+Three of the seven findings were introduced the day before, by fixes that were themselves correct
+in intent. That is the same pattern as every previous wave and it is the honest argument against
+declaring this finished by inspection: the work that introduces defects is the work that fixes
+them.
+
+The two oldest findings, the ledger id and the champion counter, had survived five waves. Both
+were found only because a reviewer was pointed at a small diff and told to be hostile to it, not
+because anything in the test suite noticed. Both now have tests.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | clean |
+| default tier | 354 passed |
+| world | 6 passed |
+| flow | 171 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 32 passed, desktop and mobile |
+| activity bands | 1.57 / 2.56 / 2.51 / 2.38, all in band |
+| calibration | 93.74 / 6.26 / 0.00 |
+| perf | 0 phases over target |
+| acceptance | 5 runs, 0 metrics outside band |
+
+The save round trip caught one of my own fixes on the way through: a defensive repair added a key
+to a save that did not have it, so a spectator career no longer reloaded byte for byte. The
+counter is now created with the world instead. That test earning its place is worth recording.
+
+Save schema is 21. Three migrations were added across the two passes, all of which repair existing
+saves rather than only accepting them.

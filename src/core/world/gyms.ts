@@ -85,6 +85,28 @@ export function createGym(
   return gym;
 }
 
+/**
+ * Rebuilds the count of fighters each gym has got ranked, from who has ever held a ranking.
+ *
+ * One rule, used by the migration for existing saves and by new game creation for the imported
+ * roster. Without the new game call, a fresh save started from a snapshot showed zero for gyms
+ * with a dozen ranked fighters on the books, because every snapshot fighter already carries a
+ * highest ranking and so never looks like a first time entry to the live counter.
+ *
+ * The credit goes to the gym the fighter is at now, which is the only affiliation a rebuild can
+ * know. The live counter credits the gym they were at when they first ranked, which is the more
+ * accurate rule and the one that applies from the start of the save onward.
+ */
+export function seedRankedProduced(save: SaveGame): void {
+  for (const gym of Object.values(save.gyms ?? {})) gym.rankedProduced = 0;
+  for (const f of Object.values(save.fighters ?? {})) {
+    if (f.highestRanking === null || f.highestRanking === undefined) continue;
+    if (!f.gymId) continue;
+    const gym = save.gyms?.[f.gymId];
+    if (gym) gym.rankedProduced++;
+  }
+}
+
 export function hireStaff(save: SaveGame, gym: Gym, role: GymStaff['role'], rng: Rng, qualityTarget?: number): GymStaff {
   const bank = NAME_BANKS.find((b) => b.code === gym.countryCode) ?? NAME_BANKS[0];
   const quality = clamp(Math.round(qualityTarget ?? rng.normal(gym.reputation, 12)), 10, 97);

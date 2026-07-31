@@ -58,6 +58,10 @@ export function resolveMessage(save: SaveGame, messageId: string, choiceKey: str
   if (!m) return;
   m.status = 'resolved';
   m.resolution = resolution;
+  // The caller applied the consequences before calling this, so record it on the same field the
+  // idempotency guard reads. Without it this path closed a message the guard could not recognise.
+  m.effectsAppliedOn = save.date;
+  m.decisionResolvedOn = m.decisionResolvedOn ?? save.date;
   void choiceKey;
   if (save.pendingDecision?.messageId === messageId) save.pendingDecision = null;
 }

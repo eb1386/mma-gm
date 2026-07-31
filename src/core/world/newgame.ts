@@ -10,7 +10,7 @@ import type { Gym } from '../types/world';
 import { generateContract } from './economy';
 import { potConfidenceFor } from './development';
 import { updatePot } from './pot';
-import { createGym, hireStaff, moveFighterToGym } from './gyms';
+import { createGym, hireStaff, moveFighterToGym, seedRankedProduced } from './gyms';
 import { allDivisionRankings } from './rankings';
 import { clampWalkingWeight } from './health';
 import { generateFighter, uniformConfidence } from './generator';
@@ -160,7 +160,7 @@ function emptySave(opts: NewGameOptions, snapshot: SnapshotFile): SaveGame {
     callouts: {},
     weightClassPlans: {},
     injuryTreatments: {},
-    counters: { fighter: 0, gym: 0, staff: 0, event: 0, bout: 0, camp: 0, news: 0, message: 0, offer: 0, ppvNumber: 299, fightNightNumber: 83 },
+    counters: { fighter: 0, gym: 0, staff: 0, event: 0, bout: 0, camp: 0, news: 0, message: 0, offer: 0, ppvNumber: 299, fightNightNumber: 83, ledger: 0 },
     pendingDecision: null,
   };
 }
@@ -455,6 +455,11 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
     fighterIds: [],
     importance: 2,
   });
+
+  // The imported roster arrives already ranked, so the live first time ranked counter would never
+  // see any of them and every real gym would read zero for the life of the save. Done here rather
+  // than at the copy, because gym affiliation is still being assigned until this point.
+  seedRankedProduced(save);
 
   // The officials roster is part of the world, so it exists from the first day rather than
   // appearing the first time a fight happens to need judges.

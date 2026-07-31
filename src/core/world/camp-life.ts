@@ -684,6 +684,10 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
 
   message.status = 'resolved';
   message.resolution = text;
+  // Set here rather than at the top, so it means what it says: the consequences ran. If anything
+  // above throws, the message is left answerable instead of being marked handled with the effects
+  // only half applied.
+  message.effectsAppliedOn = save.date;
   return text;
 }
 
