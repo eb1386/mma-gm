@@ -1,7 +1,7 @@
 import { BUILDS } from '../config/builds';
 import { clamp, percentile, Rng } from '../rng';
 import { ageOn, type IsoDate } from '../types/common';
-import { ovrRaw, RATING_KEYS, type Fighter, type RatingKey, type Ratings } from '../types/fighter';
+import { ovrDisplayed, ovrRaw, RATING_KEYS, type Fighter, type RatingKey, type Ratings } from '../types/fighter';
 
 /**
  * Aging and development.
@@ -167,6 +167,22 @@ export function applyDeltas(ratings: Ratings, deltas: Partial<Record<RatingKey, 
     if (d) out[k] = clamp(out[k] + d, 8, 99);
   }
   return out;
+}
+
+/**
+ * Records a new career high in Ovr, if this is one.
+ *
+ * Called from every path that changes ratings. The peak used to be sampled only on fight nights,
+ * so a fighter who improved in camp and then declined never had that improvement recorded, and
+ * the figure the fighter page calls a career peak could sit below where the fighter stood at the
+ * moment it was read.
+ */
+export function notePeakOvr(fighter: Fighter, date: IsoDate): void {
+  const now = ovrDisplayed(fighter.ratings);
+  if (now > fighter.peakOvr) {
+    fighter.peakOvr = now;
+    fighter.peakOvrDate = date;
+  }
 }
 
 /**

@@ -115,6 +115,63 @@ describe.runIf(Boolean(snapshotFile))('world simulation', () => {
     }
   });
 
+  it('holds its invariants across five simulated years', () => {
+    // The one year run above proves the world starts coherent. A career is meant to last years,
+    // and the failures that only appear over that horizon are the ones a player actually meets:
+    // a counter that never resets, a collection that never closes, a stored figure that drifts
+    // away from the ratings it claims to summarise.
+    const { save } = createNewGame(snapshot, { saveName: 'test', seed: 4242, mode: 'spectator' });
+    for (let year = 0; year < 5; year++) {
+      advance(save, { mode: 'year', maxDays: 366, stopOnDecision: false });
+    }
+
+    // Ovr is the unweighted mean of the six ratings, including everywhere it was stored.
+    for (const f of Object.values(save.fighters)) {
+      for (const snap of f.ratingHistory) {
+        const mean =
+          RATING_KEYS.reduce((t, k) => t + snap.ratings[k], 0) / RATING_KEYS.length;
+        expect(Math.abs(snap.ovr - mean)).toBeLessThanOrEqual(0.5);
+      }
+      const current = RATING_KEYS.reduce((t, k) => t + f.ratings[k], 0) / RATING_KEYS.length;
+      // A peak is the highest ever reached, so it can never sit below where the fighter is now.
+      // It used to be sampled only on fight nights, so anyone who improved in camp and then
+      // declined carried a career peak lower than the rating printed beside it.
+      expect(f.peakOvr).toBeGreaterThanOrEqual(Math.round(current));
+    }
+
+    // A fighter appears in the rankings of exactly the division they compete in, and only once.
+    const rankedIn = new Map<string, string[]>();
+    for (const d of DIVISIONS) {
+      for (const e of save.rankings[d.id].entries) {
+        rankedIn.set(e.fighterId, [...(rankedIn.get(e.fighterId) ?? []), d.id]);
+      }
+    }
+    for (const [fighterId, divisions] of rankedIn) {
+      expect(divisions.length).toBe(1);
+      expect(save.fighters[fighterId]).toBeDefined();
+      expect(save.fighters[fighterId].divisionId).toBe(divisions[0]);
+      expect(save.fighters[fighterId].retired).toBe(false);
+    }
+
+    // A belt is held by at most one fighter and is never booked into two live bouts at once.
+    for (const d of DIVISIONS) {
+      const live = Object.values(save.bouts).filter(
+        (b) => b.status === 'scheduled' && b.divisionId === d.id && b.isTitleFight
+      );
+      expect(live.length).toBeLessThanOrEqual(1);
+      const champions = Object.values(save.fighters).filter((f) => f.isChampion && f.divisionId === d.id);
+      expect(champions.length).toBeLessThanOrEqual(1);
+    }
+
+    // Nothing that is supposed to close accumulates for ever.
+    const openCallouts = Object.values(save.callouts ?? {}).filter((c) => c.status === 'open').length;
+    expect(openCallouts).toBeLessThan(400);
+    const unresolvedSocial = Object.values(save.socialFeed ?? {}).filter((i) => i.resolvedOn === null).length;
+    expect(unresolvedSocial).toBeLessThan(400);
+    // The world keeps running rather than stalling into a state where nobody can be matched.
+    expect(Object.keys(save.history.results).length).toBeGreaterThan(1500);
+  });
+
   it('keeps a long save from growing without bound', () => {
     const { save } = createNewGame(snapshot, { saveName: 'test', seed: 313, mode: 'spectator' });
     advance(save, { mode: 'year', maxDays: 366, stopOnDecision: false });

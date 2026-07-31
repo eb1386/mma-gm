@@ -11,7 +11,7 @@ import { ovrDisplayed, type Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { autoCampFor, finalizeCamp, runCampWeek } from './camp';
 import { applyPopularity, assignEventBonuses, computeLeverage, createContractOffer, decayPopularity, generateContract, popularityFromResult, purseForBout } from './economy';
-import { applyDeltas, developWeek, evenFocus, potConfidenceFor, retirementChance } from './development';
+import { applyDeltas, developWeek, evenFocus, notePeakOvr, potConfidenceFor, retirementChance } from './development';
 import { invalidatePot, prunePotCache, refreshPotForAll, updatePot } from './pot';
 import { moveFighterToGym, rollFighterAutonomy, runGymMonth, updateHappiness } from './gyms';
 import { computeSeasonAwards, newsForResult, pushNews, retirementNews, runHallOfFameVote } from './history';
@@ -50,7 +50,7 @@ import { pruneGamePlans } from './gameplan-memory';
 import { syncCareerState } from './career';
 import './decision-handlers';
 import { PROMOTION_CONTRACTS } from '../config/branding';
-import { applyResultToRankings, applyTitleOutcome, recomputeDivision, recomputePfp } from './rankings';
+import { applyResultToRankings, applyTitleOutcome, reconcileChampionFlags, recomputeDivision, recomputePfp } from './rankings';
 import { generateFighter } from './generator';
 import { closeCompetingOffers, createFightOffer, expireOffers } from './offers';
 import { addInboxMessage, messageNeedsAction, reconcileInbox } from './inbox';
@@ -474,10 +474,7 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
       longevity: f.longevity,
       reason: `after ${result.winnerId === f.id ? 'beating' : result.winnerId === null ? 'drawing with' : 'losing to'} ${f.id === a.id ? b.name : a.name}`,
     });
-    if (ovrDisplayed(f.ratings) > f.peakOvr) {
-      f.peakOvr = ovrDisplayed(f.ratings);
-      f.peakOvrDate = result.date;
-    }
+    notePeakOvr(f, result.date);
   }
 }
 
@@ -724,6 +721,7 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
         rng
       );
       fighter.ratings = applyDeltas(fighter.ratings, deltas);
+      notePeakOvr(fighter, save.date);
       restRecovery(fighter, 1);
 
       // The roll always happens, because it draws from the shared world rng. The setting decides
@@ -867,6 +865,12 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     }
   }
   save.pfp = recomputePfp(save);
+
+  // The tables are the record of who holds what, so the flags on the fighter are brought back
+  // into line with them here rather than relying on every path that changes a title remembering
+  // to clear the previous holder. One that did not left two fighters flagged as champion of the
+  // same division.
+  reconcileChampionFlags(save);
 
   // A champion who cannot defend for long enough is stripped and the title is vacated,
   // which is what stops an injured or inactive champion from freezing a whole division.

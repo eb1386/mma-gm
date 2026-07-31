@@ -1,6 +1,6 @@
 import { SAVE_SCHEMA_VERSION, DEFAULT_SETTINGS, type SaveGame } from '../types/save';
 import { DIVISIONS } from '../config/divisions';
-import { allDivisionRankings } from '../world/rankings';
+import { allDivisionRankings, reconcileChampionFlags } from '../world/rankings';
 import { Rng } from '../rng';
 import { generateActivityProfile, generateFame, generatePersonality, generateSocial } from '../world/identity';
 import { repairInbox } from '../world/decisions';
@@ -725,6 +725,10 @@ export function migrateSave(save: SaveGame): SaveGame {
       f.nextBoutId = null;
     }
   }
+
+  // The champion flags are derived from the tables, so a save written before they were reconciled
+  // is repaired on load rather than carrying a second champion into the new build.
+  reconcileChampionFlags(save);
 
   save.schemaVersion = SAVE_SCHEMA_VERSION;
   return save;

@@ -4,7 +4,7 @@ import { addDays, daysBetween, type IsoDate } from '../types/common';
 import { RATING_KEYS, type Fighter, type RatingKey } from '../types/fighter';
 import type { CampFocus, CampOutcome, GamePlanKey, Gym, TrainingCamp } from '../types/world';
 import type { SaveGame } from '../types/save';
-import { applyDeltas, developWeek, evenFocus, type DevelopmentInput } from './development';
+import { applyDeltas, developWeek, evenFocus, notePeakOvr, type DevelopmentInput } from './development';
 import { applyWear, rollTrainingInjury, trainingCapacityOf } from './health';
 import { planCoherence } from '../sim/plan';
 import { record } from './finance';
@@ -391,6 +391,7 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
     if (weekly > 0) record(save, fighter.id, 'out', 'camp-costs', weekly, `Camp week ${week}`, camp.boutId ?? undefined);
   }
   fighter.ratings = applyDeltas(fighter.ratings, deltas);
+  notePeakOvr(fighter, save.date);
 
   return { outcomes, ratingDeltas: deltas, injured };
 }

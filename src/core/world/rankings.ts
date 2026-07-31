@@ -405,6 +405,45 @@ function isHolder(table: DivisionRankings, fighterId: FighterId, interim: boolea
   return interim ? table.interimChampionId === fighterId : table.championId === fighterId;
 }
 
+/**
+ * Makes every champion flag agree with the ranking tables.
+ *
+ * The tables are the record of who holds what. The flags on the fighter are a convenience for
+ * pages and matchmaking, and they were cleared in six separate places, each of which handled the
+ * case in front of it: a title changing hands, a champion stripped for inactivity, an interim
+ * promoted, a doping sanction, a division move. A path none of them covered left a deposed
+ * champion still flagged, so a division could show two champions at once. Measured over a five
+ * year simulation, two divisions did.
+ *
+ * Rather than add a seventh place, the flags are reconciled from the tables once a week. A fighter
+ * keeping a belt in a division they no longer compete in is the one legitimate exception, because
+ * that arrangement is exactly a champion whose flag and division disagree on purpose.
+ */
+export function reconcileChampionFlags(save: SaveGame): string[] {
+  const corrections: string[] = [];
+  const undisputed = new Set<FighterId>();
+  const interim = new Set<FighterId>();
+  for (const d of DIVISIONS) {
+    const table = save.rankings[d.id];
+    if (!table) continue;
+    if (table.championId) undisputed.add(table.championId);
+    if (table.interimChampionId) interim.add(table.interimChampionId);
+  }
+  for (const f of Object.values(save.fighters)) {
+    const shouldBeChampion = undisputed.has(f.id);
+    const shouldBeInterim = interim.has(f.id);
+    if (f.isChampion !== shouldBeChampion) {
+      f.isChampion = shouldBeChampion;
+      corrections.push(`${f.name} champion flag corrected to ${shouldBeChampion}`);
+    }
+    if (f.isInterimChampion !== shouldBeInterim) {
+      f.isInterimChampion = shouldBeInterim;
+      corrections.push(`${f.name} interim flag corrected to ${shouldBeInterim}`);
+    }
+  }
+  return corrections;
+}
+
 /** Ends the open reign of the given kind and clears the pointer. */
 function vacateTitle(save: SaveGame, result: FightResult, interim: boolean, reason: 'stripped' | 'defeated'): void {
   const table = save.rankings[result.divisionId];

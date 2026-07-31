@@ -538,3 +538,49 @@ counter is now created with the world instead. That test earning its place is wo
 
 Save schema is 21. Three migrations were added across the two passes, all of which repair existing
 saves rather than only accepting them.
+
+
+---
+
+# Seventh pass, part one: what five years of simulation says
+
+The world tier tested one simulated year. A career is meant to last several, and the invariant
+test never asserted the one rule the whole rating model rests on. A five year invariant run was
+added that checks the Ovr identity on every stored snapshot, that a fighter is ranked in exactly
+the division they compete in, that a belt is held by at most one fighter and booked into at most
+one live bout, and that the collections which are supposed to close do not accumulate for ever.
+
+It failed twice on the first run.
+
+**A career peak lower than the current rating.** `peakOvr` was updated only in the fight result
+path, so it was sampled on fight nights and nowhere else. A fighter who improved through a camp
+and then declined never had that improvement recorded, and the figure the fighter page calls a
+career peak could sit below the rating printed beside it. It is now one helper called from every
+path that changes ratings.
+
+**Two champions in one division.** The champion flag was cleared in six separate places, each
+handling the case in front of it: a title changing hands, a champion stripped for inactivity, an
+interim promoted, a doping sanction, a division move, a weight class change. A path none of them
+covered left a deposed champion still flagged. Over five simulated years two divisions ended with
+two fighters each flagged as champion, while the ranking tables named only one. Rather than add a
+seventh place that would have to be remembered next time, the flags are now reconciled from the
+tables once a week and again on load. The tables are the record; the flags are a convenience for
+pages and matchmaking, and they now derive from the record rather than being maintained beside it.
+
+Both were invisible to six previous waves and to every existing test, because nothing simulated
+far enough or asserted the right thing.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | clean |
+| default tier | 354 passed |
+| world | 7 passed, now including a five year run |
+| flow | 171 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 32 passed, desktop and mobile |
+| activity bands | 1.57 / 2.59 / 2.56 / 2.38, all in band |
+| calibration | 93.74 / 6.26 / 0.00 |
+| acceptance | 5 runs, 0 metrics outside band |
