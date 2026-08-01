@@ -352,8 +352,15 @@ export function applySecondAttempt(save: SaveGame, boutId: BoutId, choice: Secon
       me.wear.weightCut = clamp(me.wear.weightCut - 2, 0, 100);
       break;
     case 'accept-miss':
-      state.log.push(`${me.name} accepts the miss.`);
-      break;
+      // The other camp decides whether the bout goes ahead, exactly as the player does when the
+      // opponent is the one who missed. Proceeding straight to the ruling meant the bout was
+      // guaranteed, which made offering a larger forfeit strictly worse: it cost half as much
+      // again and, because it did ask the other camp, could also lose the fight.
+      state.log.push(`${me.name} accepts the miss and the standard forfeit.`);
+      state.purseForfeitPct = 20;
+      state.stage = 'catchweight-negotiation';
+      state.catchweightLb = Math.ceil(state.player?.weightLb ?? state.limitLb);
+      return state;
     case 'offer-larger-forfeit':
       // The offer is made to the other camp, which is the only thing that can keep the bout
       // together. It used to set the higher forfeit and fall straight through to the ruling, so

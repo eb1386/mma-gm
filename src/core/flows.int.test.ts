@@ -371,7 +371,6 @@ describe('title and ranking integrity', () => {
       actualReturn: null,
       cause: 'training',
       trainingCapacity: 0.15,
-      effects: {},
       blocksCompetition: true,
       recurrenceChance: 0.2,
       treatment: 'surgery',

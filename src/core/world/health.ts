@@ -126,33 +126,6 @@ export function createInjury(
   severityScale = 1
 ): Injury {
   const weeks = Math.round(rng.range(template.weeksMin, template.weeksMax) * severityScale);
-  const effects: Injury['effects'] = {};
-  switch (template.area) {
-    case 'knee':
-    case 'ankle':
-    case 'foot':
-    case 'hip':
-      effects.wrestling = -template.severity * 1.8;
-      effects.cardio = -template.severity * 0.8;
-      break;
-    case 'shoulder':
-    case 'elbow':
-    case 'hand':
-      effects.striking = -template.severity * 2.0;
-      effects.grappling = -template.severity * 0.9;
-      break;
-    case 'back':
-    case 'ribs':
-      effects.cardio = -template.severity * 1.4;
-      effects.wrestling = -template.severity * 1.1;
-      break;
-    case 'head':
-    case 'neck':
-      effects.durability = -template.severity * 2.2;
-      break;
-    default:
-      effects.durability = -template.severity * 0.8;
-  }
   return {
     id: `inj-${on}-${template.area}-${Math.floor(rng.next() * 1e6)}`,
     type: template.type,
@@ -163,7 +136,6 @@ export function createInjury(
     actualReturn: null,
     cause,
     trainingCapacity: template.trainingCapacity,
-    effects,
     blocksCompetition: template.blocksCompetition,
     recurrenceChance: template.recurrence,
     treatment: 'rest',

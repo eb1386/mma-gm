@@ -615,6 +615,15 @@ export function pruneCallouts(save: SaveGame, keepDays = 400): number {
     if (c.status === 'open' && c.expiresOn < save.date) {
       c.status = 'expired';
       c.responseText = 'The callout went unanswered and the moment passed.';
+      // Saying nothing is one of the answers, with its own consequences, and letting the clock
+      // run out is saying nothing. It used to set this label and stop, so ignoring a callout was
+      // the one response that cost nothing at all and was therefore always the safe choice.
+      const from = save.fighters[c.fromId];
+      const to = save.fighters[c.toId];
+      if (from && to) applyCalloutResponse(save, c, 'silence', to.name, from.name);
+      // The status is restored, because applying a response marks it answered and this one was
+      // not answered. The record should say the moment passed.
+      c.status = 'expired';
     }
     if (daysBetween(c.madeOn, save.date) > keepDays) {
       delete s[id];

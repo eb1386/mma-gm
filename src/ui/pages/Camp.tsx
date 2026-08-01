@@ -4,7 +4,7 @@ import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
 import { addDays, daysBetween, formatDate, formatMoney } from '@core/types/common';
 import { RATING_KEYS, RATING_LONG_LABEL, type RatingKey } from '@core/types/fighter';
 import type { CampFocus, GamePlanKey, TrainingCamp } from '@core/types/world';
-import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus } from '@core/world/camp';
+import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus, setFocusShare } from '@core/world/camp';
 import { activeInjuries, trainingCapacityOf } from '@core/world/health';
 import { useGame } from '../store';
 import { planSourceLabel, recallPlan, rememberPlan } from '@core/world/gameplan-memory';
@@ -22,7 +22,8 @@ export function CampPage() {
 
   const [presetKey, setPresetKey] = useState('balanced');
   const preset = CAMP_PRESETS.find((p) => p.key === presetKey)!;
-  const [focus, setFocus] = useState<CampFocus>(preset.focus);
+  // Normalised on the way in, so the six shares always add up to one whole camp.
+  const [focus, setFocus] = useState<CampFocus>(() => normalizeFocus(preset.focus));
   const [intensity, setIntensity] = useState(preset.intensity);
   // The plan opens on whatever was last chosen for this bout, or the last plan used
   // anywhere. It is a default and stays editable; it is never reset on remount.
@@ -65,13 +66,17 @@ export function CampPage() {
   const applyPreset = (key: string) => {
     const p = CAMP_PRESETS.find((x) => x.key === key)!;
     setPresetKey(key);
-    setFocus(p.focus);
+    setFocus(normalizeFocus(p.focus));
     setIntensity(p.intensity);
     // A preset suggests a plan, but never overwrites a plan the player has already set.
     if (!recalled.remembered) setPlans(p.plans);
   };
 
   const totalFocus = RATING_KEYS.reduce((s, k) => s + focus[k], 0);
+
+  // The allocation rule lives in the core, so the camp the player builds and the camp the engine
+  // runs agree about what a share means.
+  const setShare = (key: RatingKey, nextShare: number) => setFocus(setFocusShare(focus, key, nextShare));
 
   const startCamp = async () => {
     if (!bout || busy) return;
@@ -229,13 +234,12 @@ export function CampPage() {
                   type="range"
                   min={0}
                   max={100}
-                  // The slider shows and writes the same quantity, the raw weight. It used to show
-                  // the normalised share and write the raw value, so the thumb jumped away from
-                  // wherever it was dragged as soon as the total changed.
-                  value={Math.round(focus[k] * 100)}
-                  onChange={(e) => setFocus({ ...focus, [k]: Number(e.target.value) / 100 })}
+                  // The slider shows and writes the same quantity, this area's share of the camp,
+                  // and the six shares always add up to one, so the thumb stays where it is put.
+                  value={Math.round((focus[k] / Math.max(0.0001, totalFocus)) * 100)}
+                  onChange={(e) => setShare(k, Number(e.target.value) / 100)}
                 />
-                <span className="num mono small" title="Share of camp time once every weight is taken together">
+                <span className="num mono small" title="Share of camp time given to this area">
                   {Math.round((focus[k] / Math.max(0.0001, totalFocus)) * 100)}%
                 </span>
               </div>

@@ -136,6 +136,20 @@ interface GameState {
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
+ * Careers that have been deleted in this session.
+ *
+ * Any write naming one of these is dropped. Cancelling the debounce is not enough on its own,
+ * because an operation that is still finishing will queue its own write afterwards and put the
+ * deleted career back.
+ */
+const deletedSaveIds = new Set<string>();
+
+function persistUnlessDeleted(save: SaveGame | null): void {
+  if (!save || deletedSaveIds.has(save.saveId)) return;
+  void saveGame(save);
+}
+
+/**
  * Writes any pending debounced save immediately.
  *
  * The 700ms debounce means a change made just before the tab closes or the career is swapped was
@@ -145,7 +159,7 @@ export function flushPendingSave(save: SaveGame | null): void {
   if (!persistTimer) return;
   clearTimeout(persistTimer);
   persistTimer = null;
-  if (save) void saveGame(save);
+  persistUnlessDeleted(save);
 }
 
 /**
@@ -155,7 +169,8 @@ export function flushPendingSave(save: SaveGame | null): void {
  * save flushes whatever write was still queued for it, which wrote the deleted career straight
  * back. The queued write has to be dropped before the record is removed.
  */
-export function discardPendingSave(): void {
+export function discardPendingSave(saveId?: string): void {
+  if (saveId) deletedSaveIds.add(saveId);
   if (!persistTimer) return;
   clearTimeout(persistTimer);
   persistTimer = null;
@@ -218,8 +233,7 @@ export const useGame = create<GameState>((set, get) => ({
     set({ save: { ...save }, revision: get().revision + 1 });
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
-      const current = get().save;
-      if (current) void saveGame(current);
+      persistUnlessDeleted(get().save);
       persistTimer = null;
     }, 700);
     return result;
@@ -334,11 +348,16 @@ export const useGame = create<GameState>((set, get) => ({
         eventsResolved: advanceReport.eventsResolved,
         headlines: advanceReport.headlines,
         stoppedBecause: advanceReport.stoppedBecause,
+        // A bout on the night comes first, then the inbox. Stopping because something arrived and
+        // then leaving the player wherever they were is how a message goes unread and the clock
+        // appears to be stuck for no reason.
         navigateTo: advanceReport.playerBoutPending
           ? `/fight/${advanceReport.playerBoutPending}`
-          : after.advanceBlocked
-            ? actionRoute(after.action)
-            : null,
+          : advanceReport.inboxWaiting
+            ? '/inbox'
+            : after.advanceBlocked
+              ? actionRoute(after.action)
+              : null,
         summary: `${advanceReport.daysAdvanced} day${advanceReport.daysAdvanced === 1 ? '' : 's'} passed.${after.action ? ` Next: ${after.action.label}.` : ''}`,
       };
     });

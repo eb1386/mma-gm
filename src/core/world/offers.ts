@@ -425,9 +425,11 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
     divisionId: offer.divisionId,
     contractedWeightLb: offer.contractedWeightLb,
     scheduledRounds: offer.scheduledRounds,
-    // Five rounds on a bout that is neither for a belt nor the main event can only have come
-    // from the negotiation, and the card ordering pass would otherwise reset it to three.
-    roundsAgreed: offer.scheduledRounds === 5,
+    // Only when five rounds were actually negotiated. A championship bout and a main event get
+    // five rounds from the card ordering pass anyway, and marking those as agreed made the bout
+    // keep five rounds after losing the main event slot to a bigger fight, which is not what the
+    // player agreed to and not how the card works.
+    roundsAgreed: offer.scheduledRounds === 5 && !offer.isMainEvent && !isChampionshipBout(offer),
     isTitleFight: offer.isTitleFight,
     isInterimTitleFight: offer.isInterimTitleFight,
     titleIneligibleFighterIds: [],

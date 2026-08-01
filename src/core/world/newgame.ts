@@ -422,6 +422,9 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
         country: opts.coach.newGym.country,
         countryCode: bank.code,
         city: opts.coach.newGym.city,
+        // A gym founded this morning is not as well regarded as one that has been running for
+        // years. Without this it draws the roster average and starts out as reputable as anywhere.
+        reputation: 18,
         isPlayerControlled: true,
       });
       hireStaff(save, gym, 'head-coach', rng, 45);

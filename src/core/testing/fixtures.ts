@@ -144,7 +144,6 @@ export function makeInjury(on: IsoDate, opts: { blocking?: boolean; severity?: 1
     actualReturn: null,
     cause: 'training',
     trainingCapacity: blocking ? 0.25 : 0.7,
-    effects: {},
     blocksCompetition: blocking,
     recurrenceChance: 0.2,
     treatment: 'rest',

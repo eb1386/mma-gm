@@ -689,3 +689,80 @@ careers, and the gap between neighbouring settings is under a point, so a single
 inverted it. Measured over eight careers the ordering is clean and monotonic, at minus 13.59,
 13.14, 12.25 and 11.64 Ovr points relative to the player across easy, normal, hard and brutal. The
 test now samples what was actually verified.
+
+
+---
+
+# Eighth pass, and the things the player found
+
+The eighth wave verified the seventh: 52 agents, 46 verdicts, 15 refuted, 31 confirmed, which
+consolidated to 16 distinct defects in the previous day's work. One of them was mine from a
+careless regular expression: removing a dead field also deleted the deliberate starting reputation
+on a player founded gym, so a gym opened that morning was as well regarded as one that had been
+running for years.
+
+The two that mattered most were both cases of a fix that did not actually run. Points on the gate
+were paid from the per bout loop, and the night's buy figure is not computed until the card closes,
+so the payment read a record that did not exist yet and paid zero to everyone: the fix from the
+day before was inert. And injuries carried into a fight were being counted twice, because the
+engine has always modelled them by area and severity and the new code subtracted a second stored
+rating map on top. That map is now gone; one model, not two.
+
+Also from the wave: released NPCs re-entered the contract renewal pass every week and were
+re-released, pushing an identical news item every Monday until the world's history was nothing but
+release notices; the one fight weight move was guarded on a status no code ever writes, so it was
+unreachable and the move was permanent after all; the stale interim strip ran after the champion
+strip, so a stale interim was promoted to undisputed instead of being vacated; the larger purse
+forfeit at the weigh in had become strictly worse than accepting the miss; room decisions acted on
+fighters who had already left the gym and told the player they had agreed to stay; the skip
+penalty was erased by the next hype recompute; and no NPC champion could ever move weight, because
+the damping put every champion below the candidate threshold, which made the double champion path
+unreachable for anyone but the player.
+
+## What the player reported, and what was actually wrong
+
+Four things came back from playing rather than from auditing. Every one was real.
+
+**The camp focus sliders did nothing.** They were six independent weights, and the percentage
+beside each was that weight over their total, so every slider at the top gave exactly the same
+camp as every slider at the bottom. They are shares of one camp now: moving one takes its time
+from the others in proportion, and the six always add up.
+
+**A champion who lost the belt became unranked.** A champion is deliberately kept out of the
+ranked entries while they hold the title, so their points sit frozen for the length of the reign.
+Rejoining on that stale total could drop them out of the fifteen entirely. A fighter now re-enters
+at number three or better however the reign ended. Measured over three simulated years: 24 title
+changes, zero deposed champions unranked.
+
+**Notifications did not stop the clock.** Advancement only halted for messages that demanded an
+answer, so a camp report or a fight week stage opening arrived silently while the weeks rolled on,
+and even when it did stop it sent the player to an action page rather than to the inbox.
+
+**The matchmaker made fights nobody would make.** Every mismatch rule was a score penalty rather
+than a refusal, and a penalty only picks the best of the legal fights, so when a division ran thin
+a mismatch was the best available and got booked. Measured over one simulated year: 17 of 173
+scheduled bouts, one in ten, were a top five fighter against an unranked opponent, five of them
+against a losing record, including a number one contender against a fighter at two and two. Three
+pairings are refused outright now, and the same measurement gives 2 of 169, both defensible. A
+live callout is exempt, because that is the stated reason an unusual fight gets made, and an
+agreed callout now produces the fight rather than entering a weighted draw it could lose.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | clean |
+| default tier | 371 passed |
+| world | 7 passed, including the five year run |
+| flow | 171 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 36 passed, desktop and mobile |
+| activity bands | 1.28 / 2.50 / 2.37 / 2.50, all in band |
+| calibration | 93.74 / 6.26 / 0.00 |
+| acceptance | 5 runs, 0 metrics outside band |
+
+The bands moved with the matchmaking gate, which is what they are for: champion activity came down
+and unranked activity went up, because the fights that used to be given to unranked fighters
+against contenders are now made between unranked fighters instead. All four stayed inside their
+bands.

@@ -378,7 +378,10 @@ export function ensureDivisionSpell(save: SaveGame, fighter: Fighter): DivisionS
 export function settleOneFightMoves(save: SaveGame): string[] {
   const notes: string[] = [];
   for (const [fighterId, plan] of Object.entries(planStore(save))) {
-    if (plan.kind !== 'one-fight' || plan.status !== 'committed') continue;
+    // `commitMove` records a committed move as completed, so that is the state to look for. The
+    // guard used to test for a status no code ever writes, which made this whole function
+    // unreachable and left the one fight move exactly as permanent as it had been.
+    if (plan.kind !== 'one-fight' || plan.status !== 'completed') continue;
     const fighter = save.fighters[fighterId];
     if (!fighter || fighter.retired) continue;
     if (fighter.divisionId !== plan.toDivisionId) continue;
@@ -389,8 +392,8 @@ export function settleOneFightMoves(save: SaveGame): string[] {
     if (booked && booked.status === 'scheduled') continue;
     // A fighter who won a belt up there is not going anywhere. The move stopped being a visit.
     if (fighter.isChampion || fighter.isInterimChampion) {
-      plan.status = 'completed';
       plan.kind = 'permanent';
+      plan.status = 'completed';
       notes.push(`${fighter.name} stays at ${DIVISION_BY_ID[plan.toDivisionId].name} with the title.`);
       continue;
     }
@@ -404,8 +407,12 @@ export function settleOneFightMoves(save: SaveGame): string[] {
     fighter.walkingWeightLb = home.limitLb + Math.min(home.typicalWalkAroundOverLb, Math.max(2, fighter.walkingWeightLb - DIVISION_BY_ID[plan.toDivisionId].limitLb));
     if (!fighter.eligibleDivisions.includes(home.id)) fighter.eligibleDivisions.push(home.id);
     ensureDivisionSpell(save, fighter);
+    // The plan has become a return, which is also what stops this from running again.
+    plan.kind = 'return';
+    plan.fromDivisionId = DIVISION_BY_ID[plan.toDivisionId].id;
+    plan.toDivisionId = home.id;
     plan.status = 'completed';
-    notes.push(`${fighter.name} returns to ${home.name} after the one off at ${DIVISION_BY_ID[plan.toDivisionId].name}.`);
+    notes.push(`${fighter.name} returns to ${home.name} after the one off at ${DIVISION_BY_ID[plan.fromDivisionId].name}.`);
   }
   return notes;
 }

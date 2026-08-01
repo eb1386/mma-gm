@@ -141,8 +141,11 @@ export interface Injury {
   cause: 'training' | 'sparring' | 'weight-cut' | 'fight' | 'accumulated' | 'accident';
   /** Multiplicative training capacity while injured, 0 to 1. */
   trainingCapacity: number;
-  /** Rating effects applied while active. */
-  effects: Partial<Record<keyof Ratings, number>>;
+  /**
+   * How the injury is felt in the cage is derived from its area and severity by the fight engine,
+   * which also decides whether it blocks kicks or takedowns. A second stored map of rating
+   * penalties used to sit here, read by nothing, describing the same thing differently.
+   */
   blocksCompetition: boolean;
   recurrenceChance: number;
   treatment: 'none' | 'rest' | 'rehab' | 'train-around' | 'surgery';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from './rng';
 import { addDays } from './types/common';
-import { DIVISION_BY_ID } from './config/divisions';
+import { DIVISION_BY_ID, DIVISIONS } from './config/divisions';
 import { createEvent, newCareer, runWorld } from './testing/fixtures';
 import {
   existingTitleBout,
@@ -21,7 +21,7 @@ import {
 import { runMatchupInterestPass } from './world/matchup-pass';
 import { assessChampionMove, commitMove, explore, pickDebutOpponent, enforceAbsentChampions } from './world/weightclass';
 import { applyRelationship, makeCallout, resolveCallout } from './world/relationships';
-import { bookEvent, findBestOpponent, isAvailable, openOfferFighterIds } from './world/matchmaking';
+import { bookEvent, findBestOpponent, isAvailable, openOfferFighterIds, scoreCandidate } from './world/matchmaking';
 import { createFightOffer } from './world/offers';
 import { careerStatus } from './world/career';
 import { createContractOffer, signContractOffer } from './world/economy';
@@ -1266,5 +1266,59 @@ describe('being out of contract', () => {
     contract.fightsRemaining = 0;
     // Exhausted and expired are the same thing to a player: no fights arrive.
     expect(careerStatus(f.save).state).toBe('free-agent');
+  });
+});
+
+describe('the matchmaker refuses fights it would never make', () => {
+  const bookableEventFor = (save: SaveGame) =>
+    Object.values(save.events)
+      .filter((e) => e.status === 'announced')
+      .sort((a, b) => a.date.localeCompare(b.date))[3];
+
+  it('will not put a top five fighter in with an unranked opponent who has not earned it', () => {
+    const f = newCareer(9840);
+    runWorld(f.save, 8);
+    const divisionId = DIVISIONS[0].id;
+    const contenderTier = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking !== null && x.ranking <= 5
+    )!;
+    const nobody = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking === null && x.winStreak === 0 && !x.isChampion
+    )!;
+    const event = bookableEventFor(f.save);
+    expect(scoreCandidate(f.save, contenderTier, nobody, event, new Rng(3))).toBeNull();
+  });
+
+  it('will not match a ranked fighter with anyone on a losing promotional record', () => {
+    const f = newCareer(9841);
+    runWorld(f.save, 8);
+    const divisionId = DIVISIONS[0].id;
+    const ranked = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking !== null && x.ranking > 5
+    )!;
+    const losing = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking === null && x.ufcRecord.losses > x.ufcRecord.wins
+    );
+    if (!losing) return;
+    // Even a streak does not make this one bookable.
+    losing.winStreak = 9;
+    const event = bookableEventFor(f.save);
+    expect(scoreCandidate(f.save, ranked, losing, event, new Rng(3))).toBeNull();
+  });
+
+  it('still takes a genuine prospect on a run', () => {
+    const f = newCareer(9842);
+    runWorld(f.save, 8);
+    const divisionId = DIVISIONS[0].id;
+    const ranked = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking !== null && x.ranking > 5
+    )!;
+    const prospect = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking === null && !x.isChampion && x.id !== ranked.id
+    )!;
+    prospect.winStreak = 5;
+    prospect.ufcRecord = { wins: 6, losses: 1, draws: 0, noContests: 0 };
+    const event = bookableEventFor(f.save);
+    expect(scoreCandidate(f.save, ranked, prospect, event, new Rng(3))).not.toBeNull();
   });
 });

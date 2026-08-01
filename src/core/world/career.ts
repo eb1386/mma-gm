@@ -8,6 +8,7 @@ import { FIGHT_WEEK_DAYS } from './availability';
 import { pendingStages, stageLabel, type FightWeekStage } from './fightweek';
 import type { AdvanceTarget } from './advance-target';
 import { DIVISION_BY_ID } from '../config/divisions';
+import { isFinish } from '../types/fight';
 
 /**
  * The player career state machine.
@@ -430,7 +431,14 @@ export function awardAchievement(save: SaveGame, key: string, label: string): bo
   return true;
 }
 
-/** Milestones derived from the career as it stands. Checked after every result. */
+/**
+ * Milestones from this save, checked each week.
+ *
+ * Measured against what has happened inside this career, not against the totals a fighter
+ * arrives with. Reading the lifetime counters awarded a first finish and a place in the rankings
+ * on the opening day, from a record made before the save began, and then awarded the first win
+ * three months later when a real one happened. The order alone gave it away.
+ */
 export function recordAchievements(save: SaveGame): string[] {
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
   if (!me) return [];
@@ -438,19 +446,29 @@ export function recordAchievements(save: SaveGame): string[] {
   const claim = (key: string, label: string, earned: boolean) => {
     if (earned && awardAchievement(save, key, label)) won.push(label);
   };
+
+  // Only bouts this save simulated. Anything else belongs to a career the player did not manage.
+  const mine = me.boutIds.map((id) => save.history.results[id]).filter(Boolean);
+  const wins = mine.filter((r) => r.winnerId === me.id);
+  const finishes = wins.filter((r) => isFinish(r.method));
+  const reigns = save.history.reigns.filter((r) => r.fighterId === me.id && !r.isInterim);
+  const defenses = reigns.reduce((t, r) => t + r.defenses, 0);
+  const divisionsHeld = new Set(reigns.map((r) => r.divisionId));
   const division = DIVISION_BY_ID[me.divisionId];
-  claim('first-win', 'First win in the promotion', me.ufcRecord.wins >= 1);
-  claim('first-finish', 'First finish', me.methods.koWins + me.methods.subWins >= 1);
-  claim('ranked', 'Broke into the rankings', me.highestRanking !== null);
-  claim('top-five', 'Reached the top five', me.highestRanking !== null && me.highestRanking <= 5);
-  claim('contender', 'Reached number one contender', me.highestRanking === 1);
-  claim('champion', `Won the ${division?.name ?? 'divisional'} championship`, me.titleReigns >= 1);
-  claim('defended', 'Defended the championship', me.titleDefenses >= 1);
-  claim('dynasty', 'Defended the championship five times', me.titleDefenses >= 5);
-  claim('two-division', 'Held a title in two divisions', me.titleReigns >= 2 && new Set(me.eligibleDivisions).size > 1);
-  claim('ten-wins', 'Ten wins in the promotion', me.ufcRecord.wins >= 10);
-  claim('twenty-fights', 'Twenty fights in the promotion', me.ufcRecord.wins + me.ufcRecord.losses + me.ufcRecord.draws >= 20);
-  claim('millionaire', 'Career earnings past one million', me.careerEarnings >= 1_000_000);
+
+  claim('first-fight', 'First fight in the promotion', mine.length >= 1);
+  claim('first-win', 'First win in the promotion', wins.length >= 1);
+  claim('first-finish', 'First finish', finishes.length >= 1);
+  claim('ranked', 'Broke into the rankings', me.ranking !== null);
+  claim('top-five', 'Reached the top five', me.ranking !== null && me.ranking <= 5);
+  claim('number-one', 'Reached number one contender', me.ranking === 1);
+  claim('champion', `Won the ${division?.name ?? 'divisional'} championship`, reigns.length >= 1);
+  claim('defended', 'Defended the championship', defenses >= 1);
+  claim('dynasty', 'Defended the championship five times', defenses >= 5);
+  claim('two-division', 'Held a title in two divisions', divisionsHeld.size >= 2);
+  claim('ten-wins', 'Ten wins in the promotion', wins.length >= 10);
+  claim('twenty-fights', 'Twenty fights in the promotion', mine.length >= 20);
+  claim('millionaire', 'Career earnings past one million', (save.finance?.careerEarnings ?? 0) >= 1_000_000);
   claim('hall-of-fame', 'Inducted into the Hall of Fame', me.hallOfFameYear !== null);
   return won;
 }

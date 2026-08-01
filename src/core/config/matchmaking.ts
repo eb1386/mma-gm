@@ -145,6 +145,29 @@ export const MATCHMAKING = {
     fillerPenalty: 10,
   },
 
+  /**
+   * Pairings the matchmaker refuses outright, rather than scoring down.
+   *
+   * Everything else here is a weight, and a weight only decides which of the legal fights is
+   * best. When a division was thin, a badly scored pairing was still the highest scoring one
+   * available and got made anyway: a number one contender against an unranked opponent, or a
+   * fighter on a losing run given a top five contender. Those are not fights a matchmaker would
+   * consider at all, so they are refused rather than discouraged.
+   */
+  gate: {
+    /** Ranks treated as the title picture. A fighter here is fighting for position, not filling a card. */
+    contenderRank: 5,
+    /** Consecutive wins an unranked fighter needs before a top five fighter will take the fight. */
+    prospectStreakForTopFive: 3,
+    /** Consecutive wins an unranked fighter needs before any ranked fighter will take the fight. */
+    prospectStreakForRanked: 2,
+    /**
+     * A ranked fighter does not face somebody whose promotional record is losing. Beating them
+     * proves nothing and losing to them costs everything, which is exactly why it is not booked.
+     */
+    refuseRankedAgainstLosingRecord: true,
+  },
+
   /** Random jitter so a long save stays varied. Applied last. */
   jitter: 7,
 

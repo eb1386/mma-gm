@@ -517,7 +517,9 @@ function CeremonialWeighInStage({ task, busy, onComplete, mutate }: { task: Figh
     {
       key: 'ceremonial-callout',
       label: 'Take the microphone',
-      detail: 'Say who you want next, in front of everyone.',
+      // Deliberately not a promise to name an opponent. Naming one is a callout, which is made
+      // from the career page against a chosen target, and this stage has no target to offer.
+      detail: 'Sell the fight in your own words, in front of everyone.',
       effects: { hype: 7, promotionRelationship: -3, rivalry: 5 },
       risk: 'The promotion does not enjoy having its matchmaking done for it.',
     },

@@ -410,6 +410,38 @@ function isHolder(table: DivisionRankings, fighterId: FighterId, interim: boolea
 }
 
 /**
+ * The best a fighter who has just lost a belt can be ranked when they rejoin the list.
+ *
+ * A champion is kept out of the ranked entries while they hold the title, so their points sit
+ * still for the length of the reign. When the belt changed hands they rejoined on that stale
+ * total and could land outside the fifteen entirely, which is how a fighter could lose a title
+ * fight on Saturday and be unranked on Monday. Losing the belt costs the belt. It does not cost
+ * everything that earned it.
+ */
+export const DEPOSED_CHAMPION_MIN_RANK = 3;
+
+/** Points added on top of the threshold, so the placing is clear rather than a tie. */
+export const DEPOSED_CHAMPION_MARGIN = 0.5;
+
+export function seedDeposedChampion(save: SaveGame, divisionId: DivisionId, fighterId: FighterId): void {
+  const ledger = rankingLedger(save, divisionId);
+  const rivals = Object.values(save.fighters)
+    .filter(
+      (f) =>
+        f.divisionId === divisionId &&
+        f.id !== fighterId &&
+        !f.retired &&
+        f.activityStatus === 'active' &&
+        save.rankings[divisionId]?.championId !== f.id
+    )
+    .map((f) => ledger[f.id] ?? 0)
+    .sort((a, b) => b - a);
+  // The total that clears whoever currently sits at the guaranteed placing.
+  const threshold = rivals[DEPOSED_CHAMPION_MIN_RANK - 1] ?? 0;
+  ledger[fighterId] = Math.max(ledger[fighterId] ?? 0, threshold + DEPOSED_CHAMPION_MARGIN);
+}
+
+/**
  * Makes every champion flag agree with the ranking tables.
  *
  * The tables are the record of who holds what. The flags on the fighter are a convenience for
@@ -459,7 +491,11 @@ function vacateTitle(save: SaveGame, result: FightResult, interim: boolean, reas
     const held = save.fighters[open.fighterId];
     if (held) {
       if (interim) held.isInterimChampion = false;
-      else held.isChampion = false;
+      else {
+        held.isChampion = false;
+        // However the reign ended, they rejoin the list near the top rather than nowhere.
+        seedDeposedChampion(save, result.divisionId, held.id);
+      }
     }
   }
   if (interim) table.interimChampionId = null;
@@ -572,6 +608,9 @@ export function applyTitleOutcome(save: SaveGame, result: FightResult): string[]
   winner.titleReigns++;
   if (loser) {
     loser.isChampion = false;
+    // A former champion rejoins the rankings near the top rather than from wherever their points
+    // happened to be when the reign started.
+    seedDeposedChampion(save, result.divisionId, loser.id);
   }
   const oldReign = save.history.reigns.find((r) => r.divisionId === result.divisionId && r.lostOn === null && !r.isInterim);
   if (oldReign) {

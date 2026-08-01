@@ -11,10 +11,12 @@ import { migrateSave } from './save/migrate';
 import { importSaveFromFile } from './save/store';
 import { pruneLedger, record, summarize } from './world/finance';
 import { createContractOffer, signContractOffer } from './world/economy';
+import { CAMP_PRESETS, normalizeFocus, setFocusShare } from './world/camp';
+import { RATING_KEYS } from './types/fighter';
 import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
 import { DIFFICULTY } from './config/calibration';
 import { DIVISIONS } from './config/divisions';
-import { reconcileChampionFlags } from './world/rankings';
+import { addRankingPoints, recomputeDivision, reconcileChampionFlags, seedDeposedChampion } from './world/rankings';
 import { ovrRaw } from './types/fighter';
 import { DEFAULT_FEATURE_FLAGS, DEFAULT_SETTINGS, SAVE_SCHEMA_VERSION } from './types/save';
 import type { SaveGame } from './types/save';
@@ -549,6 +551,48 @@ describe('a gym is credited for the fighters it gets ranked', () => {
   });
 });
 
+describe('the camp focus sliders are one camp, not six dials', () => {
+  const total = (f: ReturnType<typeof normalizeFocus>) => RATING_KEYS.reduce((t, k) => t + f[k], 0);
+
+  it('always adds up to the whole camp, whatever is moved', () => {
+    // Every slider at the top used to give the same camp as every slider at the bottom, because
+    // the share shown was each weight over their total. Nothing the player did to them mattered.
+    let focus = normalizeFocus(CAMP_PRESETS[0].focus);
+    expect(total(focus)).toBeCloseTo(1, 6);
+    for (const [key, share] of [
+      ['striking', 0.5],
+      ['wrestling', 0.4],
+      ['striking', 1],
+      ['cardio', 0.3],
+      ['cardio', 0],
+      ['durability', 0.25],
+    ] as const) {
+      focus = setFocusShare(focus, key, share);
+      expect(total(focus), `after setting ${key} to ${share}`).toBeCloseTo(1, 6);
+      expect(focus[key]).toBeCloseTo(share, 6);
+      for (const k of RATING_KEYS) expect(focus[k]).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('takes time from the others in proportion to what they had', () => {
+    const focus = normalizeFocus({ striking: 0.4, grappling: 0.2, wrestling: 0.2, submissions: 0.1, cardio: 0.1, durability: 0 });
+    const next = setFocusShare(focus, 'striking', 0.6);
+    // Grappling and wrestling were equal before, so they stay equal after.
+    expect(next.grappling).toBeCloseTo(next.wrestling, 6);
+    // And each keeps its relative standing against the others.
+    expect(next.grappling / next.submissions).toBeCloseTo(focus.grappling / focus.submissions, 6);
+  });
+
+  it('splits evenly when one area had taken the whole camp', () => {
+    let focus = normalizeFocus(CAMP_PRESETS[0].focus);
+    focus = setFocusShare(focus, 'striking', 1);
+    for (const k of RATING_KEYS) if (k !== 'striking') expect(focus[k]).toBeCloseTo(0, 6);
+    focus = setFocusShare(focus, 'striking', 0.5);
+    expect(total(focus)).toBeCloseTo(1, 6);
+    for (const k of RATING_KEYS) if (k !== 'striking') expect(focus[k]).toBeCloseTo(0.1, 6);
+  });
+});
+
 describe('being released is a setback, not the end of a career', () => {
   it('approaches a released fighter again and lets them sign', () => {
     // A release set the contract status to released, and the renewal pass only looked at expired,
@@ -602,6 +646,44 @@ describe('a bad save file is refused with a reason', () => {
     const future = JSON.parse(JSON.stringify(f.save));
     future.schemaVersion = 9999;
     await expect(importSaveFromFile(asFile(JSON.stringify(future)))).rejects.toThrow(/newer version/i);
+  });
+});
+
+describe('losing a belt costs the belt, not everything that earned it', () => {
+  it('puts a deposed champion back into the top three, not out of the rankings', () => {
+    // A champion is kept out of the ranked entries while they hold the title, so their points sit
+    // still for the length of the reign. Rejoining on that stale total could leave them outside
+    // the fifteen entirely: a title fight lost on Saturday, unranked on Monday.
+    const f = newCareer(9830);
+    const divisionId = DIVISIONS[0].id;
+    const table = f.save.rankings[divisionId];
+    const champion = f.save.fighters[table.championId!];
+
+    seedDeposedChampion(f.save, divisionId, champion.id);
+    table.championId = null;
+    champion.isChampion = false;
+    recomputeDivision(f.save, divisionId, new Map());
+
+    expect(champion.ranking).not.toBeNull();
+    expect(champion.ranking!).toBeLessThanOrEqual(3);
+  });
+
+  it('does not displace a fighter who has earned a better standing', () => {
+    const f = newCareer(9831);
+    const divisionId = DIVISIONS[0].id;
+    const table = f.save.rankings[divisionId];
+    const champion = f.save.fighters[table.championId!];
+    // Somebody with a commanding lead stays ahead of a returning champion.
+    const leader = f.save.fighters[table.entries[0].fighterId];
+    addRankingPoints(f.save, divisionId, leader.id, 500);
+
+    seedDeposedChampion(f.save, divisionId, champion.id);
+    table.championId = null;
+    champion.isChampion = false;
+    recomputeDivision(f.save, divisionId, new Map());
+
+    expect(leader.ranking).toBe(1);
+    expect(champion.ranking!).toBeLessThanOrEqual(3);
   });
 });
 

@@ -1,6 +1,6 @@
 import { clamp } from '../rng';
 import { addDays, daysBetween, type BoutId, type IsoDate } from '../types/common';
-import { hypeStore } from './hype';
+import { addHypeMoment, hypeStore } from './hype';
 import { isChampionshipBout } from '../types/fight';
 import type { SaveGame } from '../types/save';
 
@@ -274,8 +274,11 @@ export function skipStage(save: SaveGame, taskIdValue: string, reason: string): 
       me.fame.mediaFriendliness = clamp(me.fame.mediaFriendliness - SKIP_STAGE_MEDIA, 0, 100);
       me.fame.promotionalTrust = clamp(me.fame.promotionalTrust - SKIP_STAGE_GOODWILL, 0, 100);
     }
-    const hype = hypeStore(save)[task.boutId];
-    if (hype) hype.total = clamp(hype.total - SKIP_STAGE_HYPE, 0, 100);
+    // Recorded as a moment rather than subtracted from the total, because the weekly recompute
+    // rebuilds the total from the moments and would have erased a direct subtraction.
+    if (hypeStore(save)[task.boutId]) {
+      addHypeMoment(save, task.boutId, `${me.name} skipped the ${task.stage.replace(/-/g, ' ')}`, -SKIP_STAGE_HYPE);
+    }
   }
   return task;
 }

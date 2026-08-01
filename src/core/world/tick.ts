@@ -7,7 +7,7 @@ import { simulateFight, type FightSimOptions } from '../sim/engine';
 import type { GamePlanKey, FightCardEvent } from '../types/world';
 import { addDays, ageOn, dayOfWeek, daysBetween, formatDate, yearOf, type BoutId, type IsoDate } from '../types/common';
 import { isChampionshipBout, isFinish, type Bout, type FightResult } from '../types/fight';
-import { ovrDisplayed, RATING_KEYS, type Fighter, type RatingKey } from '../types/fighter';
+import { ovrDisplayed, type Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { autoCampFor, finalizeCamp, runCampWeek } from './camp';
 import { applyPopularity, assignEventBonuses, computeLeverage, createContractOffer, decayPopularity, generateContract, popularityFromResult, purseForBout } from './economy';
@@ -50,7 +50,7 @@ import { pruneGamePlans } from './gameplan-memory';
 import { syncCareerState, recordAchievements } from './career';
 import './decision-handlers';
 import { PROMOTION_CONTRACTS } from '../config/branding';
-import { applyResultToRankings, applyTitleOutcome, reconcileChampionFlags, recomputeDivision, recomputePfp } from './rankings';
+import { applyResultToRankings, applyTitleOutcome, reconcileChampionFlags, recomputeDivision, recomputePfp, seedDeposedChampion } from './rankings';
 import { generateFighter } from './generator';
 import { closeCompetingOffers, createFightOffer, expireOffers } from './offers';
 import { addInboxMessage, messageNeedsAction, reconcileInbox } from './inbox';
@@ -97,6 +97,14 @@ export interface AdvanceReport {
   headlines: string[];
   stoppedBecause: string | null;
   playerBoutPending: BoutId | null;
+  /**
+   * Advancement stopped because something arrived in the inbox.
+   *
+   * The caller uses this to take the player there. Stopping without saying where to look meant a
+   * message could arrive, the clock could halt, and the player would be left on whatever page
+   * they happened to be on with no indication of why nothing was moving.
+   */
+  inboxWaiting: boolean;
 }
 
 function rngOf(save: SaveGame): Rng {
@@ -225,31 +233,6 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
   };
 }
 
-/**
- * The fighter as they will actually compete, carrying whatever they are hurt with.
- *
- * Every injury already computes a set of rating effects, describing exactly what a bad knee or a
- * damaged hand takes away, and stores them. Nothing read them, so a fighter who took a bout while
- * carrying a knock competed at their full ratings and the injury cost them only training time.
- * A copy is made rather than mutating the fighter, because these effects last as long as the
- * injury does and not a moment longer.
- */
-function carryingInjuries(fighter: Fighter): Fighter {
-  const active = fighter.injuries.filter((i) => !i.actualReturn && !i.blocksCompetition);
-  if (active.length === 0) return fighter;
-  const ratings = { ...fighter.ratings };
-  let changed = false;
-  for (const injury of active) {
-    for (const key of RATING_KEYS as readonly RatingKey[]) {
-      const delta = injury.effects[key];
-      if (!delta) continue;
-      ratings[key] = clamp(ratings[key] + delta, 8, 99);
-      changed = true;
-    }
-  }
-  return changed ? { ...fighter, ratings } : fighter;
-}
-
 /** Runs a single bout and applies every consequence to the world. */
 export function resolveBout(
   save: SaveGame,
@@ -292,8 +275,8 @@ export function resolveBout(
     seed: rng.nextUint32(),
     judges: judgePersonasFor(save, assignment, homeAdvantage),
     refereeTendency: refereeTendencyFor(save, assignment) ?? undefined,
-    a: { fighter: carryingInjuries(a), gamePlan: prepA.gamePlan, sharpness: prepA.sharpness, tacticalFamiliarity: prepA.tacticalFamiliarity, cutQuality: prepA.cutQuality, campQuality: prepA.campQuality, shortNotice: prepA.shortNotice },
-    b: { fighter: carryingInjuries(b), gamePlan: prepB.gamePlan, sharpness: prepB.sharpness, tacticalFamiliarity: prepB.tacticalFamiliarity, cutQuality: prepB.cutQuality, campQuality: prepB.campQuality, shortNotice: prepB.shortNotice },
+    a: { fighter: a, gamePlan: prepA.gamePlan, sharpness: prepA.sharpness, tacticalFamiliarity: prepA.tacticalFamiliarity, cutQuality: prepA.cutQuality, campQuality: prepA.campQuality, shortNotice: prepA.shortNotice },
+    b: { fighter: b, gamePlan: prepB.gamePlan, sharpness: prepB.sharpness, tacticalFamiliarity: prepB.tacticalFamiliarity, cutQuality: prepB.cutQuality, campQuality: prepB.campQuality, shortNotice: prepB.shortNotice },
   };
 
   const result = simulateFight(opts);
@@ -959,6 +942,42 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   // same division.
   reconcileChampionFlags(save);
 
+  // An interim champion is held to the same standard as an undisputed one. Nothing stripped or
+  // expired them before, so an interim champion who was suspended, released or simply stopped
+  // fighting kept the belt for ever, and the stale pointer blocked the division from ever
+  // creating another interim title.
+  for (const d of DIVISIONS) {
+    const table = save.rankings[d.id];
+    if (!table.interimChampionId) continue;
+    const interim = save.fighters[table.interimChampionId];
+    if (!interim) {
+      table.interimChampionId = null;
+      continue;
+    }
+    const booked = interim.nextBoutId ? save.bouts[interim.nextBoutId] : null;
+    if (booked && booked.status === 'scheduled') continue;
+    const quiet = interim.lastFightDate ? daysBetween(interim.lastFightDate, save.date) : 999;
+    const unavailable = !canCompete(interim, save.date).ok;
+    if (quiet > 550 || (unavailable && quiet > 430) || interim.retired || interim.activityStatus !== 'active') {
+      table.interimChampionId = null;
+      interim.isInterimChampion = false;
+      const reign = save.history.reigns.find((r) => r.fighterId === interim.id && r.lostOn === null && r.isInterim);
+      if (reign) {
+        reign.lostOn = save.date;
+        reign.endReason = 'stripped';
+      }
+      pushNews(save, {
+        date: save.date,
+        headline: `${interim.name} is stripped of the interim ${d.name} title`,
+        body: `${quiet} days have passed without a defense of the interim championship. The interim title is vacant.`,
+        tags: ['title', d.id],
+        fighterIds: [interim.id],
+        importance: 4,
+      });
+      headlines.push(`${d.name} interim title vacated.`);
+    }
+  }
+
   // A champion who cannot defend for long enough is stripped and the title is vacated,
   // which is what stops an injured or inactive champion from freezing a whole division.
   for (const d of DIVISIONS) {
@@ -980,6 +999,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     if (inactive > 550 || (blocked && inactive > 430) || champ.retired || champ.activityStatus !== 'active') {
       table.championId = null;
       champ.isChampion = false;
+      // Stripped for inactivity is still a former champion, and they rejoin the rankings near the
+      // top rather than dropping out of the division they were champion of.
+      seedDeposedChampion(save, d.id, champ.id);
       const reign = save.history.reigns.find((r) => r.fighterId === champ.id && r.lostOn === null && !r.isInterim);
       if (reign) {
         reign.lostOn = save.date;
@@ -1053,42 +1075,6 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     }
   }
 
-  // An interim champion is held to the same standard as an undisputed one. Nothing stripped or
-  // expired them before, so an interim champion who was suspended, released or simply stopped
-  // fighting kept the belt for ever, and the stale pointer blocked the division from ever
-  // creating another interim title.
-  for (const d of DIVISIONS) {
-    const table = save.rankings[d.id];
-    if (!table.interimChampionId) continue;
-    const interim = save.fighters[table.interimChampionId];
-    if (!interim) {
-      table.interimChampionId = null;
-      continue;
-    }
-    const booked = interim.nextBoutId ? save.bouts[interim.nextBoutId] : null;
-    if (booked && booked.status === 'scheduled') continue;
-    const quiet = interim.lastFightDate ? daysBetween(interim.lastFightDate, save.date) : 999;
-    const unavailable = !canCompete(interim, save.date).ok;
-    if (quiet > 550 || (unavailable && quiet > 430) || interim.retired || interim.activityStatus !== 'active') {
-      table.interimChampionId = null;
-      interim.isInterimChampion = false;
-      const reign = save.history.reigns.find((r) => r.fighterId === interim.id && r.lostOn === null && r.isInterim);
-      if (reign) {
-        reign.lostOn = save.date;
-        reign.endReason = 'stripped';
-      }
-      pushNews(save, {
-        date: save.date,
-        headline: `${interim.name} is stripped of the interim ${d.name} title`,
-        body: `${quiet} days have passed without a defense of the interim championship. The interim title is vacant.`,
-        tags: ['title', d.id],
-        fighterIds: [interim.id],
-        importance: 4,
-      });
-      headlines.push(`${d.name} interim title vacated.`);
-    }
-  }
-
   // Interim titles when a champion is unavailable for a long time. The condition holds for
   // months at a stretch, so the announcement is made once, when the interim bout is not
   // yet on the books, rather than every weekly pass.
@@ -1115,7 +1101,12 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     // A released fighter is out of contract just as much as one whose deal ran out. Only the
     // expired case was handled, so a player released for refusing fights was never approached
     // again by anyone, for ever, while the career screen told them a new offer was coming.
-    const released = contract?.status === 'released';
+    // A released player is out of contract just as much as one whose deal ran out, and only the
+    // expired case was handled, so a player released for refusing fights was never approached
+    // again while the career screen promised a new offer. This applies to the player alone: for
+    // an NPC the branch below decides between re-signing and releasing, and letting a released
+    // NPC back in re-released them every week and re-published the same news item for ever.
+    const released = contract?.status === 'released' && fighter.id === playerFighterId;
     if (!contract || (contract.status !== 'expired' && !released)) continue;
     if (fighter.id === playerFighterId) {
       // One offer at a time. A fresh one is issued only after the previous one has been
@@ -1872,6 +1863,8 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
   };
   const maxDays = opts.maxDays ?? limits[opts.mode];
   const startingDecisions = pendingDecisions(save);
+  const startingInbox = save.inbox.length;
+  let inboxWaiting = false;
 
   for (let day = 0; day < maxDays; day++) {
     // Stop before simulating a card the player is fighting on.
@@ -1955,10 +1948,21 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
     const decisionsNow = pendingDecisions(save);
     if ((opts.stopOnDecision ?? save.settings.autoAdvanceStopsOnDecision) && decisionsNow > startingDecisions) {
       stoppedBecause = 'A decision needs an answer in the inbox.';
+      inboxWaiting = true;
+      break;
+    }
+    // Anything new in the inbox stops the clock, not only the items that demand an answer. A camp
+    // report, a fight week stage opening or a matchmaker note used to arrive silently while the
+    // weeks kept rolling past, so the player found out about it later or not at all.
+    const inboxNow = save.inbox.length;
+    if ((opts.stopOnDecision ?? save.settings.autoAdvanceStopsOnDecision) && inboxNow > startingInbox) {
+      stoppedBecause = 'Something new is in the inbox.';
+      inboxWaiting = true;
       break;
     }
     if (opts.mode === 'next-message' && decisionsNow > 0) {
       stoppedBecause = 'There is a message waiting.';
+      inboxWaiting = true;
       break;
     }
     if (opts.mode === 'to-fight' && save.player.fighterId) {
@@ -1984,6 +1988,7 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
     headlines,
     stoppedBecause,
     playerBoutPending,
+    inboxWaiting,
   };
 }
 

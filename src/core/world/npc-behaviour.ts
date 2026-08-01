@@ -146,6 +146,17 @@ export interface NpcMoveDecision {
 }
 
 /** How badly this fighter wants to change division, from 0 to 1. */
+/**
+ * How much a champion's desire to move is damped.
+ *
+ * Heavily, because a title is the reason to stay. The two reliefs are the two reasons a champion
+ * really does move: they have defended enough that the division holds nothing new, or the weight
+ * cut has stopped being survivable.
+ */
+export const CHAMPION_MOVE_DAMPING = 0.25;
+export const CHAMPION_CLEARED_OUT_RELIEF = 0.25;
+export const CHAMPION_HARD_CUT_RELIEF = 0.2;
+
 export function moveDesire(save: SaveGame, f: Fighter): { up: number; down: number } {
   if (f.retired || hasLiveBooking(save, f)) return { up: 0, down: 0 };
   const division = DIVISION_BY_ID[f.divisionId];
@@ -173,7 +184,12 @@ export function moveDesire(save: SaveGame, f: Fighter): { up: number; down: numb
 
   // A champion or a top contender has every reason to stay.
   if (f.isChampion) {
-    up *= 0.25;
+    // Until the cut stops being survivable, or there is nobody left in the division to fight.
+    // A flat quarter put every champion under the candidate threshold no matter what, so no NPC
+    // champion could ever move weight and the whole double champion path, the held title
+    // deadline and the contender granted on arrival were unreachable for anyone but the player.
+    const clearedOut = clamp(f.titleDefenses / 4, 0, 1);
+    up *= CHAMPION_MOVE_DAMPING + clearedOut * CHAMPION_CLEARED_OUT_RELIEF + (strain > 0.9 ? CHAMPION_HARD_CUT_RELIEF : 0);
     down *= 0.2;
   } else if ((f.ranking ?? 99) <= 5) {
     up *= 0.5;

@@ -477,6 +477,43 @@ export function scoreCandidate(
     if (!worthRunningBack && pulled < 0.5) return null;
   }
 
+  // Pairings a matchmaker would not consider at all. Everything below this is a weight, and a
+  // weight only picks the best of the legal fights: when a division ran thin, a badly scored
+  // mismatch was still the best available and got made. Measured before this gate existed, one
+  // scheduled bout in ten was a top five fighter against an unranked opponent, including a
+  // number one contender against a fighter at two and two.
+  //
+  // A live callout or rivalry is exempt. That is the stated reason a fight nobody would otherwise
+  // make gets made, and refusing it here would have taken away the one thing that lets a player
+  // talk their way into a fight they have not earned on paper.
+  const stakedClaim = matchupPull(save, fighter.id, opponent.id).pull > 0;
+  if (!isChampA && !isChampB && !stakedClaim) {
+    const rankedSide = rankA !== null && rankB === null ? fighter : rankB !== null && rankA === null ? opponent : null;
+    if (rankedSide) {
+      const unranked = rankedSide === fighter ? opponent : fighter;
+      const rankedAt = rankedSide === fighter ? rankA! : rankB!;
+      const promotionalRecord = unranked.ufcRecord;
+      const losingRecord = promotionalRecord.losses > promotionalRecord.wins;
+      // Beating a fighter on a losing run proves nothing and losing to them costs everything.
+      if (M.gate.refuseRankedAgainstLosingRecord && losingRecord) return null;
+      // A step up has to be earned. The higher the ranked fighter, the more it takes.
+      const needed = rankedAt <= M.gate.contenderRank ? M.gate.prospectStreakForTopFive : M.gate.prospectStreakForRanked;
+      if (unranked.winStreak < needed) return null;
+    }
+
+    // The fighter holding the number one contender position is waiting on a title shot. Putting
+    // them in with anyone outside the title picture risks the shot they earned for nothing.
+    const contender = currentContender(save, fighter.divisionId);
+    if (contender) {
+      const contenderIsA = contender.fighterId === fighter.id;
+      const contenderIsB = contender.fighterId === opponent.id;
+      if (contenderIsA || contenderIsB) {
+        const otherRank = contenderIsA ? rankB : rankA;
+        if (otherRank === null || otherRank > M.gate.contenderRank) return null;
+      }
+    }
+  }
+
   let score = 0;
   let kind: BookingKind = 'divisional-filler';
   let reason = 'a divisional matchup';
@@ -722,6 +759,16 @@ export function findBestOpponent(
   }
   if (scored.length === 0) return null;
   scored.sort((a, b) => b.score - a.score);
+
+  // A fight both sides have publicly agreed to is made, not drawn for. The pull already puts an
+  // accepted callout at the top of the list, but the final pick was a weighted draw over the top
+  // four, so the fight the player talked their way into still came down to a roll and could
+  // simply not happen for no stated reason.
+  const best = scored[0];
+  if (best.interest && best.interest.eligibility === 'eligible') {
+    rng.next();
+    return best;
+  }
 
   // A small amount of randomness among the top options keeps a long save varied. The difficulty
   // bias has already been applied to the scores above, so every setting draws the same way and

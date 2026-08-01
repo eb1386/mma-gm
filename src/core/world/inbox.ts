@@ -149,6 +149,13 @@ export function messageNeedsAction(save: SaveGame, m: InboxMessage): boolean {
     const contract = save.contracts[m.linkedContractId];
     if (!contract) return false;
   }
+  // A gym decision about a fighter who has left the player's room is dead. These are raised weeks
+  // before they are answered and the fighter can leave in the meantime, and nothing closed them,
+  // so they sat in the inbox demanding an answer about somebody who was no longer there.
+  if (m.category === 'gym' && m.linkedFighterId && save.player.gymId) {
+    const subject = save.fighters[m.linkedFighterId];
+    if (subject && subject.gymId !== save.player.gymId) return false;
+  }
   // A message about a fighter who no longer exists is dead.
   if (m.linkedFighterId && !save.fighters[m.linkedFighterId]) return false;
   return true;

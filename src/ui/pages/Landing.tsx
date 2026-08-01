@@ -119,7 +119,7 @@ export function LandingPage() {
     try {
       // Dropped before the record goes, because clearing the loaded save flushes any queued write
       // and that write would put the deleted career straight back.
-      if (activeSave?.saveId === saveId) discardPendingSave();
+      discardPendingSave(saveId);
       await deleteSave(saveId);
       if (activeSave?.saveId === saveId) setSave(null);
       setConfirmDelete(null);

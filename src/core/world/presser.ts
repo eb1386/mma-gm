@@ -734,7 +734,9 @@ export function answerQuestion(save: SaveGame, sessionId: string, questionId: st
   if (!answer) return null;
 
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
-  if (me) applyPresserEffects(save, me, session, answer, rng);
+  // Labelled here, so the record says which occasion it came from. The applier no longer assumes
+  // every set of media effects arrived at a press conference.
+  if (me) applyPresserEffects(save, me, session, { ...answer, text: `Press conference: ${answer.text}` }, rng);
 
   question.selectedKey = answerKey;
   const crowd = rng.pick(CROWD_RESPONSE[answer.tone]);
@@ -832,7 +834,10 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
     hype.hardcore = clampPct(hype.hardcore + e.hype * 0.7);
     hype.casual = clampPct(hype.casual + e.hype * 1.15);
     hype.media = clampPct(hype.media + e.hype);
-    addHypeMoment(save, session.boutId, `Press conference: ${answer.text.slice(0, 70)}`, e.hype);
+    // The label comes from the caller, because this applier serves the press conference, the
+    // faceoff and the ceremonial weigh in, and hard coding one of them mislabelled the other two
+    // in the record the player reads.
+    addHypeMoment(save, session.boutId, answer.text.slice(0, 80), e.hype);
   }
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(3000 + rng.range(0, 12000));

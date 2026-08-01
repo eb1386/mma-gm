@@ -383,7 +383,7 @@ export function LoadGamePage() {
                     onClick={async () => {
                       // Dropped first, or clearing the loaded save flushes a queued write that
                       // puts the deleted career straight back.
-                      if (current?.saveId === s.saveId) discardPendingSave();
+                      discardPendingSave(s.saveId);
                       await deleteSave(s.saveId);
                       if (current?.saveId === s.saveId) setSave(null);
                       refresh();

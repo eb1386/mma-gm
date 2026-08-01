@@ -120,6 +120,32 @@ export function normalizeFocus(focus: Partial<CampFocus>): CampFocus {
   return out;
 }
 
+/**
+ * Sets one area's share of the camp and rebalances the other five against it.
+ *
+ * A camp is a fixed amount of time, so the six areas are shares of one whole rather than six
+ * independent dials. They used to be independent weights: every slider at the top gave the same
+ * camp as every slider at the bottom, because the share shown was each weight over their total.
+ * The bars said one thing and the camp did another, and nothing the player did to them mattered.
+ *
+ * Moving one area takes its time from the others in proportion to what they already had, so the
+ * six always add up to the whole camp and the bars mean what they show.
+ */
+export function setFocusShare(focus: CampFocus, key: RatingKey, share: number): CampFocus {
+  const target = clamp(share, 0, 1);
+  const others = RATING_KEYS.filter((k) => k !== key);
+  const otherTotal = others.reduce((sum, k) => sum + Math.max(0, focus[k]), 0);
+  const remaining = 1 - target;
+  const out = { ...focus, [key]: target } as CampFocus;
+  if (otherTotal <= 0) {
+    // Nothing else is claiming any time, so what is left is split evenly.
+    for (const k of others) out[k] = remaining / others.length;
+  } else {
+    for (const k of others) out[k] = (Math.max(0, focus[k]) / otherTotal) * remaining;
+  }
+  return out;
+}
+
 export interface CampSetup {
   boutId: string | null;
   startDate: IsoDate;
@@ -232,7 +258,20 @@ function gymQualityFor(save: SaveGame, camp: TrainingCamp): { coaching: number; 
   // A visiting fighter does not get the full benefit of an unfamiliar room on the first
   // camp there. Familiarity is modelled by how long the fighter has been a member.
   const isMember = gym.fighterIds.includes(camp.fighterId);
-  const familiarity = camp.campType === 'home' && isMember ? 1 : camp.campType === 'visiting' ? 0.72 : camp.campType === 'split' ? 0.8 : 0.85;
+  // A camp held near the event is the fighter's own team in a rented room, not an unfamiliar one,
+  // so it takes only a small disruption penalty. Treating it like any other away camp meant a 15
+  // percent cut to partners and coaching, which was more than the early arrival could ever be
+  // worth, so the option cost 1.8 times a home camp and was strictly worse than staying home.
+  const familiarity =
+    camp.campType === 'home' && isMember
+      ? 1
+      : camp.campType === 'near-event'
+        ? 0.95
+        : camp.campType === 'visiting'
+          ? 0.72
+          : camp.campType === 'split'
+            ? 0.8
+            : 0.85;
   for (const k of RATING_KEYS) partners[k] = partners[k] * familiarity;
 
   return {
