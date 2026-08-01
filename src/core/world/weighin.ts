@@ -355,9 +355,15 @@ export function applySecondAttempt(save: SaveGame, boutId: BoutId, choice: Secon
       state.log.push(`${me.name} accepts the miss.`);
       break;
     case 'offer-larger-forfeit':
+      // The offer is made to the other camp, which is the only thing that can keep the bout
+      // together. It used to set the higher forfeit and fall straight through to the ruling, so
+      // the other camp was never asked, nothing about the bout changed, and the extra ten percent
+      // of the show purse bought the player precisely nothing.
       state.purseForfeitPct = 30;
       state.log.push(`${me.name} offers a larger share of the purse to keep the bout together.`);
-      break;
+      state.stage = 'catchweight-negotiation';
+      state.catchweightLb = Math.ceil(state.player?.weightLb ?? state.limitLb);
+      return state;
     case 'request-catchweight':
       state.stage = 'catchweight-negotiation';
       state.catchweightLb = Math.ceil(state.player?.weightLb ?? state.limitLb);

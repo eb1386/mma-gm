@@ -7,7 +7,7 @@ import { simulateFight, type FightSimOptions } from '../sim/engine';
 import type { GamePlanKey, FightCardEvent } from '../types/world';
 import { addDays, ageOn, dayOfWeek, daysBetween, formatDate, yearOf, type BoutId, type IsoDate } from '../types/common';
 import { isChampionshipBout, isFinish, type Bout, type FightResult } from '../types/fight';
-import { ovrDisplayed, type Fighter } from '../types/fighter';
+import { ovrDisplayed, RATING_KEYS, type Fighter, type RatingKey } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { autoCampFor, finalizeCamp, runCampWeek } from './camp';
 import { applyPopularity, assignEventBonuses, computeLeverage, createContractOffer, decayPopularity, generateContract, popularityFromResult, purseForBout } from './economy';
@@ -30,7 +30,7 @@ import {
 } from './health';
 import { applyReplacement, bookEvent, cancelBout, CHAMPION_TURNAROUND_DAYS, findReplacement, isAvailable, openOfferFighterIds, regionOfFighter, scheduleEvents, shouldCreateInterimTitle } from './matchmaking';
 import { inCampFighterIds } from './availability';
-import { applyFightPurse, paySponsorsForFight, runFinanceWeek } from './finance';
+import { applyFightPurse, paySponsorsForFight, record, runFinanceWeek } from './finance';
 import { clearDopingState, clearExpiredSuspensions, runAntiDopingWeek } from './antidoping';
 import { recordSocialHistory } from './identity';
 import { bookBout, FIGHT_WEEK_DAYS, hasLiveBooking, releaseBooking } from './availability';
@@ -39,7 +39,7 @@ import { ensureFightWeekTasks, pruneFightWeek } from './fightweek';
 import { generateSocialItems, pruneSocial, socialRng } from './social';
 import { campLifeRng, generateCampLife, seedGymRelationships } from './camp-life';
 import { decayRelationships, openCallouts, pruneCallouts, recordFightBetween, resolveCallout } from './relationships';
-import { enforceAbsentChampions, maybeSuggestMove } from './weightclass';
+import { enforceAbsentChampions, maybeSuggestMove, settleOneFightMoves } from './weightclass';
 import { assignOfficials, judgePersonasFor, recordOfficialOutcome, refereeTendencyFor } from './officials';
 import { applyResultToContenders, forfeitContenderStatus, fulfilContenderStatus, reviewContenderClaims } from './contender';
 import { evaluateAllInterests, pruneMatchupInterests } from './matchup-interest';
@@ -47,7 +47,7 @@ import { runMatchupInterestPass } from './matchup-pass';
 import { existingTitleOffer, interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
 import { cancelStaleDivisionBouts, enforceDivisionInvariant, runNpcCallouts, runNpcWeightClassMoves } from './npc-behaviour';
 import { pruneGamePlans } from './gameplan-memory';
-import { syncCareerState } from './career';
+import { syncCareerState, recordAchievements } from './career';
 import './decision-handlers';
 import { PROMOTION_CONTRACTS } from '../config/branding';
 import { applyResultToRankings, applyTitleOutcome, reconcileChampionFlags, recomputeDivision, recomputePfp } from './rankings';
@@ -55,7 +55,7 @@ import { generateFighter } from './generator';
 import { closeCompetingOffers, createFightOffer, expireOffers } from './offers';
 import { addInboxMessage, messageNeedsAction, reconcileInbox } from './inbox';
 import { VENUE_CITIES } from './venues';
-import { addHypeMoment, computeHype, escalateRivalry, pruneHype, updateAllHype } from './hype';
+import { addHypeMoment, computeHype, escalateRivalry, pruneHype, updateAllHype, decayRivalries } from './hype';
 import { businessStore, computeEventBusiness } from './business';
 import {
   applyFameChange,
@@ -225,6 +225,31 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
   };
 }
 
+/**
+ * The fighter as they will actually compete, carrying whatever they are hurt with.
+ *
+ * Every injury already computes a set of rating effects, describing exactly what a bad knee or a
+ * damaged hand takes away, and stores them. Nothing read them, so a fighter who took a bout while
+ * carrying a knock competed at their full ratings and the injury cost them only training time.
+ * A copy is made rather than mutating the fighter, because these effects last as long as the
+ * injury does and not a moment longer.
+ */
+function carryingInjuries(fighter: Fighter): Fighter {
+  const active = fighter.injuries.filter((i) => !i.actualReturn && !i.blocksCompetition);
+  if (active.length === 0) return fighter;
+  const ratings = { ...fighter.ratings };
+  let changed = false;
+  for (const injury of active) {
+    for (const key of RATING_KEYS as readonly RatingKey[]) {
+      const delta = injury.effects[key];
+      if (!delta) continue;
+      ratings[key] = clamp(ratings[key] + delta, 8, 99);
+      changed = true;
+    }
+  }
+  return changed ? { ...fighter, ratings } : fighter;
+}
+
 /** Runs a single bout and applies every consequence to the world. */
 export function resolveBout(
   save: SaveGame,
@@ -267,8 +292,8 @@ export function resolveBout(
     seed: rng.nextUint32(),
     judges: judgePersonasFor(save, assignment, homeAdvantage),
     refereeTendency: refereeTendencyFor(save, assignment) ?? undefined,
-    a: { fighter: a, gamePlan: prepA.gamePlan, sharpness: prepA.sharpness, tacticalFamiliarity: prepA.tacticalFamiliarity, cutQuality: prepA.cutQuality, campQuality: prepA.campQuality, shortNotice: prepA.shortNotice },
-    b: { fighter: b, gamePlan: prepB.gamePlan, sharpness: prepB.sharpness, tacticalFamiliarity: prepB.tacticalFamiliarity, cutQuality: prepB.cutQuality, campQuality: prepB.campQuality, shortNotice: prepB.shortNotice },
+    a: { fighter: carryingInjuries(a), gamePlan: prepA.gamePlan, sharpness: prepA.sharpness, tacticalFamiliarity: prepA.tacticalFamiliarity, cutQuality: prepA.cutQuality, campQuality: prepA.campQuality, shortNotice: prepA.shortNotice },
+    b: { fighter: carryingInjuries(b), gamePlan: prepB.gamePlan, sharpness: prepB.sharpness, tacticalFamiliarity: prepB.tacticalFamiliarity, cutQuality: prepB.cutQuality, campQuality: prepB.campQuality, shortNotice: prepB.shortNotice },
   };
 
   const result = simulateFight(opts);
@@ -364,10 +389,18 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
 
     // Pay. For the player every movement goes through the ledger, so manager commission,
     // the gym percentage, tax, travel and sponsorship are all visible and applied once.
-    const earned = purse.show + (won ? purse.win : 0);
+    //
+    // Points on the gate are part of the deal. They are negotiated on the contract screen, shown
+    // on the contract, and used to be paid to nobody at all, so a fighter who bargained hard for
+    // them earned exactly what a fighter who did not earned.
+    const ppv = ppvPointsEarned(save, fighter, result);
+    const earned = purse.show + (won ? purse.win : 0) + ppv;
     fighter.careerEarnings += earned;
     fighter.lastPurse = earned;
     if (save.player.fighterId === fighter.id) {
+      if (ppv > 0) {
+        record(save, fighter.id, 'in', 'ppv-points', ppv, 'Pay per view points', result.boutId);
+      }
       const split = applyFightPurse(save, fighter, result.boutId, { show: purse.show, win: purse.win, bonuses: 0 }, won);
       paySponsorsForFight(save, fighter, result.boutId, won, fighter.isChampion);
       void split;
@@ -476,6 +509,22 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
     });
     notePeakOvr(f, result.date);
   }
+}
+
+/**
+ * What a fighter earns from their points on the gate for this bout.
+ *
+ * Contract terms express points as dollars per thousand buys, which is only meaningful on a card
+ * that sells pay per view. A fight night pays none, and a contract without points pays none.
+ */
+function ppvPointsEarned(save: SaveGame, fighter: Fighter, result: FightResult): number {
+  const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
+  const rate = contract?.terms.ppvPoints ?? 0;
+  if (rate <= 0) return 0;
+  const business = businessStore(save)[result.eventId];
+  const buys = business?.ppvBuys ?? null;
+  if (!buys || buys <= 0) return 0;
+  return Math.round((buys / 1000) * rate);
 }
 
 /** Resolves every remaining bout on an event and closes it out. */
@@ -610,6 +659,16 @@ const KEEP_FULL_EVENTS_FIGHTS = 40;
 const KEEP_ROUND_STATS_FIGHTS = 220;
 /** Fights that keep a trimmed closing sequence. Beyond this the event stream is dropped. */
 const KEEP_CLOSING_EVENTS_FIGHTS = 400;
+
+/**
+ * How long the promotion waits before approaching a fighter it released.
+ *
+ * A deal that runs its course is renewed within a month. Being let go for refusing fights is a
+ * different thing and costs the fighter most of a year in the wilderness, which is the point of
+ * the sanction. It is a wait rather than a permanent exile: before this, a released player was
+ * never approached again by anything, while the career screen promised an offer was coming.
+ */
+export const RELEASE_RETURN_DAYS = 300;
 
 export function pruneHistory(save: SaveGame): { prunedEvents: number; prunedRounds: number } {
   const results = Object.values(save.history.results).sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -866,6 +925,34 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   }
   save.pfp = recomputePfp(save);
 
+  // Career milestones, checked once a week against what the career has actually done.
+  for (const label of recordAchievements(save)) {
+    pushNews(save, {
+      date: save.date,
+      headline: label,
+      body: `A career milestone: ${label.toLowerCase()}.`,
+      tags: ['career'],
+      fighterIds: save.player.fighterId ? [save.player.fighterId] : [],
+      importance: 2,
+    });
+  }
+
+  // A fighter who moved up for a single bout goes home once that bout has happened.
+  for (const note of settleOneFightMoves(save)) {
+    pushNews(save, {
+      date: save.date,
+      headline: note,
+      body: note,
+      tags: ['division'],
+      fighterIds: [],
+      importance: 2,
+    });
+  }
+
+  // Rivalries cool when nothing keeps them alive, and are forgotten once there is nothing left
+  // in them. Without this they only ever climbed and the store never shrank.
+  decayRivalries(save);
+
   // The tables are the record of who holds what, so the flags on the fighter are brought back
   // into line with them here rather than relying on every path that changes a title remembering
   // to clear the previous holder. One that did not left two fighters flagged as champion of the
@@ -882,6 +969,12 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       table.championId = null;
       continue;
     }
+    // A champion with a defence already booked is not inactive, they are days from fighting.
+    // Stripping them here vacated the belt while the bout stayed on the card flagged as a title
+    // fight, which is the same contradiction from the other end. The retirement pass has always
+    // had this exemption; the strip pass did not.
+    const liveBooking = champ.nextBoutId ? save.bouts[champ.nextBoutId] : null;
+    if (liveBooking && liveBooking.status === 'scheduled') continue;
     const inactive = champ.lastFightDate ? daysBetween(champ.lastFightDate, save.date) : 999;
     const blocked = !canCompete(champ, save.date).ok;
     if (inactive > 550 || (blocked && inactive > 430) || champ.retired || champ.activityStatus !== 'active') {
@@ -960,6 +1053,42 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     }
   }
 
+  // An interim champion is held to the same standard as an undisputed one. Nothing stripped or
+  // expired them before, so an interim champion who was suspended, released or simply stopped
+  // fighting kept the belt for ever, and the stale pointer blocked the division from ever
+  // creating another interim title.
+  for (const d of DIVISIONS) {
+    const table = save.rankings[d.id];
+    if (!table.interimChampionId) continue;
+    const interim = save.fighters[table.interimChampionId];
+    if (!interim) {
+      table.interimChampionId = null;
+      continue;
+    }
+    const booked = interim.nextBoutId ? save.bouts[interim.nextBoutId] : null;
+    if (booked && booked.status === 'scheduled') continue;
+    const quiet = interim.lastFightDate ? daysBetween(interim.lastFightDate, save.date) : 999;
+    const unavailable = !canCompete(interim, save.date).ok;
+    if (quiet > 550 || (unavailable && quiet > 430) || interim.retired || interim.activityStatus !== 'active') {
+      table.interimChampionId = null;
+      interim.isInterimChampion = false;
+      const reign = save.history.reigns.find((r) => r.fighterId === interim.id && r.lostOn === null && r.isInterim);
+      if (reign) {
+        reign.lostOn = save.date;
+        reign.endReason = 'stripped';
+      }
+      pushNews(save, {
+        date: save.date,
+        headline: `${interim.name} is stripped of the interim ${d.name} title`,
+        body: `${quiet} days have passed without a defense of the interim championship. The interim title is vacant.`,
+        tags: ['title', d.id],
+        fighterIds: [interim.id],
+        importance: 4,
+      });
+      headlines.push(`${d.name} interim title vacated.`);
+    }
+  }
+
   // Interim titles when a champion is unavailable for a long time. The condition holds for
   // months at a stretch, so the announcement is made once, when the interim bout is not
   // yet on the books, rather than every weekly pass.
@@ -983,7 +1112,11 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   for (const fighter of Object.values(save.fighters)) {
     if (fighter.retired) continue;
     const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
-    if (!contract || contract.status !== 'expired') continue;
+    // A released fighter is out of contract just as much as one whose deal ran out. Only the
+    // expired case was handled, so a player released for refusing fights was never approached
+    // again by anyone, for ever, while the career screen told them a new offer was coming.
+    const released = contract?.status === 'released';
+    if (!contract || (contract.status !== 'expired' && !released)) continue;
     if (fighter.id === playerFighterId) {
       // One offer at a time. A fresh one is issued only after the previous one has been
       // off the table for a while, so ignoring a deal does not flood the inbox.
@@ -991,6 +1124,12 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       if (existing.some((o) => o.status === 'open')) continue;
       const latest = existing.sort((x, y) => (x.createdOn > y.createdOn ? -1 : 1))[0];
       if (latest && daysBetween(latest.createdOn, save.date) < 28) continue;
+      // Being let go is not the same as a deal running its course. The promotion takes longer to
+      // come back, and comes back at all only for somebody the division still has a use for.
+      if (released) {
+        const since = contract.endDate ? daysBetween(contract.endDate, save.date) : RELEASE_RETURN_DAYS;
+        if (since < RELEASE_RETURN_DAYS) continue;
+      }
       const offer = createContractOffer(fighter, save, rng);
       save.contractOffers[offer.id] = offer;
       addInboxMessage(save, {
@@ -1852,6 +1991,13 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
 export function simulatePlayerBout(save: SaveGame, boutId: BoutId, playerPlan: GamePlanKey[]): FightResult {
   const rng = rngOf(save);
   const bout = save.bouts[boutId];
+  if (!bout) throw new Error('That bout no longer exists.');
+  // A canceled bout is not a fight. Only an already recorded result was refused before, so
+  // walking the fight week timeline after a withdrawal simulated a bout that had been called
+  // off and wrote a real result, record, purse and ranking change from it.
+  if (bout.status === 'canceled') {
+    throw new Error('That bout was canceled and cannot be fought.');
+  }
   const result = resolveBout(save, bout, rng, playerPlan);
   // Resolve the rest of the card around it, passing the player's result in so it is part of the
   // card for the contested list and for bonus selection.

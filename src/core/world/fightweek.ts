@@ -1,4 +1,6 @@
+import { clamp } from '../rng';
 import { addDays, daysBetween, type BoutId, type IsoDate } from '../types/common';
+import { hypeStore } from './hype';
 import { isChampionshipBout } from '../types/fight';
 import type { SaveGame } from '../types/save';
 
@@ -262,8 +264,26 @@ export function skipStage(save: SaveGame, taskIdValue: string, reason: string): 
   task.status = 'skipped';
   task.outcome = reason;
   task.resolvedOn = save.date;
+
+  // The button says skipping costs a little attention and goodwill. It used to cost neither, so
+  // every optional obligation was free to ignore and the line under it was not true.
+  const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
+  if (me) {
+    me.relationships.matchmaker = clamp(me.relationships.matchmaker - SKIP_STAGE_GOODWILL, 0, 100);
+    if (me.fame) {
+      me.fame.mediaFriendliness = clamp(me.fame.mediaFriendliness - SKIP_STAGE_MEDIA, 0, 100);
+      me.fame.promotionalTrust = clamp(me.fame.promotionalTrust - SKIP_STAGE_GOODWILL, 0, 100);
+    }
+    const hype = hypeStore(save)[task.boutId];
+    if (hype) hype.total = clamp(hype.total - SKIP_STAGE_HYPE, 0, 100);
+  }
   return task;
 }
+
+/** What skipping one optional fight week obligation costs. Small, and not nothing. */
+export const SKIP_STAGE_GOODWILL = 3;
+export const SKIP_STAGE_MEDIA = 4;
+export const SKIP_STAGE_HYPE = 2;
 
 /** Opens the second weigh in attempt. Only reachable after a missed official weigh in. */
 export function openSecondAttempt(save: SaveGame, boutId: BoutId): FightWeekTask | null {

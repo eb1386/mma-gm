@@ -584,3 +584,108 @@ far enough or asserted the right thing.
 | activity bands | 1.57 / 2.59 / 2.56 / 2.38, all in band |
 | calibration | 93.74 / 6.26 / 0.00 |
 | acceptance | 5 runs, 0 metrics outside band |
+
+
+---
+
+# Seventh pass, part two: the six systems nobody had attacked yet
+
+Waves one to six had audited the code, and wave six had attacked the previous wave's diff. Nothing
+had yet taken one player facing system at a time and tried to break it. Seventy two agents did
+that across fight week, social and callouts, navigation and the store, contracts and offers,
+progression and retirement, and championships and weight class. Every finding was then handed to
+two independent skeptics, each told to refute it and to default to refuted.
+
+Forty two findings. Four refuted. What follows is what survived.
+
+## The five that mattered most
+
+**Pot was projected for a child.** The projection walked a fabricated calendar starting in the
+year 2000, and the development model derives age from the birth date whenever there is one, so
+every real fighter was projected forward as a two to fourteen year old. Growth ran at its maximum
+and the aging decline never applied at all, for the entire roster, for the life of every save. It
+now projects from the real date. Measured afterward: fighters under 26 carry 6.8 points of
+headroom above their current rating and fighters past 31 carry 0.05, which is what a Pot model
+is supposed to say and the opposite of what it said before.
+
+**A released player could never come back.** Refusing four fights got the contract terminated,
+which set its status to released. The renewal pass only ever looked for expired. Nothing else in
+the game approached a released fighter, so the career was over, permanently, while the career
+screen said a new offer would arrive within a month. The promotion now comes back after most of a
+year, signing lifts the released status, and the screen says what is actually happening.
+
+**Answering a callout did nothing at all.** Accepting, refusing, answering respectfully or in
+kind: all four set a label on the callout and returned a sentence. No relationship moved, no
+rivalry moved, and above all no matchup interest was created, which is the record that actually
+makes the fight happen. Meanwhile the promotion's own path for an opponent answering did all of
+it. Both sides now run the same function.
+
+**Every Coach Mode inbox decision was a no-op.** The page routed gym and career decisions to the
+core, the core handler fell through to the camp life code, and the camp life code returns
+immediately when the player manages no fighter of their own, which in Coach Mode is always. The
+code that actually implemented those decisions sat in the same page in a switch nothing could
+reach. It now lives in the core, where the transaction runs it, and the unreachable copy is gone.
+
+**A belt could change hands in a fight the champion was not in.** When a champion withdrew, the
+replacement rule only asked whether the incoming fighter was ranked highly enough, never whether
+the fighter who left was the one holding the belt. Two challengers then fought for the title and
+the winner was crowned while the champion was still champion. The bout is now stripped of the
+title when the champion is the one who withdrew, and the contender whose claim was spent on it
+gets the claim back.
+
+## The rest
+
+Sixteen more, all of the same character: something the game told the player it was doing, and
+was not. A press conference answer labelled "escalates the rivalry" moved no rivalry, and the
+faceoff then gated its confrontational option on a rivalry the player had no way to create. The
+faceoff itself read three of the six effects it declared, so the fine it warned about never
+happened. Offering a larger purse forfeit at the weigh in cost ten percent of the show purse and
+was never put to the other camp. A camp at another gym quoted the home gym's price and charged the
+visiting gym's, which could be six times more. A canceled bout left fight week running, so the
+page went on offering the faceoff and then Enter fight, and fighting it wrote a real result.
+Points on the pay per view were negotiated, displayed on the contract, and paid to nobody. A
+negotiated five round bout was reset to three by the card ordering pass. Asking for more money
+accepted any number below the ceiling, including a smaller one, and cut the purse while reporting
+an increase. Beating an interim champion scored as beating an unranked fighter. No NPC champion
+ever carried their standing into a new division, because the check for whether they were champion
+was computed after the code that cleared both of its inputs. Automatic weight class movement
+stepped by division order with no gender check, so a heavyweight could be moved to Women's
+Strawweight. A champion with a title defence already booked could be stripped for inactivity days
+before the fight. Nothing ever stripped an interim champion, and the stale pointer blocked the
+division from ever crowning another. A move billed as "one fight at the new weight" never moved
+anybody back. Rivalry intensity only ever rose. Arriving four days early was byte identical to not
+arriving early. A camp near the event cost 1.8 times a home camp for a benefit no code delivered.
+Skipping an optional obligation was free, under a line saying it costs attention and goodwill. The
+ceremonial weigh in and the faceoff were the same screen shown twice with the effects applied
+twice. Injuries computed and stored exactly what a bad knee takes away and nothing read it.
+Deleting the loaded career could resurrect it, because clearing the save flushed the write that
+had been queued for it. The number one contender position, the thing this whole body of work
+started with, was not displayed anywhere in the game.
+
+## What this says
+
+Seven waves in, a pass aimed at systems rather than at code found forty two things, five of them
+serious enough to break a career outright. That is not a codebase converging on done. It is a
+codebase whose defects had moved: the earlier waves fixed what was wrong with the code, and this
+one found what was wrong with the game. The difference between those two is most of this list.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | clean |
+| default tier | 363 passed |
+| world | 7 passed, including the five year run |
+| flow | 171 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 36 passed, desktop and mobile, now covering the modes with no player fighter |
+| activity bands | 1.50 / 2.53 / 2.57 / 2.36, all in band |
+| calibration | 93.74 / 6.26 / 0.00 |
+| acceptance | 5 runs, 0 metrics outside band |
+
+One test had to be widened rather than satisfied: the difficulty ordering was asserted over three
+careers, and the gap between neighbouring settings is under a point, so a single unlucky draw
+inverted it. Measured over eight careers the ordering is clean and monotonic, at minus 13.59,
+13.14, 12.25 and 11.64 Ovr points relative to the player across easy, normal, hard and brutal. The
+test now samples what was actually verified.

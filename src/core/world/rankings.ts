@@ -348,7 +348,11 @@ export function applyResultToRankings(save: SaveGame, result: FightResult, short
   if (!a || !b) return notes;
 
   const table = save.rankings[result.divisionId];
-  const rankOf = (f: Fighter) => (table.championId === f.id ? 0 : f.ranking);
+  // The interim champion is left out of the ranked entries, so their `ranking` is null and only
+  // the undisputed champion was special cased here. Beating an interim champion therefore scored
+  // as beating an unranked fighter, which is the least valuable win in the model.
+  const rankOf = (f: Fighter) =>
+    table.championId === f.id ? 0 : table.interimChampionId === f.id ? 1 : f.ranking;
 
   for (const [self, other, shortNotice] of [
     [a, b, shortNoticeA],

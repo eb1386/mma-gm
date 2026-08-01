@@ -337,7 +337,12 @@ export function manageWalkingWeight(fighter: Fighter, on: IsoDate): { movedUp: D
   // When the frame no longer fits the division at all, move up.
   const minimumViableOver = 4;
   if (targetOver < minimumViableOver || fighter.weightMisses >= 3) {
-    const heavier = DIVISIONS.find((d) => d.order === division.order + 1);
+    // The next division up that this fighter could actually compete in. Stepping by order alone
+    // walked a man into the first women's division and a woman into one that no longer exists,
+    // because the order runs straight through both and past retired divisions.
+    const heavier = DIVISIONS.filter(
+      (d) => d.gender === division.gender && d.order > division.order && d.activeUntil === null
+    ).sort((a, b) => a.order - b.order)[0];
     if (heavier) {
       fighter.divisionId = heavier.id;
       if (!fighter.eligibleDivisions.includes(heavier.id)) fighter.eligibleDivisions.push(heavier.id);

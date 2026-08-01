@@ -7,6 +7,7 @@ import { titleLineage } from '@core/world/history';
 import { deriveFighterStatus, FIGHTER_STATUS_LABEL, statusTone } from '@core/world/status';
 import { useGame } from '../store';
 import { DataTable, EstimatedRating, Notice, Panel, RATING_COLUMN_HEADS, Rating, RealTag } from '../components';
+import { currentContender } from '@core/world/contender';
 
 export function DivisionPage() {
   const save = useGame((s) => s.save)!;
@@ -18,6 +19,8 @@ export function DivisionPage() {
   const table = save.rankings[id];
   const champ = table.championId ? save.fighters[table.championId] : null;
   const interim = table.interimChampionId ? save.fighters[table.interimChampionId] : null;
+  const contender = currentContender(save, id);
+  const contenderFighter = contender ? save.fighters[contender.fighterId] : null;
   const fighters = Object.values(save.fighters).filter((f) => f.divisionId === id && !f.retired && f.activityStatus === 'active');
   const lineage = titleLineage(save, id);
   const recent = Object.values(save.history.results)
@@ -59,6 +62,18 @@ export function DivisionPage() {
           {interim && (
             <p className="small">
               Interim champion: <Link to={`/fighter/${interim.id}`}>{interim.name}</Link>
+            </p>
+          )}
+          {contender && contenderFighter && (
+            <p className="small">
+              Number one contender: <Link to={`/fighter/${contenderFighter.id}`}>{contenderFighter.name}</Link>
+              <br />
+              {/* The record has always carried why the position was earned and when it expires.
+                  Nothing displayed any of it, so the one rule that decides who fights for the belt
+                  was invisible to the player it decides for. */}
+              <span className="dim">
+                {contender.note} Claimed {formatDate(contender.earnedOn)}, held until {formatDate(contender.expiresOn)}.
+              </span>
             </p>
           )}
         </Panel>

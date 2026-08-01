@@ -125,14 +125,45 @@ export function downloadSave(save: SaveGame): void {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * The parts of a save without which there is no world to load.
+ *
+ * Checked before migration rather than after, because the migration walks these structures and a
+ * file missing one of them produced an internal error like "Cannot read properties of undefined
+ * (reading 'retirements')". That tells a player nothing about the file they chose.
+ */
+const REQUIRED_SAVE_KEYS = ['fighters', 'player', 'date', 'rankings', 'history', 'events', 'bouts'] as const;
+
+function missingSaveKeys(save: unknown): string[] {
+  if (!save || typeof save !== 'object') return [...REQUIRED_SAVE_KEYS];
+  const record = save as Record<string, unknown>;
+  return REQUIRED_SAVE_KEYS.filter((k) => record[k] === undefined || record[k] === null);
+}
+
 export async function importSaveFromFile(file: File): Promise<SaveGame> {
   const text = await file.text();
-  const parsed = JSON.parse(text) as { format?: string; save?: SaveGame } | SaveGame;
-  const save = 'save' in parsed && parsed.save ? parsed.save : (parsed as SaveGame);
-  if (!save || typeof save !== 'object' || !('fighters' in save)) {
-    throw new Error(`That file is not an ${GAME_NAME} save.`);
+  let parsed: { format?: string; save?: SaveGame } | SaveGame;
+  try {
+    parsed = JSON.parse(text) as { format?: string; save?: SaveGame } | SaveGame;
+  } catch {
+    throw new Error(`That file is not readable as ${GAME_NAME} save data.`);
   }
-  const migrated = migrateSave(save);
+  const save = parsed && typeof parsed === 'object' && 'save' in parsed && parsed.save ? parsed.save : (parsed as SaveGame);
+  const missing = missingSaveKeys(save);
+  if (missing.length > 0) {
+    throw new Error(
+      `That file is not an ${GAME_NAME} save. It is missing ${missing.length === REQUIRED_SAVE_KEYS.length ? 'everything a save needs' : missing.join(', ')}.`
+    );
+  }
+  let migrated: SaveGame;
+  try {
+    migrated = migrateSave(save);
+  } catch (err) {
+    // A save from a newer build reports that clearly and is worth passing through as it is.
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('newer version')) throw err;
+    throw new Error(`That save could not be upgraded to this version of ${GAME_NAME}. ${message}`);
+  }
   // A fresh id avoids overwriting an existing save with the same identifier.
   migrated.saveId = `save-import-${Date.now().toString(36)}`;
   await saveGame(migrated);

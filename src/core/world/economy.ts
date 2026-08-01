@@ -585,6 +585,9 @@ export function signContractOffer(save: SaveGame, fighter: Fighter, offer: Contr
   if (current && current.status !== 'expired') current.status = 'expired';
   save.contracts[next.id] = next;
   fighter.contractId = next.id;
+  // Signing again is what ends a release. Without this the contract was active while every
+  // availability check still read the fighter as released, so they could not be matched.
+  if (fighter.activityStatus === 'released') fighter.activityStatus = 'active';
   if (offer.terms.signingBonus > 0) {
     fighter.careerEarnings += offer.terms.signingBonus;
     if (save.player.fighterId === fighter.id) {

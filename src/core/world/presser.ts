@@ -2,7 +2,8 @@ import { hashString, Rng } from '../rng';
 import { daysBetween, type BoutId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
-import { findRivalry, hypeStore, addHypeMoment } from './hype';
+import { escalateRivalry, findRivalry, hypeStore, addHypeMoment } from './hype';
+import { applyRelationship } from './relationships';
 import { TONE_LABEL, type SocialEffects, type SocialTone } from './social';
 import { record } from './finance';
 import { addInboxMessage } from './inbox';
@@ -789,6 +790,25 @@ function summarize(session: PresserSession): string {
  */
 export const OPPONENT_FOCUS_SHARPNESS = 0.004;
 
+/**
+ * Applies one set of media effects: a press conference answer, or a faceoff choice.
+ *
+ * One function for both, because they carry the identical effect shape and the faceoff used to
+ * hand roll its own version in the page, reading three of the six fields it declares. The fine it
+ * warned about never happened, the rivalry it promised to raise or settle never moved, and the
+ * opponent focus it claimed to cost never reached the opponent's camp.
+ */
+export function applyMediaEffects(
+  save: SaveGame,
+  me: Fighter,
+  boutId: string,
+  effects: SocialEffects,
+  source: string,
+  rng: Rng
+): void {
+  applyPresserEffects(save, me, { boutId } as PresserSession, { effects, text: source } as PresserAnswer, rng);
+}
+
 function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSession, answer: PresserAnswer, rng: Rng): void {
   const e = answer.effects;
   if (me.fame) {
@@ -835,6 +855,26 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
       if (camp.resultingSharpness === null) continue;
       camp.resultingSharpness = Math.max(0, Math.min(1, camp.resultingSharpness + e.opponentFocus * OPPONENT_FOCUS_SHARPNESS));
     }
+  }
+
+  // A rivalry the answer says it is stoking, or settling, actually moves. This was declared on
+  // four of the twelve tones and applied by nothing, so the press conference, which is the only
+  // build a fight week has, could not raise a rivalry by a single point. The faceoff then gated
+  // its confrontational option on a rivalry the player had no way to create.
+  if (e.rivalry && opponent) {
+    applyRelationship(
+      save,
+      me.id,
+      opponent.id,
+      {
+        rivalry: e.rivalry,
+        publicHostility: e.rivalry > 0 ? e.rivalry * 0.8 : e.rivalry * 0.5,
+        respect: e.rivalry < 0 ? -e.rivalry : 0,
+      },
+      e.rivalry > 0 ? 'social-hostile' : 'social-friendly',
+      `${me.name} at the ${answer.text.slice(0, 40)}`
+    );
+    if (e.rivalry > 0) escalateRivalry(save, me.id, opponent.id, 'personal', e.rivalry, 'the build to the fight');
   }
 
   // Saying something a sponsor cannot stand puts the agreement at risk. Also written everywhere

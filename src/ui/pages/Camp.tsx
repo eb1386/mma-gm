@@ -340,7 +340,10 @@ export function CampPage() {
                     endDate: addDays(bout.date, -7),
                     focus,
                     intensity,
-                    gymId: campType === 'solo' ? null : fighter.gymId,
+                    // The gym that will actually be charged. The quote used to name the home gym
+                    // whatever the player picked, and cost is derived from the gym's own running
+                    // costs, so a visiting camp could be billed several times what it quoted.
+                    gymId: campType === 'solo' ? null : campType === 'visiting' ? visitGymId || fighter.gymId : fighter.gymId,
                     campType,
                     specialistHired: specialist ? 'Specialist coach' : null,
                     gamePlan: plans,

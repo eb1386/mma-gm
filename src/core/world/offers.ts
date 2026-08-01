@@ -295,10 +295,22 @@ export function respondToOffer(save: SaveGame, offerId: string, response: OfferR
   switch (response.kind) {
     case 'request-money': {
       const cap = offer.showPay * (1 + clamp(leverage / 190, 0.03, 0.5));
-      if (response.amount <= cap) {
+      // Asking for less than the offer already pays is not a negotiation. The test used to be
+      // only against the ceiling, so any number at or below it was granted, including a smaller
+      // one or a negative one, and the purse was cut while the reply said it had gone up.
+      if (response.amount > offer.showPay && response.amount <= cap) {
         const granted = Math.round(Math.min(response.amount, cap));
         offer.showPay = granted;
         return { accepted: false, boutId: null, message: `Purse increased to ${granted}. The offer stands.`, relationshipDelta: -1, newOffer: offer };
+      }
+      if (response.amount <= offer.showPay) {
+        return {
+          accepted: false,
+          boutId: null,
+          message: 'That is at or below what is already on the table, so the offer stands as it is.',
+          relationshipDelta: 0,
+          newOffer: offer,
+        };
       }
       fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker - 3, 0, 100);
       return { accepted: false, boutId: null, message: 'That number is not happening for this bout. The original offer stands.', relationshipDelta: -3, newOffer: offer };
@@ -413,12 +425,17 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
     divisionId: offer.divisionId,
     contractedWeightLb: offer.contractedWeightLb,
     scheduledRounds: offer.scheduledRounds,
+    // Five rounds on a bout that is neither for a belt nor the main event can only have come
+    // from the negotiation, and the card ordering pass would otherwise reset it to three.
+    roundsAgreed: offer.scheduledRounds === 5,
     isTitleFight: offer.isTitleFight,
     isInterimTitleFight: offer.isInterimTitleFight,
     titleIneligibleFighterIds: [],
     isMainEvent: offer.isMainEvent,
     isCoMain: false,
-    cardSegment: offer.isMainEvent ? 'main' : 'main',
+    // Provisional. The card ordering pass assigns the real segment and order once every bout on
+    // the event is known. Both branches of the ternary that used to sit here were identical.
+    cardSegment: 'main',
     boutOrder: offer.isMainEvent ? 12 : 8,
     isCatchweight: offer.isCatchweight,
     status: 'scheduled',
@@ -571,7 +588,11 @@ function declineConsequence(
 
   // Release risk.
   if (recentDeclines >= 4 && obligated && rng.chance(0.35)) {
-    if (contract) contract.status = 'released';
+    if (contract) {
+      contract.status = 'released';
+      contract.endCondition = 'released';
+      contract.endDate = save.date;
+    }
     fighter.activityStatus = 'released';
     message += ' The promotion has terminated the agreement.';
   }

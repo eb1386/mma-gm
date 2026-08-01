@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addDays } from './types/common';
-import { DIVISION_BY_ID } from './config/divisions';
+import { DIVISION_BY_ID, DIVISIONS } from './config/divisions';
 import { createEvent, newCareer, runWorld } from './testing/fixtures';
 import {
   applyResultToContenders,
@@ -14,6 +14,8 @@ import {
   reviewContenderClaims,
 } from './world/contender';
 import { rankChallengers, titleShotEligibility } from './world/title-eligibility';
+import { applyReplacement } from './world/matchmaking';
+import { bookBout } from './world/availability';
 import { assessChampionMove, commitMove, explore } from './world/weightclass';
 import { migrateSave } from './save/migrate';
 import { SAVE_SCHEMA_VERSION } from './types/save';
@@ -463,5 +465,58 @@ describe('migrating a save with no contender concept', () => {
     expect(record).not.toBeNull();
     expect(record!.fighterId).toBe(contender.id);
     expect(record!.source).toBe('eliminator-win');
+  });
+});
+
+
+describe('a belt is not on the line without the fighter who holds it', () => {
+  it('strips the title when the champion is the one who withdraws', () => {
+    const f = newCareer(9820);
+    const divisionId = DIVISIONS[0].id;
+    const table = f.save.rankings[divisionId];
+    const champion = f.save.fighters[table.championId!];
+    const challenger = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking === 1 && x.id !== champion.id
+    )!;
+    const event = createEvent(f.save, addDays(f.save.date, 60));
+    const bout: Bout = {
+      id: `bout-title-${champion.id}`,
+      eventId: event.id,
+      date: event.date,
+      fighterAId: champion.id,
+      fighterBId: challenger.id,
+      divisionId,
+      contractedWeightLb: DIVISION_BY_ID[divisionId].limitLb,
+      scheduledRounds: 5,
+      isTitleFight: true,
+      isInterimTitleFight: false,
+      titleIneligibleFighterIds: [],
+      isMainEvent: true,
+      isCoMain: false,
+      cardSegment: 'main',
+      boutOrder: 1,
+      isCatchweight: false,
+      status: 'scheduled',
+      resultId: null,
+      bookedOn: f.save.date,
+      replacementHistory: [],
+      cancelReason: null,
+      purseA: { show: 1, win: 1 },
+      purseB: { show: 1, win: 1 },
+      weighInA: null,
+      weighInB: null,
+      bookingReason: 'championship bout',
+      bookingKind: 'title-fight',
+    };
+    bookBout(f.save, bout);
+    expect(bout.isTitleFight).toBe(true);
+
+    // Somebody ranked well enough that the replacement rule alone would keep the belt on it.
+    const replacement = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && x.ranking !== null && x.ranking <= 5 && x.id !== challenger.id && x.id !== champion.id
+    )!;
+    applyReplacement(f.save, bout, champion.id, replacement, 'stepping in');
+    expect(bout.isTitleFight).toBe(false);
+    expect(bout.isInterimTitleFight).toBe(false);
   });
 });

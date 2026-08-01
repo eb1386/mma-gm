@@ -7,6 +7,7 @@ import { actionableMessages } from './inbox';
 import { FIGHT_WEEK_DAYS } from './availability';
 import { pendingStages, stageLabel, type FightWeekStage } from './fightweek';
 import type { AdvanceTarget } from './advance-target';
+import { DIVISION_BY_ID } from '../config/divisions';
 
 /**
  * The player career state machine.
@@ -368,18 +369,25 @@ export function careerStatus(save: SaveGame): CareerStatus {
     // no active deal, so a player who does not notice this simply stops receiving fights with
     // no other symptom. The consequence is stated rather than implied.
     const pendingOffer = Object.values(save.contractOffers).some((o) => o.fighterId === me.id && o.status === 'open');
+    // Released is a different situation from a deal running out, and saying so matters: the
+    // promotion takes most of a year to come back, and the screen used to promise a month.
+    const wasReleased = contract?.status === 'released' || me.activityStatus === 'released';
     return finish(
       'free-agent',
       pendingOffer
         ? `${me.name} is out of contract. No fights can be offered until a new deal is signed.`
-        : `${me.name} is out of contract. No fights can be offered until the promotion sends a new deal.`,
+        : wasReleased
+          ? `${me.name} was released by the promotion. Nothing can be offered until they are willing to make another deal, which takes time.`
+          : `${me.name} is out of contract. No fights can be offered until the promotion sends a new deal.`,
       {
         kind: 'navigate',
         label: pendingOffer ? 'Sign a New Contract' : 'Review Contract Options',
         route: '/contract',
         detail: pendingOffer
           ? 'An offer is waiting. Until it is signed you cannot be matched, and a title shot cannot be offered.'
-          : 'No active promotional contract, so the matchmaker cannot approach you. A new offer arrives within a month.',
+          : wasReleased
+            ? 'No promotional contract, and being released means the promotion is in no hurry. Keep advancing and they will come back when the division needs you.'
+            : 'No active promotional contract, so the matchmaker cannot approach you. A new offer arrives within a month.',
         blocking: false,
         key: 'free-agent',
       }
@@ -406,6 +414,45 @@ export function careerStatus(save: SaveGame): CareerStatus {
     blocking: false,
     key: 'advance-next-offer',
   });
+}
+
+/**
+ * Records a career milestone once.
+ *
+ * The list existed on every save, was initialised empty at world creation, and was written by
+ * nothing and read by nothing. A career with no single victory condition needs a record of what
+ * it has actually achieved, which is what this is for.
+ */
+export function awardAchievement(save: SaveGame, key: string, label: string): boolean {
+  if (!save.player.achievements) save.player.achievements = [];
+  if (save.player.achievements.some((a) => a.key === key)) return false;
+  save.player.achievements.push({ key, label, date: save.date });
+  return true;
+}
+
+/** Milestones derived from the career as it stands. Checked after every result. */
+export function recordAchievements(save: SaveGame): string[] {
+  const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
+  if (!me) return [];
+  const won: string[] = [];
+  const claim = (key: string, label: string, earned: boolean) => {
+    if (earned && awardAchievement(save, key, label)) won.push(label);
+  };
+  const division = DIVISION_BY_ID[me.divisionId];
+  claim('first-win', 'First win in the promotion', me.ufcRecord.wins >= 1);
+  claim('first-finish', 'First finish', me.methods.koWins + me.methods.subWins >= 1);
+  claim('ranked', 'Broke into the rankings', me.highestRanking !== null);
+  claim('top-five', 'Reached the top five', me.highestRanking !== null && me.highestRanking <= 5);
+  claim('contender', 'Reached number one contender', me.highestRanking === 1);
+  claim('champion', `Won the ${division?.name ?? 'divisional'} championship`, me.titleReigns >= 1);
+  claim('defended', 'Defended the championship', me.titleDefenses >= 1);
+  claim('dynasty', 'Defended the championship five times', me.titleDefenses >= 5);
+  claim('two-division', 'Held a title in two divisions', me.titleReigns >= 2 && new Set(me.eligibleDivisions).size > 1);
+  claim('ten-wins', 'Ten wins in the promotion', me.ufcRecord.wins >= 10);
+  claim('twenty-fights', 'Twenty fights in the promotion', me.ufcRecord.wins + me.ufcRecord.losses + me.ufcRecord.draws >= 20);
+  claim('millionaire', 'Career earnings past one million', me.careerEarnings >= 1_000_000);
+  claim('hall-of-fame', 'Inducted into the Hall of Fame', me.hallOfFameYear !== null);
+  return won;
 }
 
 /** Writes the derived state into the save so it persists and can be shown in a save list. */

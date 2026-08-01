@@ -208,6 +208,10 @@ export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecisio
 
   const from = DIVISION_BY_ID[pick.f.divisionId];
   const oldTable = save.rankings[from.id];
+  // Read before the block below, which clears both of the things it reads. Computed afterwards,
+  // as it was, this was always false, so no NPC champion ever carried their standing into a new
+  // division and every one of them arrived as an unranked newcomer.
+  const wasChampion = oldTable?.championId === pick.f.id || pick.f.isChampion;
   if (oldTable) {
     oldTable.entries = oldTable.entries.filter((e) => e.fighterId !== pick.f.id);
     if (oldTable.championId === pick.f.id) {
@@ -228,7 +232,6 @@ export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecisio
   // A champion who moves carries their standing with them, exactly as the player's move does.
   // Without this an NPC champion arrived unranked with no claim on anything and was matched as a
   // newcomer, which is the treatment the design explicitly rules out.
-  const wasChampion = oldTable?.championId === pick.f.id || pick.f.isChampion;
 
   pick.f.divisionId = target.id;
   pick.f.ranking = null;

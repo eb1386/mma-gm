@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { formatDate } from '@core/types/common';
 import {
+  getOfficial,
   allOfficials,
   controversyRate,
   ensureOfficials,
@@ -30,7 +31,16 @@ function experienceLabel(o: Official): string {
 
 export function OfficialsPage() {
   const save = useGame((s) => s.save)!;
-  const [role, setRole] = useState<OfficialRole>('judge');
+  // A deep link from a fight card names one official. The page defaulted to judges whatever the
+  // link pointed at, so a referee link landed on a list that did not contain them, and nothing
+  // anywhere read the fragment at all.
+  const { hash } = useLocation();
+  const linkedId = hash ? decodeURIComponent(hash.slice(1)) : '';
+  const linked = linkedId ? getOfficial(save, linkedId) : null;
+  const [role, setRole] = useState<OfficialRole>(linked?.role ?? 'judge');
+  useEffect(() => {
+    if (linked) setRole(linked.role);
+  }, [linked?.id]);
   const [sortKey, setSortKey] = useState<'experience' | 'bouts' | 'controversy' | 'name'>('experience');
 
   const officials = useMemo(() => {

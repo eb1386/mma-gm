@@ -68,6 +68,35 @@ export function escalateRivalry(
   return rivalry;
 }
 
+/**
+ * Weekly cooling of rivalries, and removal of the ones that are over.
+ *
+ * Intensity only ever went up. Nothing lowered it, nothing marked a rivalry finished once the two
+ * had stopped crossing paths, and nothing removed the record, so a save accumulated permanently
+ * hot rivalries between fighters who had not met in years and the store grew without bound.
+ */
+export const RIVALRY_QUIET_DAYS = 90;
+export const RIVALRY_WEEKLY_DECAY = 1.5;
+export const RIVALRY_FORGET_DAYS = 900;
+
+export function decayRivalries(save: SaveGame): number {
+  const store = rivalryStore(save);
+  let removed = 0;
+  for (const [key, rivalry] of Object.entries(store)) {
+    const quiet = daysBetween(rivalry.lastEventOn, save.date);
+    if (quiet >= RIVALRY_QUIET_DAYS && rivalry.intensity > 0) {
+      rivalry.intensity = clamp(rivalry.intensity - RIVALRY_WEEKLY_DECAY, 0, 100);
+      rivalry.resolved = rivalry.intensity < 8;
+    }
+    // A rivalry nobody has touched in years, with nothing left in it, is not a rivalry.
+    if (rivalry.resolved && rivalry.intensity <= 0 && quiet > RIVALRY_FORGET_DAYS) {
+      delete store[key];
+      removed++;
+    }
+  }
+  return removed;
+}
+
 function priorMeetingCount(save: SaveGame, aId: string, bId: string): number {
   let n = 0;
   for (const r of Object.values(save.history.results)) {

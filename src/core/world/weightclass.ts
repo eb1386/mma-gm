@@ -368,6 +368,48 @@ export function ensureDivisionSpell(save: SaveGame, fighter: Fighter): DivisionS
   return spell;
 }
 
+/**
+ * Returns a fighter who moved for a single bout to the division they came from.
+ *
+ * The move kind exists, is offered, and is labelled "One fight at the new weight". Nothing ever
+ * moved anybody back, so it was a permanent division change with a different label on it, which
+ * is the one thing the player was choosing between.
+ */
+export function settleOneFightMoves(save: SaveGame): string[] {
+  const notes: string[] = [];
+  for (const [fighterId, plan] of Object.entries(planStore(save))) {
+    if (plan.kind !== 'one-fight' || plan.status !== 'committed') continue;
+    const fighter = save.fighters[fighterId];
+    if (!fighter || fighter.retired) continue;
+    if (fighter.divisionId !== plan.toDivisionId) continue;
+    // Wait until the one fight has actually happened, and until nothing else is booked.
+    const spell = divisionHistoryStore(save)[fighterId]?.find((sp) => sp.endedOn === null);
+    if (!spell || spell.divisionId !== plan.toDivisionId || spell.fights < 1) continue;
+    const booked = fighter.nextBoutId ? save.bouts[fighter.nextBoutId] : null;
+    if (booked && booked.status === 'scheduled') continue;
+    // A fighter who won a belt up there is not going anywhere. The move stopped being a visit.
+    if (fighter.isChampion || fighter.isInterimChampion) {
+      plan.status = 'completed';
+      plan.kind = 'permanent';
+      notes.push(`${fighter.name} stays at ${DIVISION_BY_ID[plan.toDivisionId].name} with the title.`);
+      continue;
+    }
+
+    const home = DIVISION_BY_ID[plan.fromDivisionId];
+    fighter.divisionId = home.id;
+    fighter.ranking = null;
+    fighter.previousRanking = null;
+    fighter.weeksRanked = 0;
+    fighter.weightMisses = 0;
+    fighter.walkingWeightLb = home.limitLb + Math.min(home.typicalWalkAroundOverLb, Math.max(2, fighter.walkingWeightLb - DIVISION_BY_ID[plan.toDivisionId].limitLb));
+    if (!fighter.eligibleDivisions.includes(home.id)) fighter.eligibleDivisions.push(home.id);
+    ensureDivisionSpell(save, fighter);
+    plan.status = 'completed';
+    notes.push(`${fighter.name} returns to ${home.name} after the one off at ${DIVISION_BY_ID[plan.toDivisionId].name}.`);
+  }
+  return notes;
+}
+
 export function planStore(save: SaveGame): Record<FighterId, WeightClassPlan> {
   if (!save.weightClassPlans) save.weightClassPlans = {};
   return save.weightClassPlans;

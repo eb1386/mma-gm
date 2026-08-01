@@ -117,7 +117,6 @@ function emptySave(opts: NewGameOptions, snapshot: SnapshotFile): SaveGame {
       coachStaffId: null,
       coachName: opts.coach?.name ?? null,
       achievements: [],
-      reputation: 40,
       balance: opts.mode === 'coach' ? 75000 : 0,
     },
     snapshot: snapshot.meta,
@@ -423,7 +422,6 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
         country: opts.coach.newGym.country,
         countryCode: bank.code,
         city: opts.coach.newGym.city,
-        reputation: 18,
         isPlayerControlled: true,
       });
       hireStaff(save, gym, 'head-coach', rng, 45);

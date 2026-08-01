@@ -151,7 +151,6 @@ export interface PlayerState {
   coachName: string | null;
   /** Career achievement tracking, no single victory condition. */
   achievements: { key: string; label: string; date: IsoDate }[];
-  reputation: number;
   balance: number;
 }
 

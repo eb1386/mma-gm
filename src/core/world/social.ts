@@ -692,6 +692,30 @@ function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply
     }
   }
 
+  // Winding an opponent up sharpens their camp, and saying something a sponsor cannot stand puts
+  // the agreement at risk. Both are declared on social replies exactly as they are on press
+  // conference answers, and both were read by nothing here, so the same words cost the player
+  // something from a podium and nothing from a phone.
+  if (item.sourceFighterId && e.opponentFocus) {
+    const other = save.fighters[item.sourceFighterId];
+    if (other) {
+      other.campSharpness = clampPct(other.campSharpness + e.opponentFocus);
+      for (const camp of Object.values(save.camps)) {
+        if (camp.fighterId !== other.id || camp.resultingSharpness === null) continue;
+        if (item.boutId && camp.boutId !== item.boutId) continue;
+        camp.resultingSharpness = Math.max(0, Math.min(1, camp.resultingSharpness + e.opponentFocus * 0.01));
+      }
+    }
+  }
+  if (e.sponsorRisk && e.sponsorRisk > 0) {
+    for (const sponsor of Object.values(save.sponsors ?? {})) {
+      if (sponsor.status !== 'active' || !sponsor.moralityClause) continue;
+      const exposure = (e.sponsorRisk / 100) * (1 - sponsor.satisfaction / 100);
+      if (!rng.chance(exposure)) continue;
+      sponsor.status = 'terminated';
+    }
+  }
+
   // Risk is realized here rather than being a label with no consequence.
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(2000 + rng.range(0, 8000));

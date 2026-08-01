@@ -8,7 +8,7 @@ import { CAREER_STATE_LABEL, careerStatus, type CareerState } from '@core/world/
 import type { SaveGame } from '@core/types/save';
 import { Notice, OctagonMark, Panel } from '../components';
 import { GAME_NAME } from '@core/config/branding';
-import { useGame } from '../store';
+import { discardPendingSave, useGame } from '../store';
 
 /**
  * The landing screen.
@@ -117,6 +117,9 @@ export function LandingPage() {
   const remove = async (saveId: string) => {
     setBusyId(saveId);
     try {
+      // Dropped before the record goes, because clearing the loaded save flushes any queued write
+      // and that write would put the deleted career straight back.
+      if (activeSave?.saveId === saveId) discardPendingSave();
       await deleteSave(saveId);
       if (activeSave?.saveId === saveId) setSave(null);
       setConfirmDelete(null);

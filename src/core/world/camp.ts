@@ -156,6 +156,24 @@ export function estimateCampCost(save: SaveGame, setup: CampSetup): { weeks: num
  * Kept on the 0 to 100 scale the camp life system already used, so its existing adjustments are
  * correct as written and only needed somewhere to land.
  */
+/**
+ * What arriving at the venue early is worth, per day, up to a cap.
+ *
+ * Graded rather than a single threshold. At seven days this comes out at the 0.04 the old
+ * threshold gave, so a camp that already qualified is unchanged and the shorter options stop
+ * being decorative.
+ */
+export const ARRIVE_EARLY_PER_DAY = 0.0057;
+export const ARRIVE_EARLY_CAP_DAYS = 12;
+
+/**
+ * What a camp held near the event is worth.
+ *
+ * The option costs 1.8 times a home camp and described a benefit that no code delivered, so it
+ * was strictly worse than staying home.
+ */
+export const NEAR_EVENT_SHARPNESS = 0.05;
+
 export const CAMP_FORM_BASELINE = 50;
 
 /**
@@ -418,7 +436,13 @@ export function finalizeCamp(save: SaveGame, camp: TrainingCamp, rng: Rng): { sh
     goodWeeks * 0.05 -
     badWeeks * 0.08;
   if (camp.campType === 'solo') sharpness *= 0.55;
-  if (camp.arriveEarlyDays >= 7) sharpness += 0.04;
+  // Arriving early is worth something in proportion to how early. A single threshold at seven
+  // days meant the four day option was byte identical to arriving on the standard schedule, so
+  // one of the three choices in that control did nothing whatsoever.
+  sharpness += Math.min(camp.arriveEarlyDays, ARRIVE_EARLY_CAP_DAYS) * ARRIVE_EARLY_PER_DAY;
+  // Camping near the event does the same job across the whole camp rather than in the last week,
+  // which is what the option says it buys and what its higher cost was already charging for.
+  if (camp.campType === 'near-event') sharpness += NEAR_EVENT_SHARPNESS;
 
   // Camp life, the week to week decisions the player actually makes, is applied here. It was
   // recorded on `fighter.campSharpness` as a 0 to 100 form score and read by nothing at all, while

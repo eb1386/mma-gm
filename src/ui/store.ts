@@ -148,6 +148,19 @@ export function flushPendingSave(save: SaveGame | null): void {
   if (save) void saveGame(save);
 }
 
+/**
+ * Throws away a queued write without performing it.
+ *
+ * Deleting a career removes the record and then clears the loaded save, and clearing the loaded
+ * save flushes whatever write was still queued for it, which wrote the deleted career straight
+ * back. The queued write has to be dropped before the record is removed.
+ */
+export function discardPendingSave(): void {
+  if (!persistTimer) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+}
+
 const MODE_LABEL: Record<AdvanceMode, string> = {
   day: 'Advancing a Day',
   week: 'Advancing a Week',

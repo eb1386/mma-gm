@@ -435,6 +435,14 @@ export interface Bout {
   divisionId: DivisionId;
   contractedWeightLb: number;
   scheduledRounds: 3 | 5;
+  /**
+   * The round count was agreed in negotiation rather than assigned by card position.
+   *
+   * The card ordering pass resets every bout that is neither for a belt nor the main event to
+   * three rounds, so a player who negotiated five and was told it was approved fought three.
+   * Optional, because saves written before this carry no such agreement.
+   */
+  roundsAgreed?: boolean;
   isTitleFight: boolean;
   isInterimTitleFight: boolean;
   /**

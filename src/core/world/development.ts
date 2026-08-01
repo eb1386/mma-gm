@@ -1,6 +1,6 @@
 import { BUILDS } from '../config/builds';
 import { clamp, percentile, Rng } from '../rng';
-import { ageOn, type IsoDate } from '../types/common';
+import { addDays, ageOn, type IsoDate } from '../types/common';
 import { ovrDisplayed, ovrRaw, RATING_KEYS, type Fighter, type RatingKey, type Ratings } from '../types/fighter';
 
 /**
@@ -249,7 +249,12 @@ export function estimatePot(
     const horizonYears = opts.horizonYears ?? 12;
     const steps = Math.ceil((52 * horizonYears) / stepWeeks);
     for (let step = 0; step < steps && simAge < 42; step++) {
-      const simDate = `${2000 + Math.floor((step * stepWeeks) / 52)}-01-01`;
+      // Projected forward from the real date. It used to walk a fabricated calendar starting in
+      // the year 2000, and `developWeek` derives age from the birth date whenever there is one,
+      // so every real fighter was projected as a child: growth ran at its maximum and the aging
+      // decline never applied at all. The snapshot age is still updated for the generated
+      // fighters who have no birth date and fall back to it.
+      const simDate = addDays(date, step * stepWeeks * 7);
       simFighter.ageAtSnapshot = Math.floor(simAge);
       const deltas = developWeek(simFighter, simDate, input, rng, stepWeeks);
       simFighter.ratings = applyDeltas(simFighter.ratings, deltas);

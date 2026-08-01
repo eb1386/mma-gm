@@ -3,23 +3,16 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { formatDate } from '@core/types/common';
 import type { InboxMessage } from '@core/types/world';
-import { actionableMessages, markRead, messageNeedsAction, reconcileInbox, resolveMessage, SENDER_LABEL } from '@core/world/inbox';
+import { actionableMessages, markRead, messageNeedsAction, SENDER_LABEL } from '@core/world/inbox';
 import { resolvePlayerDecision } from '@core/world/decisions';
-import { syncCareerState } from '@core/world/career';
 import '@core/world/decision-handlers';
-import { moveFighterToGym } from '@core/world/gyms';
-import { clamp } from '@core/rng';
 import { useGame } from '../store';
 import { Notice, Panel, Tabs } from '../components';
-import { cancelBout } from '@core/world/matchmaking';
 
 /**
  * The inbox. Every decision the game asks of the player arrives here with explicit
  * choices and a recorded resolution, so a career always has a readable decision log.
  */
-/** Categories whose consequences run through the registered decision handlers. */
-const HANDLED_CATEGORIES = new Set(['injury', 'medical', 'gym', 'career', 'news']);
-
 export function InboxPage() {
   const save = useGame((s) => s.save)!;
   const mutate = useGame((s) => s.mutate);
@@ -61,205 +54,34 @@ export function InboxPage() {
     setPending(message.id);
     setError(null);
 
-    // Categories with a registered handler go straight through the transaction.
-    if (HANDLED_CATEGORIES.has(message.category)) {
-      const outcome = await runOperation('other', 'Saving your response', (report) => {
-        report('updating-world', 'Saving your response');
-        const rng = new Rng(save.rng);
-        const result = resolvePlayerDecision(save, { messageId: message.id, choiceKey }, rng);
-        save.rng = rng.getState();
-        return {
-          ok: result.ok,
-          noOpReason: result.alreadyHandled ? result.message : null,
-          error: result.error,
-          fromDate: save.date,
-          toDate: save.date,
-          daysAdvanced: 0,
-          eventsResolved: [],
-          headlines: [result.message],
-          stoppedBecause: null,
-          navigateTo: null,
-          summary: result.message,
-        };
-      });
-      setPending(null);
-      if (!outcome.ok) {
-        setError(outcome.error ?? 'That response could not be saved.');
-        return;
-      }
-      showToast(outcome.headlines[0] ?? 'Done.', 'good');
-      // Move to the next item that needs an answer, or back to the list.
-      const remaining = actionableMessages(save);
-      navigate(remaining.length > 0 ? `/inbox/${remaining[0].id}` : '/inbox');
+    // Every category goes through the one transaction. There is no second implementation on this
+    // page any more: the switch that used to sit here was unreachable for every category that had
+    // a handler, and its Coach Mode branches are now in the core where they actually run.
+    const outcome = await runOperation('other', 'Saving your response', (report) => {
+      report('updating-world', 'Saving your response');
+      const rng = new Rng(save.rng);
+      const result = resolvePlayerDecision(save, { messageId: message.id, choiceKey }, rng);
+      save.rng = rng.getState();
+      return {
+        ok: result.ok,
+        noOpReason: result.alreadyHandled ? result.message : null,
+        error: result.error,
+        fromDate: save.date,
+        toDate: save.date,
+        daysAdvanced: 0,
+        eventsResolved: [],
+        headlines: [result.message],
+        stoppedBecause: null,
+        navigateTo: null,
+        summary: result.message,
+      };
+    });
+    setPending(null);
+    if (!outcome.ok) {
+      setError(outcome.error ?? 'That response could not be saved.');
       return;
     }
-
-    mutate((s) => {
-      const rng = new Rng(s.rng);
-      let resolution = 'Acknowledged.';
-
-      // Injury decisions never reach here: `injury` is one of HANDLED_CATEGORIES, so they go
-      // through `resolvePlayerDecision` above. The duplicate implementation that used to sit here
-      // was unreachable and had drifted out of step with the transaction that actually runs.
-
-      switch (choiceKey) {
-        case 'accommodate': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            f.happiness = clamp(f.happiness + 12, 0, 100);
-            f.relationships.player = clamp(f.relationships.player + 10, 0, 100);
-            // Attention given to one fighter is attention taken from the rest of the room.
-            const gym = s.player.gymId ? s.gyms[s.player.gymId] : null;
-            for (const other of gym?.fighterIds ?? []) {
-              if (other === f.id) continue;
-              const o = s.fighters[other];
-              if (o) o.happiness = clamp(o.happiness - 2, 0, 100);
-            }
-            resolution = `Gave ${f.name} dedicated time. The rest of the room noticed.`;
-          }
-          break;
-        }
-        case 'decline': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            f.relationships.player = clamp(f.relationships.player - 9, 0, 100);
-            f.happiness = clamp(f.happiness - 6, 0, 100);
-            resolution = `Told ${f.name} the room comes first.`;
-          }
-          break;
-        }
-        case 'reduce-sparring': {
-          const gym = s.player.gymId ? s.gyms[s.player.gymId] : null;
-          if (gym) {
-            gym.hardSparringTendency = clamp(gym.hardSparringTendency - 18, 0, 100);
-            gym.safety = clamp(gym.safety + 7, 0, 100);
-            for (const id of gym.fighterIds) {
-              const o = s.fighters[id];
-              if (o) o.happiness = clamp(o.happiness + 5, 0, 100);
-            }
-            resolution = 'Hard sparring has been cut back across the gym.';
-          }
-          break;
-        }
-        case 'hold-line': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            f.relationships.player = clamp(f.relationships.player - 12, 0, 100);
-            f.happiness = clamp(f.happiness - 9, 0, 100);
-            resolution = 'The sparring policy stands.';
-          }
-          break;
-        }
-        case 'rebalance': {
-          const gym = s.player.gymId ? s.gyms[s.player.gymId] : null;
-          if (gym) {
-            for (const id of gym.fighterIds) {
-              const o = s.fighters[id];
-              if (!o) continue;
-              if (o.ranking === null) o.happiness = clamp(o.happiness + 7, 0, 100);
-              else o.happiness = clamp(o.happiness - 5, 0, 100);
-            }
-            gym.culture = clamp(gym.culture + 4, 0, 100);
-            resolution = 'Attention has been spread more evenly across the roster.';
-          }
-          break;
-        }
-        case 'explain': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) f.relationships.player = clamp(f.relationships.player - 5, 0, 100);
-          resolution = 'Explained the position. It was not well received.';
-          break;
-        }
-        case 'change-corner': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            f.relationships.coach = clamp(f.relationships.coach + 18, 0, 100);
-            f.happiness = clamp(f.happiness + 7, 0, 100);
-            resolution = `${f.name} will have a different corner team.`;
-          }
-          break;
-        }
-        case 'refuse': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) f.relationships.player = clamp(f.relationships.player - 10, 0, 100);
-          resolution = 'The corner stays as it is.';
-          break;
-        }
-        case 'talk': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            const persuaded = rng.chance(clamp(0.3 + f.relationships.player / 200, 0.2, 0.8));
-            if (persuaded) {
-              f.happiness = clamp(f.happiness + 16, 0, 100);
-              f.relationships.player = clamp(f.relationships.player + 8, 0, 100);
-              resolution = `${f.name} has agreed to stay, for now.`;
-            } else {
-              resolution = `${f.name} listened, but nothing has changed.`;
-            }
-          }
-          break;
-        }
-        case 'let-go': {
-          resolution = 'Left the decision with the fighter.';
-          break;
-        }
-        case 'support': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            f.relationships.player = clamp(f.relationships.player + 8, 0, 100);
-            resolution = `Backed the move up in weight.`;
-          }
-          break;
-        }
-        case 'advise-against': {
-          const f = message.linkedFighterId ? s.fighters[message.linkedFighterId] : null;
-          if (f) {
-            // The fighter has autonomy and may go ahead regardless.
-            const goesAnyway = rng.chance(0.45);
-            f.relationships.player = clamp(f.relationships.player - 6, 0, 100);
-            resolution = goesAnyway
-              ? `${f.name} is moving up regardless of the advice.`
-              : `${f.name} has agreed to stay in the division.`;
-          }
-          break;
-        }
-        case 'accept-replacement': {
-          resolution = 'Accepted the replacement opponent.';
-          break;
-        }
-        case 'decline-replacement': {
-          const bout = message.linkedBoutId ? s.bouts[message.linkedBoutId] : null;
-          if (bout) {
-            // The one transaction that owns cancellation. This used to hand roll the pointers and
-            // the event card, which left the camp running, the linked messages unresolved and any
-            // contender claim consumed against a bout that never happened.
-            cancelBout(s, bout, 'The player withdrew after an opponent change.');
-            const self = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
-            if (self) self.relationships.matchmaker = clamp(self.relationships.matchmaker - 8, 0, 100);
-          }
-          resolution = 'Withdrew from the bout after the opponent change.';
-          break;
-        }
-        default:
-          resolution = 'Acknowledged.';
-      }
-
-      // A fighter leaving is applied immediately when the message is acknowledged.
-      if (message.subject.includes('is leaving the gym') && message.linkedFighterId) {
-        const f = s.fighters[message.linkedFighterId];
-        if (f && s.player.gymId && f.gymId === s.player.gymId) moveFighterToGym(s, f.id, null);
-      }
-
-      // Legacy branches above compute a resolution string. The transaction records it,
-      // closes the item, reconciles everything that depended on it and recomputes the
-      // career state, so the interface updates on this click rather than on a refresh.
-      resolveMessage(s, message.id, choiceKey, resolution);
-      s.rng = rng.getState();
-      // The badge, the career state and the next action all update on this click.
-      reconcileInbox(s);
-      syncCareerState(s);
-      showToast(resolution, 'info');
-    });
+    showToast(outcome.headlines[0] ?? 'Done.', 'good');
     setPending(null);
     const remaining = actionableMessages(save);
     navigate(remaining.length > 0 ? `/inbox/${remaining[0].id}` : '/inbox');

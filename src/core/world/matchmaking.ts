@@ -15,6 +15,7 @@ import { fulfilInterest, interestReason, matchupPull, type MatchupInterest } fro
 import { currentContender, restoreContenderStatus } from './contender';
 import { bookBout, inCampFighterIds, offerBlockReason, releaseBooking, replaceSide } from './availability';
 import { resolveMessagesForBout } from './inbox';
+import { clearFightWeek } from './fightweek';
 import { willingToFight } from './identity';
 import { purseForBout } from './economy';
 import { VENUE_CITIES, type VenueCity } from './venues';
@@ -965,8 +966,9 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     b.cardSegment = i < size.main ? 'main' : i < size.main + size.prelim ? 'prelim' : 'early-prelim';
     b.boutOrder = ranked.length - i;
     // Any championship bout is five rounds wherever it sits on the card, and so is a main
-    // event that is not for a belt.
-    if (isChampionshipBout(b) || b.isMainEvent) b.scheduledRounds = 5;
+    // event that is not for a belt. A round count agreed in negotiation is also kept: resetting
+    // it here is how a player who was told their five round request was approved fought three.
+    if (isChampionshipBout(b) || b.isMainEvent || b.roundsAgreed) b.scheduledRounds = 5;
     else b.scheduledRounds = 3;
   });
   event.boutIds = ranked.map((b) => b.id);
@@ -1061,12 +1063,25 @@ export function applyReplacement(save: SaveGame, bout: Bout, withdrawingId: Figh
   if (!swapped.bout) return false;
   bout.bookingReason = `${bout.bookingReason}. ${replacement.name} is ${reason}.`;
 
-  // A title cannot change hands on short notice against a fighter who has not earned it.
+  // A belt is not on the line without the fighter who holds it.
+  //
+  // The demotion used to look only at the replacement, so when the withdrawing fighter was the
+  // champion the bout stayed a title fight between two challengers. The winner was crowned and
+  // the reigning champion lost the belt without being in the building, leaving two fighters
+  // flagged as champion of one division.
+  const table = save.rankings[bout.divisionId];
+  const championWithdrew = table?.championId === withdrawingId || table?.interimChampionId === withdrawingId;
+  // A title also cannot change hands on short notice against a fighter who has not earned it.
   // That holds for an interim belt as much as for the undisputed one.
-  if (isChampionshipBout(bout) && (replacement.ranking === null || replacement.ranking > 8)) {
+  const replacementUnearned = replacement.ranking === null || replacement.ranking > 8;
+  if (isChampionshipBout(bout) && (championWithdrew || replacementUnearned)) {
     bout.isTitleFight = false;
     bout.isInterimTitleFight = false;
     bout.contractedWeightLb = contractedWeight(bout.divisionId, false);
+    // The contender's claim was consumed when the championship bout was made. A bout that is no
+    // longer for a belt has to give it back, or the shot they earned is spent on a fight that
+    // was not the one they earned.
+    restoreContenderStatus(save, bout.divisionId, bout.id);
   }
   if (replacement.divisionId !== bout.divisionId) {
     bout.isCatchweight = true;
@@ -1104,6 +1119,10 @@ export function cancelBout(save: SaveGame, bout: Bout, reason: string): void {
   releaseBooking(save, bout.fighterBId, bout.id);
   const ev = save.events[bout.eventId];
   if (ev) ev.boutIds = ev.boutIds.filter((id) => id !== bout.id);
+  // Fight week is closed with the bout. Leaving the stages standing meant the page the player
+  // was already looking at went on offering the ceremonial weigh in, the faceoff and finally
+  // Enter fight for a bout that had been called off, and simulating it wrote a real result.
+  clearFightWeek(save, bout.id);
   // Any camp built for this bout is closed with it rather than left running for a fight
   // that is no longer happening.
   for (const camp of Object.values(save.camps)) {

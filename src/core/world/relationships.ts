@@ -3,6 +3,7 @@ import { addDays, daysBetween, type FighterId, type IsoDate } from '../types/com
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { liveInterestBetween, recordMatchupInterest } from './matchup-interest';
+import { escalateRivalry } from './hype';
 
 /**
  * Relationships between fighters.
@@ -478,9 +479,35 @@ export function resolveCallout(save: SaveGame, calloutId: string, rng: Rng): Cal
     response = 'future-promise';
   }
 
+  applyCalloutResponse(save, callout, response, to.name, from.name);
+  return callout;
+}
+
+/**
+ * Everything that follows from a callout being answered: the fan reaction, the persistent record
+ * the matchmaker reads for months, and the relationship movement.
+ *
+ * One function, because there are two answerers. An NPC answering runs through `resolveCallout`
+ * above. The player answering used to run through the inbox handler, which set the response label
+ * and returned a sentence and did nothing else at all, so accepting a callout aimed at the player
+ * had no consequence of any kind: no rivalry, no relationship change, and above all no matchup
+ * interest, which is the record that actually makes the fight happen.
+ */
+export function applyCalloutResponse(
+  save: SaveGame,
+  callout: Callout,
+  response: CalloutResponse,
+  toName: string,
+  fromName: string
+): void {
+  const from = save.fighters[callout.fromId];
+  const to = save.fighters[callout.toId];
+  if (!from || !to) return;
+  const assessment = assessCallout(save, callout.fromId, callout.toId, null);
+
   callout.response = response;
   callout.status = 'answered';
-  callout.responseText = responseTextFor(response, to.name, from.name);
+  callout.responseText = callout.responseText ?? responseTextFor(response, toName, fromName);
 
   // The fans have a view, and it is part of whether the promotion makes the fight.
   const fanFavour = clamp(
@@ -501,8 +528,9 @@ export function resolveCallout(save: SaveGame, calloutId: string, rng: Rng): Cal
       caller: from,
       target: to,
       requestedConditions: callout.text,
-      opponentResponse:
-        response === 'accept' ? 'accepted' : response === 'reject' ? 'declined' : 'open to it',
+      // A rejection does not reach this branch at all: it takes the path below, which marks any
+      // live interest rejected. The declined case used to be written here, where it was dead.
+      opponentResponse: response === 'accept' ? 'accepted' : 'open to it',
       fanResponse: callout.fanResponse,
       promotionResponse:
         assessment.promotionInterest > 60
@@ -539,7 +567,14 @@ export function resolveCallout(save: SaveGame, calloutId: string, rng: Rng): Cal
     'future-promise': { rivalry: 6, respect: 4 },
   };
   applyRelationship(save, callout.fromId, callout.toId, effects[response], 'callout', callout.responseText);
-  return callout;
+  // The relationship carries its own rivalry number, but the rivalry the game actually gates on
+  // lives in its own store, and a callout never touched it. So a public exchange that reads as a
+  // feud everywhere it is displayed could not unlock the confrontational faceoff option, and did
+  // not pull the two together in matchmaking.
+  const heat = effects[response].rivalry ?? 0;
+  if (heat > 0) {
+    escalateRivalry(save, callout.fromId, callout.toId, 'personal', heat, callout.responseText ?? 'a callout');
+  }
 }
 
 function responseTextFor(response: CalloutResponse, toName: string, fromName: string): string {

@@ -8,7 +8,9 @@ import { createCamp, finalizeCamp, CAMP_FORM_BASELINE, estimateCampCost } from '
 import { performSocialAction, socialActionAllowance, SOCIAL_ACTIONS_PER_WEEK, decaySocial, recordSocialHistory } from './world/identity';
 import { rememberPlan, recallPlan } from './world/gameplan-memory';
 import { migrateSave } from './save/migrate';
+import { importSaveFromFile } from './save/store';
 import { pruneLedger, record, summarize } from './world/finance';
+import { createContractOffer, signContractOffer } from './world/economy';
 import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
 import { DIFFICULTY } from './config/calibration';
 import { DIVISIONS } from './config/divisions';
@@ -484,21 +486,26 @@ describe('difficulty changes the matchmaking without freezing it', () => {
   });
 
   it('assigns a stronger opponent on a harder difficulty than on an easier one', () => {
-    // Averaged over several careers. On any single save two neighbouring settings can happen to
-    // order the same four candidates the same way and draw identically, which says nothing about
+    // Measured across eight careers, as the difference between the opponent's Ovr and the
+    // player's. Three careers was too small a sample: the gap between neighbouring settings is
+    // real but under a point, so a single unlucky draw could invert it and say nothing about
     // whether the setting works.
-    const meanOpponentOvr = (bias: number) => {
+    const CAREERS = [5502, 5503, 5504, 5505, 5506, 5507, 5508, 5509];
+    const worlds = CAREERS.map((seed) => {
+      const f = newCareer(seed);
+      runWorld(f.save, 12);
+      const me = playerOf(f.save);
+      return { save: f.save, me, ...bookableEvent(f.save, me) };
+    });
+
+    const meanGap = (bias: number) => {
       let total = 0;
       let n = 0;
-      for (const careerSeed of [5502, 5503, 5504]) {
-        const f = newCareer(careerSeed);
-        runWorld(f.save, 12);
-        const me = playerOf(f.save);
-        const { event, ctx } = bookableEvent(f.save, me);
+      for (const w of worlds) {
         for (let seed = 0; seed < 30; seed++) {
-          const pick = findBestOpponent(f.save, me, event, ctx, new Rng(8000 + seed), bias);
+          const pick = findBestOpponent(w.save, w.me, w.event, w.ctx, new Rng(8000 + seed), bias);
           if (pick) {
-            total += ovrRaw(pick.opponent.ratings);
+            total += ovrRaw(pick.opponent.ratings) - ovrRaw(w.me.ratings);
             n++;
           }
         }
@@ -506,12 +513,13 @@ describe('difficulty changes the matchmaking without freezing it', () => {
       expect(n).toBeGreaterThan(0);
       return total / n;
     };
+
     // Every step up in difficulty is a step up in the opponent handed out, and none of the four
     // settings is a duplicate of another. Two of them used to be inert.
-    const easy = meanOpponentOvr(DIFFICULTY.easy.matchmakingBias);
-    const normal = meanOpponentOvr(0);
-    const hard = meanOpponentOvr(DIFFICULTY.hard.matchmakingBias);
-    const brutal = meanOpponentOvr(DIFFICULTY.brutal.matchmakingBias);
+    const easy = meanGap(DIFFICULTY.easy.matchmakingBias);
+    const normal = meanGap(0);
+    const hard = meanGap(DIFFICULTY.hard.matchmakingBias);
+    const brutal = meanGap(DIFFICULTY.brutal.matchmakingBias);
     expect(easy).toBeLessThan(normal);
     expect(normal).toBeLessThan(hard);
     expect(hard).toBeLessThan(brutal);
@@ -538,6 +546,62 @@ describe('a gym is credited for the fighters it gets ranked', () => {
     // Never more than the number of fighters who have ever been ranked and are at a gym.
     const everRanked = Object.values(f.save.fighters).filter((x) => x.highestRanking != null && x.gymId).length;
     expect(after).toBeLessThanOrEqual(everRanked);
+  });
+});
+
+describe('being released is a setback, not the end of a career', () => {
+  it('approaches a released fighter again and lets them sign', () => {
+    // A release set the contract status to released, and the renewal pass only looked at expired,
+    // so the promotion never approached them again while the career screen promised a new deal.
+    const f = newCareer(9814);
+    const me = playerOf(f.save);
+    const contract = f.save.contracts[me.contractId!];
+    contract.status = 'released';
+    contract.endCondition = 'released';
+    contract.endDate = f.save.date;
+    me.activityStatus = 'released';
+
+    // Nothing arrives while the promotion is still cooling off.
+    runWorld(f.save, 20);
+    const early = Object.values(f.save.contractOffers).filter((o) => o.fighterId === me.id);
+    expect(early.length).toBe(0);
+
+    // It does arrive once the wait is served.
+    runWorld(f.save, 40);
+    const later = Object.values(f.save.contractOffers).filter((o) => o.fighterId === me.id);
+    expect(later.length).toBeGreaterThan(0);
+  });
+
+  it('clears the released status when a new deal is signed', () => {
+    const f = newCareer(9815);
+    const me = playerOf(f.save);
+    me.activityStatus = 'released';
+    const offer = createContractOffer(me, f.save, new Rng(7));
+    signContractOffer(f.save, me, offer, null);
+    // Otherwise the contract is active while every availability check still refuses them.
+    expect(me.activityStatus).toBe('active');
+  });
+});
+
+describe('a bad save file is refused with a reason', () => {
+  const asFile = (body: string) => ({ text: async () => body }) as unknown as File;
+
+  it('names what is missing rather than leaking an internal error', async () => {
+    // A file that passed the old one key check produced "Cannot read properties of undefined
+    // (reading 'retirements')", which tells a player nothing about the file they chose.
+    await expect(importSaveFromFile(asFile(JSON.stringify({ fighters: {} })))).rejects.toThrow(/is not an .* save/i);
+    await expect(importSaveFromFile(asFile(JSON.stringify({ fighters: {} })))).rejects.toThrow(/player/);
+  });
+
+  it('refuses a file that is not readable as save data at all', async () => {
+    await expect(importSaveFromFile(asFile('this is not json'))).rejects.toThrow(/not readable/i);
+  });
+
+  it('still refuses a save written by a newer build, saying so', async () => {
+    const f = newCareer(9813);
+    const future = JSON.parse(JSON.stringify(f.save));
+    future.schemaVersion = 9999;
+    await expect(importSaveFromFile(asFile(JSON.stringify(future)))).rejects.toThrow(/newer version/i);
   });
 });
 

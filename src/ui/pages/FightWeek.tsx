@@ -9,7 +9,8 @@ import {
   tasksForBout,
   type FightWeekTask,
 } from '@core/world/fightweek';
-import { answerQuestion, createSession, faceoffChoices, presserRng } from '@core/world/presser';
+import { answerQuestion, applyMediaEffects, createSession, faceoffChoices, presserRng } from '@core/world/presser';
+import type { SocialEffects } from '@core/world/social';
 import {
   acceptOpponentMiss,
   applySecondAttempt,
@@ -21,7 +22,7 @@ import {
   WEIGH_IN_STAGE_LABEL,
   type SecondAttemptChoice,
 } from '@core/world/weighin';
-import { addHypeMoment, findRivalry, hypeStore } from '@core/world/hype';
+import { findRivalry } from '@core/world/hype';
 import { KeyValues, Notice, Panel } from '../components';
 import { useGame } from '../store';
 
@@ -172,8 +173,11 @@ function StagePanel({ task, save, busy, onComplete, mutate, navigate }: StagePro
     case 'second-weigh-in-attempt':
       return <WeighInStagePanel task={task} busy={busy} onComplete={onComplete} mutate={mutate} />;
     case 'faceoff':
-    case 'ceremonial-weigh-in':
       return <FaceoffStage task={task} busy={busy} onComplete={onComplete} mutate={mutate} />;
+    // The ceremonial weigh in is its own occasion, not a second faceoff. Routing both here meant
+    // the same choices were offered twice on the same day and their effects applied twice.
+    case 'ceremonial-weigh-in':
+      return <CeremonialWeighInStage task={task} busy={busy} onComplete={onComplete} mutate={mutate} />;
     case 'fight-night':
       return (
         <Panel title="Fight night">
@@ -480,6 +484,81 @@ function WeighInStagePanel({ task, busy, onComplete, mutate }: { task: FightWeek
   );
 }
 
+/**
+ * The ceremonial weigh in: the fighter makes weight in front of a crowd, hits a pose, and the
+ * two are brought together for the cameras.
+ *
+ * Distinct from the faceoff, which is its own stage on the same day. Both used to render the
+ * same faceoff component, so the player answered the identical prompt twice and every effect it
+ * carried was applied twice.
+ */
+function CeremonialWeighInStage({ task, busy, onComplete, mutate }: { task: FightWeekTask; busy: boolean; onComplete: (w: () => string) => void; mutate: ReturnType<typeof useGame.getState>['mutate'] }) {
+  const save = useGame((s) => s.save)!;
+  const bout = save.bouts[task.boutId];
+  const meId = save.player.fighterId;
+  const me = meId ? save.fighters[meId] : null;
+  const opponent = me && bout ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
+
+  const choices: { key: string; label: string; detail: string; effects: SocialEffects; risk: string | null }[] = [
+    {
+      key: 'ceremonial-pose',
+      label: 'Play to the crowd',
+      detail: 'Hit the pose they came for and let the room have it.',
+      effects: { hype: 5, favorability: 4 },
+      risk: null,
+    },
+    {
+      key: 'ceremonial-business',
+      label: 'Keep it businesslike',
+      detail: 'Step on, step off, save it for the cage.',
+      effects: { promotionRelationship: 3, confidence: 2 },
+      risk: null,
+    },
+    {
+      key: 'ceremonial-callout',
+      label: 'Take the microphone',
+      detail: 'Say who you want next, in front of everyone.',
+      effects: { hype: 7, promotionRelationship: -3, rivalry: 5 },
+      risk: 'The promotion does not enjoy having its matchmaking done for it.',
+    },
+  ];
+
+  return (
+    <Panel title={stageLabel(task.stage)}>
+      <p>
+        You step on the scale in front of a full room. {opponent?.name} is waiting on the other side of the stage.
+      </p>
+      <div className="replies">
+        {choices.map((c) => (
+          <button
+            key={c.key}
+            className="small"
+            disabled={busy}
+            style={{ textAlign: 'left' }}
+            onClick={() =>
+              onComplete(() => {
+                mutate((s) => {
+                  const f = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
+                  if (f) {
+                    const rng = new Rng(s.rng);
+                    applyMediaEffects(s, f, task.boutId, c.effects, `Ceremonial weigh in: ${c.label}`, rng);
+                    s.rng = rng.getState();
+                  }
+                  completeStage(s, task.id, `${c.label}. ${c.detail}`);
+                });
+                return `${c.label} at the ceremonial weigh in.`;
+              })
+            }
+          >
+            <strong>{c.label}:</strong> {c.detail}
+            {c.risk && <div className="reply-risk">{c.risk}</div>}
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 function FaceoffStage({ task, busy, onComplete, mutate }: { task: FightWeekTask; busy: boolean; onComplete: (w: () => string) => void; mutate: ReturnType<typeof useGame.getState>['mutate'] }) {
   const save = useGame((s) => s.save)!;
   const bout = save.bouts[task.boutId];
@@ -507,15 +586,15 @@ function FaceoffStage({ task, busy, onComplete, mutate }: { task: FightWeekTask;
             onClick={() =>
               onComplete(() => {
                 mutate((s) => {
-                  const h = hypeStore(s)[task.boutId];
-                  if (h && c.effects.hype) {
-                    h.total = Math.max(0, Math.min(100, h.total + c.effects.hype));
-                    addHypeMoment(s, task.boutId, `Faceoff: ${c.label}`, c.effects.hype);
-                  }
                   const f = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
-                  if (f?.fame) {
-                    f.fame.controversy = Math.max(0, Math.min(100, f.fame.controversy + (c.effects.controversy ?? 0)));
-                    f.fame.favorability = Math.max(0, Math.min(100, f.fame.favorability + (c.effects.favorability ?? 0)));
+                  if (f) {
+                    // The same applier the press conference uses, so the fine this option warns
+                    // about is actually charged, the rivalry it promises actually moves, and the
+                    // opponent focus it costs actually reaches their camp. This used to read
+                    // three of the six declared effects and drop the rest.
+                    const rng = new Rng(s.rng);
+                    applyMediaEffects(s, f, task.boutId, c.effects, `Faceoff: ${c.label}`, rng);
+                    s.rng = rng.getState();
                   }
                   completeStage(s, task.id, `${c.label}. ${c.detail}`);
                 });

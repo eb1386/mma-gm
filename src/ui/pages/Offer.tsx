@@ -123,8 +123,13 @@ export function OfferPage() {
             rows={[
               ['Show pay', formatMoney(offer.showPay)],
               ['Win bonus', formatMoney(offer.winBonus)],
-              ['Short notice bonus', offer.shortNoticeBonus > 0 ? formatMoney(offer.shortNoticeBonus) : 'None'],
-              ['Maximum for a win', formatMoney(offer.showPay + offer.winBonus + offer.shortNoticeBonus)],
+              [
+                'Short notice bonus',
+                offer.shortNoticeBonus > 0 ? `${formatMoney(offer.shortNoticeBonus)}, already in the show pay` : 'None',
+              ],
+              // The short notice bonus is added to the show pay when the purse is built, so adding
+              // it again here overstated what a win was worth by the size of the bonus.
+              ['Maximum for a win', formatMoney(offer.showPay + offer.winBonus)],
             ]}
           />
           <p className="provenance">

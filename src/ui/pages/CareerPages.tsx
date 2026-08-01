@@ -492,6 +492,9 @@ export function CareerPage() {
     );
   }
 
+  // The list has existed on every save since the beginning and was written by nothing, so a
+  // career had no record of what it had achieved.
+  const achievements = [...(save.player.achievements ?? [])].reverse();
   const { up, down } = adjacentDivisions(me);
   const plan = currentPlan(save, me.id);
   const relationships = relationshipsFor(save, me.id).slice(0, 25);
@@ -524,10 +527,33 @@ export function CareerPage() {
           { key: 'weight', label: 'Weight class' },
           { key: 'relationships', label: `Relationships${relationships.length > 0 ? ` (${relationships.length})` : ''}` },
           { key: 'callouts', label: 'Callouts' },
+          { key: 'achievements', label: `Achievements${achievements.length > 0 ? ` (${achievements.length})` : ''}` },
         ]}
         active={tab}
         onChange={setTab}
       />
+
+      {tab === 'achievements' && (
+        <Panel title="What this career has done" flush>
+          {achievements.length === 0 ? (
+            <p className="small dim" style={{ padding: '12px 16px' }}>
+              Nothing yet. Milestones are recorded as they happen: a first win, a first finish, breaking into the
+              rankings, a title, a defense, a career past a million.
+            </p>
+          ) : (
+            <table>
+              <tbody>
+                {achievements.map((a) => (
+                  <tr key={a.key}>
+                    <td>{a.label}</td>
+                    <td className="dim">{formatDate(a.date)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+      )}
 
       {tab === 'state' && (
         <Panel title="Career state">

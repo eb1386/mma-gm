@@ -6,7 +6,7 @@ import { hallOfFameScore } from '@core/world/history';
 import { deleteSave, downloadSave, estimateSaveSize, importSaveFromFile, listSaves, loadGame } from '@core/save/store';
 import type { SaveIndexEntry } from '@core/types/save';
 import { migrationNotes } from '@core/save/migrate';
-import { useGame } from '../store';
+import { useGame, discardPendingSave } from '../store';
 import { DataTable, KeyValues, Notice, Panel, Rating } from '../components';
 
 // ---------------------------------------------------------------------------
@@ -381,6 +381,9 @@ export function LoadGamePage() {
                   <button
                     className="small danger"
                     onClick={async () => {
+                      // Dropped first, or clearing the loaded save flushes a queued write that
+                      // puts the deleted career straight back.
+                      if (current?.saveId === s.saveId) discardPendingSave();
                       await deleteSave(s.saveId);
                       if (current?.saveId === s.saveId) setSave(null);
                       refresh();
