@@ -11,7 +11,7 @@ import { migrateSave } from './save/migrate';
 import { importSaveFromFile } from './save/store';
 import { pruneLedger, record, summarize } from './world/finance';
 import { createContractOffer, signContractOffer } from './world/economy';
-import { CAMP_PRESETS, normalizeFocus, setFocusShare } from './world/camp';
+import { CAMP_PRESETS, normalizeFocus, setFocusShare, transferFocusShare } from './world/camp';
 import { RATING_KEYS } from './types/fighter';
 import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
 import { DIFFICULTY } from './config/calibration';
@@ -581,6 +581,29 @@ describe('the camp focus sliders are one camp, not six dials', () => {
     expect(next.grappling).toBeCloseTo(next.wrestling, 6);
     // And each keeps its relative standing against the others.
     expect(next.grappling / next.submissions).toBeCloseTo(focus.grappling / focus.submissions, 6);
+  });
+
+  it('moves time from one area into its neighbour without changing the whole', () => {
+    // This is what dragging a boundary does, and it is the only kind of change an allocation with
+    // a fixed whole can undergo: what one area gains comes off the one beside it.
+    let focus = normalizeFocus(CAMP_PRESETS[0].focus);
+    const before = { ...focus };
+    focus = transferFocusShare(focus, 'grappling', 'striking', 0.05);
+    expect(total(focus)).toBeCloseTo(1, 6);
+    expect(focus.striking).toBeCloseTo(before.striking + 0.05, 6);
+    expect(focus.grappling).toBeCloseTo(before.grappling - 0.05, 6);
+    // Nothing else moved.
+    for (const k of RATING_KEYS) {
+      if (k === 'striking' || k === 'grappling') continue;
+      expect(focus[k]).toBeCloseTo(before[k], 6);
+    }
+  });
+
+  it('stops at zero rather than letting an area go negative', () => {
+    let focus = normalizeFocus(CAMP_PRESETS[0].focus);
+    focus = transferFocusShare(focus, 'durability', 'striking', 5);
+    expect(focus.durability).toBeCloseTo(0, 6);
+    expect(total(focus)).toBeCloseTo(1, 6);
   });
 
   it('splits evenly when one area had taken the whole camp', () => {

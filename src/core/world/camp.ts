@@ -146,6 +146,21 @@ export function setFocusShare(focus: CampFocus, key: RatingKey, share: number): 
   return out;
 }
 
+/**
+ * Moves time from one area to another, which is what dragging a boundary between them does.
+ *
+ * The whole is fixed, so this is the only kind of change that can happen to an allocation: time
+ * given to one area comes off the one beside it. Neither can go below zero, so a drag past the
+ * end simply stops.
+ */
+export function transferFocusShare(focus: CampFocus, fromKey: RatingKey, toKey: RatingKey, amount: number): CampFocus {
+  if (fromKey === toKey || amount <= 0) return focus;
+  const available = Math.max(0, focus[fromKey]);
+  const moved = Math.min(available, amount);
+  if (moved <= 0) return focus;
+  return { ...focus, [fromKey]: available - moved, [toKey]: Math.max(0, focus[toKey]) + moved };
+}
+
 export interface CampSetup {
   boutId: string | null;
   startDate: IsoDate;

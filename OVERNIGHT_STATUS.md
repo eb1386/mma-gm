@@ -766,3 +766,45 @@ The bands moved with the matchmaking gate, which is what they are for: champion 
 and unranked activity went up, because the fights that used to be given to unranked fighters
 against contenders are now made between unranked fighters instead. All four stayed inside their
 bands.
+
+
+---
+
+# The camp focus control, properly this time
+
+The first attempt at this fixed the arithmetic and left the control alone, and the player came
+back and said it was still broken. They were right, and the detail in their report was the answer:
+"it changes number instead of sizes".
+
+A range input renders the same physical width whatever its value. The thumb slides inside a track
+of fixed length. So six range inputs look identical however the camp is split, and the only thing
+that moves is the percentage beside them. That control cannot express an allocation at all, which
+is why fixing the maths behind it changed nothing anyone could see.
+
+It is one bar now, divided into six blocks, and each block's width is that area's share. Dragging
+a boundary moves time out of one block into the one beside it, so the lengths change together and
+always fill the bar exactly. Underneath, each row keeps a proportional bar and a pair of nudge
+buttons, so the control still works from a keyboard and under a thumb.
+
+The verification had to change with it. The claim is geometric, so it is measured against the real
+stylesheet in a browser: at shares of 20/16/18/14/20/12 the blocks sum to the bar and the first is
+a fifth of it; at 50/10/11/9/13/7 the first block is more than a hundred pixels longer and the
+others are measurably shorter; at 100/0/0/0/0/0 one block is the entire bar and the rest have no
+length at all.
+
+An earlier version of that test walked a whole career to reach the camp planner and either skipped
+or timed out. A test that skips proves nothing, and reporting it as coverage would have been
+worse than having no test, so it was replaced with one that measures the thing actually in
+question.
+
+## Gate
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | clean |
+| default tier | 373 passed |
+| world | 7 passed |
+| flow | 171 passed |
+| build | pass |
+| dash and terminology guards | pass |
+| browser | 38 passed, desktop and mobile |

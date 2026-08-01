@@ -292,3 +292,52 @@ test('social posting is limited rather than an unlimited button', async ({ page 
   // Going quiet is always available, because it is the absence of a post.
   await expect(page.getByRole('button', { name: /go silent/i })).toBeEnabled();
 });
+
+test('the camp focus blocks have lengths that partition one whole camp', async ({ page }) => {
+  // The complaint this covers was visual: six range inputs all render the same width whatever
+  // their value, so the camp split was invisible and only the percentages moved. What has to be
+  // true now is a geometric claim about the real stylesheet, so it is measured against it.
+  await page.goto('/help');
+  await expect(page.locator('.page')).toBeVisible({ timeout: 15_000 });
+
+  const measure = async (shares: number[]) =>
+    page.evaluate((pcts) => {
+      document.getElementById('alloc-probe')?.remove();
+      const host = document.createElement('div');
+      host.id = 'alloc-probe';
+      host.style.width = '600px';
+      const bar = document.createElement('div');
+      bar.className = 'alloc';
+      for (const [i, pct] of pcts.entries()) {
+        const seg = document.createElement('div');
+        seg.className = `alloc-seg seg-${['striking', 'grappling', 'wrestling', 'submissions', 'cardio', 'durability'][i]}`;
+        seg.style.width = `${pct}%`;
+        bar.appendChild(seg);
+      }
+      host.appendChild(bar);
+      document.body.appendChild(host);
+      const widths = [...bar.children].map((el) => (el as HTMLElement).getBoundingClientRect().width);
+      // The content box, because the bar carries a one pixel border the blocks sit inside.
+      const total = bar.clientWidth;
+      host.remove();
+      return { widths, total };
+    }, shares);
+
+  const even = await measure([20, 16, 18, 14, 20, 12]);
+  // Each block is as long as its share of the camp, and the six fill the bar exactly.
+  expect(Math.abs(even.widths.reduce((a, b) => a + b, 0) - even.total)).toBeLessThan(1);
+  expect(Math.abs(even.widths[0] / even.total - 0.2)).toBeLessThan(0.01);
+  expect(Math.abs(even.widths[5] / even.total - 0.12)).toBeLessThan(0.01);
+
+  // Give one area more and the others are visibly shorter, which is the whole point.
+  const skewed = await measure([50, 10, 11, 9, 13, 7]);
+  expect(skewed.widths[0]).toBeGreaterThan(even.widths[0] + 100);
+  expect(skewed.widths[1]).toBeLessThan(even.widths[1]);
+  expect(skewed.widths[4]).toBeLessThan(even.widths[4]);
+  expect(Math.abs(skewed.widths.reduce((a, b) => a + b, 0) - skewed.total)).toBeLessThan(1);
+
+  // One area taking everything leaves the others with no length at all.
+  const all = await measure([100, 0, 0, 0, 0, 0]);
+  expect(Math.abs(all.widths[0] - all.total)).toBeLessThan(1);
+  for (let i = 1; i < 6; i++) expect(all.widths[i]).toBeLessThan(1);
+});
