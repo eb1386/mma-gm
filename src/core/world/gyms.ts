@@ -332,6 +332,67 @@ export function moveFighterToGym(save: SaveGame, fighterId: FighterId, newGymId:
   }
 }
 
+/**
+ * The player changes gyms, with the reason stated and the consequences applied.
+ *
+ * Players asked for this directly, and asked for it to matter: leaving a room that has done
+ * nothing wrong burns the bridge, while leaving with a real reason is understood. The reason is
+ * derived from the situation rather than picked from a menu, because the situation is what the
+ * old room actually reacts to.
+ */
+export function switchGym(
+  save: SaveGame,
+  fighter: Fighter,
+  targetGymId: GymId
+): { ok: boolean; message: string; justified: boolean } {
+  const target = save.gyms[targetGymId];
+  if (!target) return { ok: false, message: 'That gym no longer exists.', justified: false };
+  if (fighter.gymId === targetGymId) {
+    return { ok: false, message: `${fighter.name} already trains at ${target.name}.`, justified: false };
+  }
+  for (const camp of Object.values(save.camps)) {
+    if (camp.fighterId === fighter.id && (camp.status === 'planned' || camp.status === 'running')) {
+      return { ok: false, message: 'A camp is underway. Changing rooms mid preparation is how fights are lost.', justified: false };
+    }
+  }
+
+  const old = fighter.gymId ? save.gyms[fighter.gymId] : null;
+  // A move is understood when the fighter is going somewhere clearly better, or leaving somewhere
+  // that has stopped working for them. Anything else is walking out on a room that did its job.
+  const justified =
+    !old ||
+    target.reputation > old.reputation + GYM_MOVE_REPUTATION_MARGIN ||
+    fighter.happiness < GYM_MOVE_UNHAPPY_BELOW ||
+    fighter.relationships.coach < GYM_MOVE_COLD_COACH_BELOW;
+
+  if (old && !justified) {
+    // The old room takes it personally, and the word gets around.
+    for (const id of old.fighterIds) {
+      if (id === fighter.id) continue;
+      const teammate = save.fighters[id];
+      if (teammate) teammate.relationships.team = clamp(teammate.relationships.team - 4, 0, 100);
+    }
+    fighter.happiness = clamp(fighter.happiness - 6, 0, 100);
+    fighter.relationships.team = clamp(fighter.relationships.team - 18, 0, 100);
+  } else {
+    fighter.happiness = clamp(fighter.happiness + 8, 0, 100);
+  }
+
+  moveFighterToGym(save, fighter.id, targetGymId);
+  return {
+    ok: true,
+    justified,
+    message: justified
+      ? `${fighter.name} has moved to ${target.name}. ${old ? `${old.name} understood the decision.` : 'A room at last.'}`
+      : `${fighter.name} has moved to ${target.name}. ${old!.name} did not take it well, and the sport remembers who walks out.`,
+  };
+}
+
+/** How much better a destination has to be for leaving a healthy room to read as justified. */
+export const GYM_MOVE_REPUTATION_MARGIN = 8;
+export const GYM_MOVE_UNHAPPY_BELOW = 45;
+export const GYM_MOVE_COLD_COACH_BELOW = 40;
+
 /** Monthly gym finances. */
 export function runGymMonth(save: SaveGame, gym: Gym): { income: number; costs: number; net: number; lines: string[] } {
   const lines: string[] = [];

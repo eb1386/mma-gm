@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
+import { Analytics } from '@vercel/analytics/react';
 import { App } from './ui/App';
 import './ui/styles.css';
 import { flushPendingSave, useGame } from './ui/store';
@@ -13,6 +14,9 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <App />
     </BrowserRouter>
+    {/* The analytics script only exists on the Vercel platform. Mounting it locally logged a 404
+        on every page load, which the browser tests rightly treat as a broken happy path. */}
+    {!['localhost', '127.0.0.1'].includes(window.location.hostname) && <Analytics />}
   </StrictMode>
 );
 

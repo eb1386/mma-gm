@@ -8,10 +8,14 @@ import { createCamp, finalizeCamp, CAMP_FORM_BASELINE, estimateCampCost } from '
 import { performSocialAction, socialActionAllowance, SOCIAL_ACTIONS_PER_WEEK, decaySocial, recordSocialHistory } from './world/identity';
 import { rememberPlan, recallPlan } from './world/gameplan-memory';
 import { migrateSave } from './save/migrate';
+import { retireFighter } from './world/career';
 import { importSaveFromFile } from './save/store';
 import { pruneLedger, record, summarize } from './world/finance';
 import { createContractOffer, signContractOffer } from './world/economy';
 import { CAMP_PRESETS, normalizeFocus, setFocusShare, transferFocusShare } from './world/camp';
+import { recordMatchupInterest } from './world/matchup-interest';
+import { runMatchupInterestPass } from './world/matchup-pass';
+import { createFightOffer } from './world/offers';
 import { RATING_KEYS } from './types/fighter';
 import { findBestOpponent, type AvailabilityContext } from './world/matchmaking';
 import { DIFFICULTY } from './config/calibration';
@@ -40,6 +44,24 @@ function playerOf(save: SaveGame): Fighter {
  * nobody to pick from and would make a matchmaking assertion vacuously true.
  */
 function bookableEvent(save: SaveGame, fighter: Fighter) {
+  // The division is freed first, exactly as the matchmaking suite's makeAvailable does. This
+  // test measures how difficulty orders a candidate pool, not whether a pool happens to exist
+  // on this seed: the refusal gates are legitimate matchmaking and are tested on their own, and
+  // letting them empty the pool here failed the test for a reason it is not about.
+  for (const other of Object.values(save.fighters)) {
+    if (other.divisionId !== fighter.divisionId || other.id === fighter.id) continue;
+    if (other.retired) continue;
+    other.injuries = [];
+    other.medicalSuspension = null;
+    other.commissionSuspension = null;
+    other.antiDopingSuspension = null;
+    other.nextBoutId = null;
+    other.offerCooldownUntil = null;
+    if (other.ufcRecord.losses > other.ufcRecord.wins) {
+      other.ufcRecord = { ...other.ufcRecord, wins: other.ufcRecord.losses + 1 };
+    }
+    if (other.ranking === null && other.winStreak < 3) other.winStreak = 3;
+  }
   const events = Object.values(save.events)
     .filter((e) => e.status === 'announced')
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -669,6 +691,75 @@ describe('a bad save file is refused with a reason', () => {
     const future = JSON.parse(JSON.stringify(f.save));
     future.schemaVersion = 9999;
     await expect(importSaveFromFile(asFile(JSON.stringify(future)))).rejects.toThrow(/newer version/i);
+  });
+});
+
+describe('a player can retire, with every consequence applied', () => {
+  it('vacates a held belt, withdraws offers, and ends the career', () => {
+    const f = newCareer(9870);
+    const me = playerOf(f.save);
+    const table = f.save.rankings[me.divisionId];
+    table.championId = me.id;
+    me.isChampion = true;
+    me.nextBoutId = null;
+    const result = retireFighter(f.save, me, 'Done.');
+    expect(result.ok).toBe(true);
+    expect(me.retired).toBe(true);
+    expect(me.isChampion).toBe(false);
+    expect(table.championId).toBeNull();
+    for (const o of Object.values(f.save.fightOffers)) {
+      if (o.fighterId === me.id) expect(o.status).not.toBe('open');
+    }
+  });
+
+  it('refuses while a fight is booked, so a booking cannot be orphaned', () => {
+    const f = bookedCareer(9871);
+    const me = playerOf(f.save);
+    expect(me.nextBoutId).not.toBeNull();
+    const result = retireFighter(f.save, me, 'Done.');
+    expect(result.ok).toBe(false);
+    expect(me.retired).toBe(false);
+  });
+});
+
+describe('nobody is ever matched against themselves', () => {
+  it('books the caller when the player was the target of the interest', () => {
+    // An opponent calling the player out records the interest with the player as target. The
+    // booking pass read the target unconditionally, so it offered the player a fight against
+    // themselves, and the offer reached the inbox with the player named as their own opponent.
+    const f = newCareer(9850);
+    runWorld(f.save, 10);
+    const me = playerOf(f.save);
+    const rival = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === me.divisionId && x.id !== me.id && !x.retired && x.activityStatus === 'active' && !x.nextBoutId
+    )!;
+    recordMatchupInterest(f.save, {
+      source: 'callout',
+      caller: rival,
+      target: me,
+      requestedConditions: 'Sign it.',
+      opponentResponse: 'accepted',
+      interestScore: 95,
+    });
+    runMatchupInterestPass(f.save, me, new Rng(11));
+    const mine = Object.values(f.save.fightOffers).filter((o) => o.fighterId === me.id && o.status === 'open');
+    for (const offer of mine) expect(offer.opponentId).not.toBe(me.id);
+  });
+
+  it('refuses a self pairing at the offer choke point however it arrives', () => {
+    const f = newCareer(9851);
+    const me = playerOf(f.save);
+    const event = Object.values(f.save.events).find((e) => e.status === 'announced')!;
+    const offer = createFightOffer(f.save, me, me, event, new Rng(1), {
+      isMainEvent: false,
+      isTitleFight: false,
+      isInterimTitleFight: false,
+      scheduledRounds: 3,
+      reason: 'a mistake',
+      isReplacementSlot: false,
+      bookingKind: 'divisional-filler',
+    });
+    expect(offer).toBeNull();
   });
 });
 

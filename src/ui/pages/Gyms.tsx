@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { RATING_LONG_LABEL } from '@core/types/fighter';
 import { formatMoney } from '@core/types/common';
-import { STAFF_ROLE_LABEL } from '@core/world/gyms';
+import { STAFF_ROLE_LABEL, switchGym, GYM_MOVE_REPUTATION_MARGIN, GYM_MOVE_UNHAPPY_BELOW, GYM_MOVE_COLD_COACH_BELOW } from '@core/world/gyms';
 import { estimateRatings } from '@core/world/scouting';
 import { useGame } from '../store';
 import { Bar, DataTable, KeyValues, Notice, Panel, Rating } from '../components';
@@ -54,12 +55,24 @@ export function GymsPage() {
 
 export function GymPage() {
   const save = useGame((s) => s.save)!;
+  const mutate = useGame((s) => s.mutate);
+  const showToast = useGame((s) => s.showToast);
   const { gymId } = useParams();
+  const [confirmMove, setConfirmMove] = useState(false);
   const gym = gymId ? save.gyms[gymId] : null;
   if (!gym) return <div className="page"><Notice kind="bad">Unknown gym.</Notice></div>;
 
   const roster = gym.fighterIds.map((id) => save.fighters[id]).filter(Boolean);
   const staff = gym.staffIds.map((id) => save.staff[id]).filter(Boolean);
+  const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
+  // Whether leaving the current room for this one would be understood, stated before the click
+  // rather than discovered after it.
+  const wouldBeJustified =
+    me && me.gymId
+      ? gym.reputation > (save.gyms[me.gymId]?.reputation ?? 0) + GYM_MOVE_REPUTATION_MARGIN ||
+        me.happiness < GYM_MOVE_UNHAPPY_BELOW ||
+        me.relationships.coach < GYM_MOVE_COLD_COACH_BELOW
+      : true;
 
   return (
     <div className="page">
@@ -70,6 +83,41 @@ export function GymPage() {
         </span>
         {gym.isPlayerControlled && <span className="tag player">your gym</span>}
       </div>
+
+      {me && me.gymId !== gym.id && !me.retired && (
+        <Panel title="Train here">
+          <p className="small dim">
+            {wouldBeJustified
+              ? 'Your current room would understand this move.'
+              : 'Leaving your current room for this one would burn the bridge: the team takes it personally, and the sport remembers who walks out.'}
+          </p>
+          {!confirmMove ? (
+            <button className="small" onClick={() => setConfirmMove(true)}>
+              Consider moving camps
+            </button>
+          ) : (
+            <div className="row">
+              <button
+                className="small primary"
+                onClick={() => {
+                  mutate((s) => {
+                    const fighter = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
+                    if (!fighter) return;
+                    const result = switchGym(s, fighter, gym.id);
+                    showToast(result.message, result.ok ? (result.justified ? 'good' : 'info') : 'bad');
+                  });
+                  setConfirmMove(false);
+                }}
+              >
+                Move to {gym.name}
+              </button>
+              <button className="small" onClick={() => setConfirmMove(false)}>
+                Stay put
+              </button>
+            </div>
+          )}
+        </Panel>
+      )}
 
       <div className="grid c3">
         <Panel title="Profile">

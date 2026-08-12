@@ -501,6 +501,22 @@ export function scoreCandidate(
       if (unranked.winStreak < needed) return null;
     }
 
+    // A promotional debut is against another newcomer. The experience gate is separate from the
+    // ranking gate because a dangerous veteran can sit unranked: a debuting player was handed a
+    // five and one finisher first time out, which no matchmaker books and no debutant accepts.
+    const fightsOf = (f: Fighter) => f.ufcRecord.wins + f.ufcRecord.losses + f.ufcRecord.draws + f.ufcRecord.noContests;
+    // A ranked fighter is established whatever their promotional count says: a generated
+    // contender can arrive with a seeded ranking and an empty promotional record, and treating
+    // them as a newcomer made them unbookable against the whole division.
+    const isDebutant = (f: Fighter, rank: number | null) => fightsOf(f) === 0 && rank === null;
+    const debutant = isDebutant(fighter, rankA) ? fighter : isDebutant(opponent, rankB) ? opponent : null;
+    if (debutant) {
+      const other = debutant === fighter ? opponent : fighter;
+      const otherRank = other === fighter ? rankA : rankB;
+      if (otherRank !== null) return null;
+      if (fightsOf(other) > M.gate.debutOpponentMaxFights) return null;
+    }
+
     // The fighter holding the number one contender position is waiting on a title shot. Putting
     // them in with anyone outside the title picture risks the shot they earned for nothing.
     const contender = currentContender(save, fighter.divisionId);

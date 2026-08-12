@@ -14,7 +14,7 @@ import { applyPopularity, assignEventBonuses, computeLeverage, createContractOff
 import { applyDeltas, developWeek, evenFocus, notePeakOvr, potConfidenceFor, retirementChance } from './development';
 import { invalidatePot, prunePotCache, refreshPotForAll, updatePot } from './pot';
 import { moveFighterToGym, rollFighterAutonomy, runGymMonth, updateHappiness } from './gyms';
-import { computeSeasonAwards, newsForResult, pushNews, retirementNews, runHallOfFameVote } from './history';
+import { computeSeasonAwards, newsForResult, pushNews, runHallOfFameVote } from './history';
 import {
   activeInjuries,
   canCompete,
@@ -41,13 +41,13 @@ import { campLifeRng, generateCampLife, seedGymRelationships } from './camp-life
 import { decayRelationships, openCallouts, pruneCallouts, recordFightBetween, resolveCallout } from './relationships';
 import { enforceAbsentChampions, maybeSuggestMove, settleOneFightMoves } from './weightclass';
 import { assignOfficials, judgePersonasFor, recordOfficialOutcome, refereeTendencyFor } from './officials';
-import { applyResultToContenders, forfeitContenderStatus, fulfilContenderStatus, reviewContenderClaims } from './contender';
+import { applyResultToContenders, fulfilContenderStatus, reviewContenderClaims } from './contender';
 import { evaluateAllInterests, pruneMatchupInterests } from './matchup-interest';
 import { runMatchupInterestPass } from './matchup-pass';
 import { existingTitleOffer, interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
 import { cancelStaleDivisionBouts, enforceDivisionInvariant, runNpcCallouts, runNpcWeightClassMoves } from './npc-behaviour';
 import { pruneGamePlans } from './gameplan-memory';
-import { syncCareerState, recordAchievements } from './career';
+import { syncCareerState, recordAchievements, retireFighter } from './career';
 import './decision-handlers';
 import { PROMOTION_CONTRACTS } from '../config/branding';
 import { applyResultToRankings, applyTitleOutcome, reconcileChampionFlags, recomputeDivision, recomputePfp, seedDeposedChampion } from './rankings';
@@ -1173,48 +1173,11 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       const weekly = retirementChance(fighter, save.date) / 52;
       const retires = rng.chance(weekly);
       if (retires && retirementsOn) {
-        fighter.retired = true;
-        fighter.retirementDate = save.date;
-        fighter.activityStatus = 'retired';
-        const table = save.rankings[fighter.divisionId];
-        // A retiring fighter gives up whatever they hold. Clearing only the undisputed belt left a
-        // retired fighter listed as interim champion, and the strip pass would later promote them
-        // into the vacancy they had just created.
-        if (table.interimChampionId === fighter.id) {
-          table.interimChampionId = null;
-          fighter.isInterimChampion = false;
-          const interimReign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null && r.isInterim);
-          if (interimReign) {
-            interimReign.lostOn = save.date;
-            interimReign.endReason = 'retired';
-          }
-        }
-        // A contender position is given up too, so the division is not left waiting on somebody
-        // who will never fight again.
-        forfeitContenderStatus(save, fighter.divisionId, `${fighter.name} has retired.`, fighter.id);
-        if (table.championId === fighter.id) {
-          table.championId = null;
-          fighter.isChampion = false;
-          const reign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null && !r.isInterim);
-          if (reign) {
-            reign.lostOn = save.date;
-            reign.endReason = 'retired';
-          }
-          pushNews(save, {
-            date: save.date,
-            headline: `${DIVISIONS.find((d) => d.id === fighter.divisionId)!.name} title is vacant`,
-            body: `${fighter.name} has retired as champion. The title is vacated.`,
-            tags: ['title', fighter.divisionId],
-            fighterIds: [fighter.id],
-            importance: 5,
-          });
-        }
         const age = ageOn(fighter.birthDate, save.date) ?? fighter.ageAtSnapshot ?? 34;
-        retirementNews(
+        retireFighter(
           save,
           fighter,
-          fighter.longevity < 40 ? 'The accumulated damage made the decision.' : age >= 36 ? 'Age caught up with the career.' : 'The results stopped coming.',
-          save.date
+          fighter.longevity < 40 ? 'The accumulated damage made the decision.' : age >= 36 ? 'Age caught up with the career.' : 'The results stopped coming.'
         );
       }
     }

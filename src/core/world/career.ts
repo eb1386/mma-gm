@@ -9,6 +9,8 @@ import { pendingStages, stageLabel, type FightWeekStage } from './fightweek';
 import type { AdvanceTarget } from './advance-target';
 import { DIVISION_BY_ID } from '../config/divisions';
 import { isFinish } from '../types/fight';
+import { forfeitContenderStatus } from './contender';
+import { pushNews, retirementNews } from './history';
 
 /**
  * The player career state machine.
@@ -471,6 +473,61 @@ export function recordAchievements(save: SaveGame): string[] {
   claim('millionaire', 'Career earnings past one million', (save.finance?.careerEarnings ?? 0) >= 1_000_000);
   claim('hall-of-fame', 'Inducted into the Hall of Fame', me.hallOfFameYear !== null);
   return won;
+}
+
+/**
+ * Ends a career, with every consequence applied in one place.
+ *
+ * NPCs have retired through this logic since the beginning; the player had no way to retire at
+ * all, which players asked for directly. One function serves both, so a champion who walks away
+ * vacates the belt identically whoever they are.
+ */
+export function retireFighter(save: SaveGame, fighter: Fighter, reason: string): { ok: boolean; message: string } {
+  if (fighter.retired) return { ok: false, message: `${fighter.name} is already retired.` };
+  const live = fighter.nextBoutId ? save.bouts[fighter.nextBoutId] : null;
+  if (live && live.status === 'scheduled') {
+    return { ok: false, message: 'There is a booked fight. Withdraw from it or see it through before retiring.' };
+  }
+
+  fighter.retired = true;
+  fighter.retirementDate = save.date;
+  fighter.activityStatus = 'retired';
+
+  const table = save.rankings[fighter.divisionId];
+  if (table?.interimChampionId === fighter.id) {
+    table.interimChampionId = null;
+    fighter.isInterimChampion = false;
+    const interimReign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null && r.isInterim);
+    if (interimReign) {
+      interimReign.lostOn = save.date;
+      interimReign.endReason = 'retired';
+    }
+  }
+  forfeitContenderStatus(save, fighter.divisionId, `${fighter.name} has retired.`, fighter.id);
+  if (table?.championId === fighter.id) {
+    table.championId = null;
+    fighter.isChampion = false;
+    const reign = save.history.reigns.find((r) => r.fighterId === fighter.id && r.lostOn === null && !r.isInterim);
+    if (reign) {
+      reign.lostOn = save.date;
+      reign.endReason = 'retired';
+    }
+    pushNews(save, {
+      date: save.date,
+      headline: `${DIVISION_BY_ID[fighter.divisionId]?.name ?? 'The'} title is vacant`,
+      body: `${fighter.name} has retired as champion. The title is vacated.`,
+      tags: ['title', fighter.divisionId],
+      fighterIds: [fighter.id],
+      importance: 5,
+    });
+  }
+  // Whatever was on the table is off it.
+  for (const offer of Object.values(save.fightOffers)) {
+    if (offer.fighterId !== fighter.id && offer.opponentId !== fighter.id) continue;
+    if (offer.status === 'open') offer.status = 'withdrawn';
+  }
+  retirementNews(save, fighter, reason, save.date);
+  return { ok: true, message: `${fighter.name} has retired. The record stands at ${fighter.ufcRecord.wins} and ${fighter.ufcRecord.losses} in the promotion.` };
 }
 
 /** Writes the derived state into the save so it persists and can be shown in a save list. */

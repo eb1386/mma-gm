@@ -226,6 +226,34 @@ export const CAMP_FORM_BASELINE = 50;
  */
 export const CAMP_FORM_WEIGHT = 0.2;
 
+/**
+ * The base a fighter built in the room between camps, 0 to 1.
+ *
+ * Weeks of ordinary gym time since the previous camp ended, scaled by the quality of the room
+ * they spent it in. Players asked for the time between fights to matter: it now feeds the next
+ * camp, which trains slightly better and opens slightly sharper from a built base. Bounded small
+ * on purpose, because a camp is still where fights are won.
+ */
+export function baseBuildingFor(save: SaveGame, fighter: Fighter, startDate: IsoDate): number {
+  const previous = Object.values(save.camps)
+    .filter((c) => c.fighterId === fighter.id && (c.status === 'complete' || c.status === 'abandoned'))
+    .sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
+  const since = previous ? previous.endDate : null;
+  const weeksBetween = since ? Math.max(0, Math.floor(daysBetween(since, startDate) / 7)) : BASE_BUILDING_FULL_WEEKS / 2;
+  const gym = fighter.gymId ? save.gyms[fighter.gymId] : null;
+  if (!gym) return 0;
+  const partnerAvg = RATING_KEYS.reduce((t, k) => t + gym.trainingPartners[k], 0) / RATING_KEYS.length;
+  const roomQuality = clamp((partnerAvg + gym.facilities) / 2 / 100, 0, 1);
+  return clamp(weeksBetween / BASE_BUILDING_FULL_WEEKS, 0, 1) * roomQuality;
+}
+
+/** Weeks of ordinary gym time it takes to arrive at a fully built base. */
+export const BASE_BUILDING_FULL_WEEKS = 10;
+/** How much a fully built base improves the effective training quality of the camp. */
+export const BASE_BUILDING_TRAINING_LIFT = 0.18;
+/** Sharpness a fully built base is worth on fight night. */
+export const BASE_BUILDING_SHARPNESS = 0.03;
+
 export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): TrainingCamp {
   const { weeks, cost } = estimateCampCost(save, setup);
   // A new camp starts from neutral form, so last camp's run of bad weeks does not follow a fighter
@@ -254,6 +282,7 @@ export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): 
     resultingGains: null,
     overtrained: false,
     cost,
+    baseBuilding: baseBuildingFor(save, fighter, setup.startDate),
   };
 }
 
@@ -341,7 +370,9 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
     });
   }
 
-  const effectiveIntensity = camp.intensity * capacity * (overtraining ? 0.6 : 1);
+  // A built base makes the same week of camp worth slightly more.
+  const baseLift = 1 + (camp.baseBuilding ?? 0) * BASE_BUILDING_TRAINING_LIFT;
+  const effectiveIntensity = clamp(camp.intensity * capacity * (overtraining ? 0.6 : 1) * baseLift, 0, 1);
 
   const input: DevelopmentInput = {
     trainingQuality: effectiveIntensity,
@@ -494,6 +525,8 @@ export function finalizeCamp(save: SaveGame, camp: TrainingCamp, rng: Rng): { sh
   // days meant the four day option was byte identical to arriving on the standard schedule, so
   // one of the three choices in that control did nothing whatsoever.
   sharpness += Math.min(camp.arriveEarlyDays, ARRIVE_EARLY_CAP_DAYS) * ARRIVE_EARLY_PER_DAY;
+  // The base built between camps opens the camp sharper. Small, and stacked with everything else.
+  sharpness += (camp.baseBuilding ?? 0) * BASE_BUILDING_SHARPNESS;
   // Camping near the event does the same job across the whole camp rather than in the last week,
   // which is what the option says it buys and what its higher cost was already charging for.
   if (camp.campType === 'near-event') sharpness += NEAR_EVENT_SHARPNESS;

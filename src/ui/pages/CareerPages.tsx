@@ -48,7 +48,7 @@ import {
   relationshipsFor,
   type CalloutTone,
 } from '@core/world/relationships';
-import { CAREER_STATE_LABEL } from '@core/world/career';
+import { CAREER_STATE_LABEL, retireFighter, syncCareerState } from '@core/world/career';
 import { assessTitleOpportunity, assessTitleRematch, lastTitleLoss, OPPORTUNITY_LABEL } from '@core/world/title-logic';
 import { offerBlockReason, BLOCK_REASON_TEXT } from '@core/world/availability';
 import { addDays } from '@core/types/common';
@@ -482,6 +482,7 @@ export function CareerPage() {
   const [moveKind, setMoveKind] = useState<MoveKind>('permanent');
   const [titleDecision, setTitleDecision] = useState<TitleDecision>('vacate-now');
   const [target, setTarget] = useState<string>('');
+  const [confirmRetire, setConfirmRetire] = useState(false);
 
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
   if (!me || !status) {
@@ -532,6 +533,39 @@ export function CareerPage() {
         active={tab}
         onChange={setTab}
       />
+
+      {tab === 'state' && (
+        <Panel title="Retirement">
+          <p className="small dim">
+            Walking away ends the career for good: any belt is vacated, open offers are withdrawn, and the record
+            stands as it is. There is no coming back from this one.
+          </p>
+          {!confirmRetire ? (
+            <button className="small danger" onClick={() => setConfirmRetire(true)}>
+              Consider retirement
+            </button>
+          ) : (
+            <div className="row">
+              <button
+                className="small danger"
+                disabled={busy}
+                onClick={() =>
+                  act('Retiring', () => {
+                    const result = retireFighter(save, me, 'Walked away on their own terms.');
+                    if (result.ok) syncCareerState(save);
+                    return result.message;
+                  })
+                }
+              >
+                Retire now, permanently
+              </button>
+              <button className="small" onClick={() => setConfirmRetire(false)}>
+                Keep fighting
+              </button>
+            </div>
+          )}
+        </Panel>
+      )}
 
       {tab === 'achievements' && (
         <Panel title="What this career has done" flush>

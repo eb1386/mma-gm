@@ -166,6 +166,13 @@ export const MATCHMAKING = {
      * proves nothing and losing to them costs everything, which is exactly why it is not booked.
      */
     refuseRankedAgainstLosingRecord: true,
+    /**
+     * The most promotional fights an opponent can have when the other side is making their
+     * debut. Three, because the report that prompted this was a debut against a five and one
+     * finisher: a debut is against another newcomer, not a ranked fighter and not a veteran
+     * with a highlight reel, and six would still have admitted that exact fight.
+     */
+    debutOpponentMaxFights: 3,
   },
 
   /** Random jitter so a long save stays varied. Applied last. */

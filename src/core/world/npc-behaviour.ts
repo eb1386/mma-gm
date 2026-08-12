@@ -8,7 +8,7 @@ import { healthyCutFor } from './health';
 import { addInboxMessage } from './inbox';
 import { COOLDOWNS, mayNotify } from './decisions';
 import { calloutPressure, getRelationship, makeCallout, relationshipState, type CalloutTone } from './relationships';
-import { adjacentDivisions } from './weightclass';
+import { adjacentDivisions, carriedWalkingWeight, frameFitsDivision } from './weightclass';
 import { forfeitContenderStatus, grantContenderStatus } from './contender';
 import { assessChampionMove } from './weightclass';
 
@@ -221,6 +221,11 @@ export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecisio
   const { up, down } = adjacentDivisions(pick.f);
   const target = goUp ? up : down;
   if (!target) return moves;
+  // The body has to fit the destination. Without this a fighter could keep stepping up until a
+  // lightweight stood in the light heavyweight rankings, because each move used to inflate the
+  // walking weight to the new division and make them "too big" all over again.
+  const age = ageOn(pick.f.birthDate, save.date) ?? pick.f.ageAtSnapshot ?? 28;
+  if (!frameFitsDivision(pick.f, target, age).ok) return moves;
 
   const from = DIVISION_BY_ID[pick.f.divisionId];
   const oldTable = save.rankings[from.id];
@@ -254,7 +259,7 @@ export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecisio
   pick.f.previousRanking = null;
   pick.f.weeksRanked = 0;
   if (!pick.f.eligibleDivisions.includes(target.id)) pick.f.eligibleDivisions.push(target.id);
-  pick.f.walkingWeightLb = target.limitLb + Math.min(target.typicalWalkAroundOverLb, Math.max(2, pick.f.walkingWeightLb - from.limitLb));
+  pick.f.walkingWeightLb = carriedWalkingWeight(pick.f);
   pick.f.weightMisses = 0;
 
   if (wasChampion) {

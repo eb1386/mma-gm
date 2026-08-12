@@ -58,8 +58,13 @@ function suitableEvents(save: SaveGame): FightCardEvent[] {
  * Returns the offer id, or null with the reason recorded on the interest.
  */
 function tryBook(save: SaveGame, interest: MatchupInterest, player: Fighter, rng: Rng): string | null {
-  const target = save.fighters[interest.targetId];
-  if (!target) return null;
+  // The opponent is whichever side of the interest the player is not. The player can be the
+  // target as easily as the caller, because an opponent calling the player out records the
+  // interest that way round, and reading `targetId` unconditionally booked the player against
+  // themselves.
+  const otherId = interest.callerId === player.id ? interest.targetId : interest.callerId;
+  const target = save.fighters[otherId];
+  if (!target || target.id === player.id) return null;
   const offerIds = openOfferFighterIds(save);
   const campIds = inCampFighterIds(save);
 
@@ -109,7 +114,9 @@ export function runMatchupInterestPass(save: SaveGame, player: Fighter, rng: Rng
       const offerId = tryBook(save, interest, player, rng);
       if (offerId) {
         offersCreated++;
-        headlines.push(`The fight you asked for against ${save.fighters[interest.targetId]?.name ?? 'your target'} has been made.`);
+        const otherName =
+          save.fighters[interest.callerId === player.id ? interest.targetId : interest.callerId]?.name ?? 'your target';
+        headlines.push(`The fight you asked for against ${otherName} has been made.`);
         continue;
       }
       // No card worked this week. That is not a failure, and the interest stays live.

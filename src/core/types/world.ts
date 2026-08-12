@@ -204,6 +204,15 @@ export interface TrainingCamp {
   resultingGains: Partial<Record<RatingKey, number>> | null;
   overtrained: boolean;
   cost: number;
+  /**
+   * How much of a base the fighter built in the gym between camps, 0 to 1.
+   *
+   * Weeks of ordinary training since the previous camp, scaled by the quality of the room. A
+   * camp that starts from a built base trains slightly better and opens slightly sharper, which
+   * is what makes the time between fights part of the career rather than dead air. Optional so
+   * camps written before this existed keep loading; absent means none.
+   */
+  baseBuilding?: number;
 }
 
 export interface CampOutcome {

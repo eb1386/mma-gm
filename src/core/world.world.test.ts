@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { DIVISIONS } from './config/divisions';
+import { DIVISION_BY_ID, DIVISIONS } from './config/divisions';
 import { RATING_KEYS } from './types/fighter';
 import { createNewGame } from './world/newgame';
 import { advance, pruneHistory } from './world/tick';
@@ -161,6 +161,19 @@ describe.runIf(Boolean(snapshotFile))('world simulation', () => {
       expect(live.length).toBeLessThanOrEqual(1);
       const champions = Object.values(save.fighters).filter((f) => f.isChampion && f.divisionId === d.id);
       expect(champions.length).toBeLessThanOrEqual(1);
+    }
+
+    // Nobody competes in a division their body does not fit. Walking weight used to be rewritten
+    // on every move to the new division's figure, so each move up made the fighter too big all
+    // over again and lightweights ratcheted into the light heavyweight rankings.
+    for (const f of Object.values(save.fighters)) {
+      if (f.retired) continue;
+      const division = DIVISION_BY_ID[f.divisionId];
+      if (!division) continue;
+      expect(
+        f.walkingWeightLb,
+        `${f.name} walks ${Math.round(f.walkingWeightLb)} lb in ${division.name} (limit ${division.limitLb})`
+      ).toBeGreaterThanOrEqual(division.limitLb - 8);
     }
 
     // Nothing that is supposed to close accumulates for ever.

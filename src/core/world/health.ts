@@ -318,7 +318,9 @@ export function manageWalkingWeight(fighter: Fighter, on: IsoDate): { movedUp: D
     if (heavier) {
       fighter.divisionId = heavier.id;
       if (!fighter.eligibleDivisions.includes(heavier.id)) fighter.eligibleDivisions.push(heavier.id);
-      fighter.walkingWeightLb = heavier.limitLb + Math.min(heavier.typicalWalkAroundOverLb, healthy * 0.9);
+      // The body comes along unchanged; the weekly pass drifts it. Setting it from the new
+      // division's figures fabricated mass from nowhere and re-created the problem the move was
+      // solving.
       fighter.weightMisses = 0;
       fighter.ranking = null;
       return { movedUp: heavier.id };

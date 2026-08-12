@@ -118,6 +118,49 @@ export function adjacentDivisions(fighter: Fighter): { up: DivisionConfig | null
   };
 }
 
+/**
+ * The walking weight a fighter carries into a different division: the same one.
+ *
+ * A division is a label, not a body. Every move used to set the walking weight to the new limit
+ * plus however far over the old limit the fighter walked, so a 175 pound lightweight who moved up
+ * to welterweight was suddenly walking at 188, was instantly too big for the new division too,
+ * and moved again: fighters ratcheted up division after division until lightweights stood in the
+ * light heavyweight rankings. The weekly weight pass drifts the body toward a sustainable figure
+ * over time, which is the only way it should change.
+ */
+export function carriedWalkingWeight(fighter: Fighter): number {
+  return fighter.walkingWeightLb;
+}
+
+/**
+ * Whether a division is a physically believable home for this fighter's body.
+ *
+ * Moving up requires actually being the size of the new division: a fighter whose walking weight
+ * sits below the new limit would be giving weight to everyone in it, which nobody chooses and no
+ * promotion books. Moving down requires the cut to the new limit to be survivable.
+ */
+export function frameFitsDivision(fighter: Fighter, target: DivisionConfig, age: number): { ok: boolean; reason: string } {
+  const walking = fighter.walkingWeightLb;
+  const current = DIVISION_BY_ID[fighter.divisionId];
+  if (target.order > current.order) {
+    if (walking < target.limitLb - FRAME_UP_TOLERANCE_LB) {
+      return { ok: false, reason: `walks at ${Math.round(walking)} lb, too small for ${target.name}` };
+    }
+    return { ok: true, reason: 'carries the size for the division above' };
+  }
+  const cut = walking - target.limitLb;
+  const healthy = healthyCutFor(fighter, age);
+  if (cut > healthy * FRAME_DOWN_CUT_CEILING) {
+    return { ok: false, reason: `a ${Math.round(cut)} lb cut to ${target.name} is not survivable` };
+  }
+  return { ok: true, reason: 'can make the weight below' };
+}
+
+/** How far below a division's limit a walking weight can be and the move up still make sense. */
+export const FRAME_UP_TOLERANCE_LB = 4;
+/** The multiple of a healthy cut beyond which a move down is refused as unsurvivable. */
+export const FRAME_DOWN_CUT_CEILING = 1.35;
+
 /** Everything the player needs before committing, with no hidden ratings revealed. */
 export function evaluateOption(save: SaveGame, fighter: Fighter, target: DivisionConfig): DivisionOption {
   const current = DIVISION_BY_ID[fighter.divisionId];
@@ -404,7 +447,7 @@ export function settleOneFightMoves(save: SaveGame): string[] {
     fighter.previousRanking = null;
     fighter.weeksRanked = 0;
     fighter.weightMisses = 0;
-    fighter.walkingWeightLb = home.limitLb + Math.min(home.typicalWalkAroundOverLb, Math.max(2, fighter.walkingWeightLb - DIVISION_BY_ID[plan.toDivisionId].limitLb));
+    fighter.walkingWeightLb = carriedWalkingWeight(fighter);
     if (!fighter.eligibleDivisions.includes(home.id)) fighter.eligibleDivisions.push(home.id);
     ensureDivisionSpell(save, fighter);
     // The plan has become a return, which is also what stops this from running again.
@@ -619,9 +662,10 @@ export function commitMove(save: SaveGame, fighter: Fighter, announce: boolean):
     fighter.eligibleDivisions = fighter.eligibleDivisions.filter((d) => d === to.id || d === fighter.heldTitleDivisionId);
     if (!fighter.eligibleDivisions.includes(to.id)) fighter.eligibleDivisions.push(to.id);
   }
-  // Walking weight moves toward the new division over the following weeks. The weekly
-  // weight management pass does the rest.
-  fighter.walkingWeightLb = to.limitLb + Math.min(to.typicalWalkAroundOverLb, fighter.walkingWeightLb - from.limitLb);
+  // The body comes along unchanged. The weekly weight management pass drifts it toward the new
+  // division's sustainable figure over the following weeks, which is the only honest way for a
+  // walking weight to change.
+  fighter.walkingWeightLb = carriedWalkingWeight(fighter);
   fighter.weightMisses = 0;
 
   // Open the new spell.

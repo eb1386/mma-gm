@@ -6,6 +6,7 @@ import { cancelBout } from './matchmaking';
 import { moveFighterToGym } from './gyms';
 import { DIVISIONS, DIVISION_BY_ID } from '../config/divisions';
 import type { Fighter } from '../types/fighter';
+import { carriedWalkingWeight, frameFitsDivision } from './weightclass';
 
 /** The room choices that act on one named fighter, and so need that fighter to still be here. */
 const ROOM_CHOICES_ABOUT_A_FIGHTER = new Set([
@@ -218,6 +219,8 @@ function moveFighterDivision(save: SaveGame, fighter: Fighter, direction: 'up' |
   ).sort((a, b) => (direction === 'up' ? a.order - b.order : b.order - a.order));
   const to = candidates[0];
   if (!to) return false;
+  // Only a body that fits the destination goes anywhere.
+  if (!frameFitsDivision(fighter, to, 28).ok) return false;
   const table = save.rankings[from.id];
   if (table) table.entries = table.entries.filter((e) => e.fighterId !== fighter.id);
   fighter.divisionId = to.id;
@@ -225,7 +228,7 @@ function moveFighterDivision(save: SaveGame, fighter: Fighter, direction: 'up' |
   fighter.previousRanking = null;
   fighter.weeksRanked = 0;
   fighter.weightMisses = 0;
-  fighter.walkingWeightLb = to.limitLb + Math.min(to.typicalWalkAroundOverLb, Math.max(2, fighter.walkingWeightLb - from.limitLb));
+  fighter.walkingWeightLb = carriedWalkingWeight(fighter);
   if (!fighter.eligibleDivisions.includes(to.id)) fighter.eligibleDivisions.push(to.id);
   return true;
 }

@@ -24,3 +24,5 @@ tsconfig.tsbuildinfo
 
 # Agent scratch probes, never part of the build.
 tools/_*.ts
+.vercel
+.env*

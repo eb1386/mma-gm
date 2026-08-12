@@ -66,6 +66,11 @@ export function createFightOffer(
   _rng: Rng,
   opts: CreateOfferOptions
 ): FightOffer | null {
+  // Nobody fights themselves. Every offer generator funnels through here, so this is the one
+  // guard that holds whatever a caller gets wrong. A matchup interest where the player was the
+  // target, not the caller, was booked as the player against the interest's target, which is the
+  // player, and the offer that reached the inbox named the player as their own opponent.
+  if (fighter.id === opponent.id) return null;
   const identity: OfferIdentity = {
     fighterId: fighter.id,
     opponentId: opponent.id,

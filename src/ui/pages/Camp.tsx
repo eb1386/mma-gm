@@ -4,7 +4,7 @@ import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
 import { addDays, daysBetween, formatDate, formatMoney } from '@core/types/common';
 import { RATING_KEYS, RATING_LABEL, RATING_LONG_LABEL, type RatingKey } from '@core/types/fighter';
 import type { CampFocus, GamePlanKey, TrainingCamp } from '@core/types/world';
-import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus, setFocusShare, transferFocusShare } from '@core/world/camp';
+import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus, setFocusShare, transferFocusShare, baseBuildingFor } from '@core/world/camp';
 import { activeInjuries, trainingCapacityOf } from '@core/world/health';
 import { useGame } from '../store';
 import { planSourceLabel, recallPlan, rememberPlan } from '@core/world/gameplan-memory';
@@ -264,6 +264,12 @@ export function CampPage() {
               </select>
               <span className="small dim">{preset.description}</span>
             </div>
+
+            <p className="small dim">
+              Base built since the last camp:{' '}
+              <strong>{Math.round(baseBuildingFor(save, fighter, save.date) * 100)}%</strong>. Ordinary weeks in the
+              gym are not dead air; a built base makes the whole camp train better and open sharper.
+            </p>
 
             <h3>Focus</h3>
             <p className="small dim">

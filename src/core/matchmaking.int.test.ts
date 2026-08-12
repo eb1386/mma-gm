@@ -1322,3 +1322,48 @@ describe('the matchmaker refuses fights it would never make', () => {
     expect(scoreCandidate(f.save, ranked, prospect, event, new Rng(3))).not.toBeNull();
   });
 });
+
+describe('a promotional debut is against another newcomer', () => {
+  it('refuses to feed a debutant to a seasoned unranked finisher', () => {
+    const f = newCareer(9860);
+    runWorld(f.save, 8);
+    const divisionId = DIVISIONS[0].id;
+    const debutant = Object.values(f.save.fighters).find(
+      (x) => x.divisionId === divisionId && !x.isChampion && x.ranking === null
+    )!;
+    debutant.ufcRecord = { wins: 0, losses: 0, draws: 0, noContests: 0 };
+    const killer = Object.values(f.save.fighters).find(
+      (x) =>
+        x.divisionId === divisionId &&
+        x.id !== debutant.id &&
+        x.ranking === null &&
+        !x.isChampion &&
+        x.ufcRecord.wins + x.ufcRecord.losses >= 4 &&
+        x.ufcRecord.wins > x.ufcRecord.losses
+    );
+    if (!killer) return;
+    const event = Object.values(f.save.events)
+      .filter((e) => e.status === 'announced')
+      .sort((a, b) => a.date.localeCompare(b.date))[3];
+    expect(scoreCandidate(f.save, debutant, killer, event, new Rng(3))).toBeNull();
+    expect(scoreCandidate(f.save, killer, debutant, event, new Rng(3))).toBeNull();
+  });
+
+  it('still lets two newcomers meet', () => {
+    const f = newCareer(9861);
+    runWorld(f.save, 8);
+    const divisionId = DIVISIONS[0].id;
+    const pool = Object.values(f.save.fighters).filter(
+      (x) => x.divisionId === divisionId && x.ranking === null && !x.isChampion
+    );
+    const a = pool[0];
+    const b = pool[1];
+    a.ufcRecord = { wins: 0, losses: 0, draws: 0, noContests: 0 };
+    b.ufcRecord = { wins: 1, losses: 0, draws: 0, noContests: 0 };
+    const event = Object.values(f.save.events)
+      .filter((e) => e.status === 'announced')
+      .sort((x, y) => x.date.localeCompare(y.date))[3];
+    expect(scoreCandidate(f.save, a, b, event, new Rng(3))).not.toBeNull();
+  });
+});
+

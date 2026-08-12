@@ -808,3 +808,59 @@ question.
 | build | pass |
 | dash and terminology guards | pass |
 | browser | 38 passed, desktop and mobile |
+
+
+---
+
+# The ninth pass: what the players found, and what they asked for
+
+Reddit feedback and direct reports, worked through in one pass. The deployed site turned out to be
+eleven days stale, which explains why several fixes players "still" saw broken: they were playing
+code from before every fix. Deployment is now part of finishing.
+
+## The bugs
+
+**A player was offered themselves as an opponent.** An opponent calling the player out records the
+matchup interest with the player as the target. The booking pass read the target unconditionally,
+so it created an offer for the player against the interest's target, which was the player. Fixed
+where it happened, and a second guard now sits at the one choke point every offer passes through:
+nobody is ever paired with themselves, whatever a caller gets wrong.
+
+**Rafael Fiziev in the light heavyweight rankings, and every fighter drifting the same way.** Every
+division move set the walking weight to the new limit plus however far over the old limit the
+fighter walked. A 175 pound lightweight who moved up to welterweight was teleported to a 188 pound
+walking weight, was instantly too big for the new division too, and moved again: fighters ratcheted
+up division after division. The body is now the invariant: a move carries the walking weight
+unchanged, the weekly pass drifts it honestly, and a frame gate refuses any move to a division the
+body does not fit. Measured over three years: 29 movers, none too small for their division, and the
+five year world test now asserts nobody ever is.
+
+**"I fought Prates in my debut."** Nothing weighed experience. A debutant could be handed a
+five and one finisher, because the mismatch rules were score penalties and a thin division still
+booked its best available pairing. A promotional debut is now against another newcomer: at most
+three promotional fights, never a ranked opponent, refused outright rather than scored down.
+
+## What was asked for
+
+**Retirement.** NPCs retired through a rule the player had no access to. One shared function now
+retires anybody: belts vacated, offers withdrawn, the record stands. The player retires from the
+career page behind a two step confirmation, and is refused while a fight is booked rather than
+orphaning it.
+
+**Finland, and more of the world.** Twenty one new nationalities with authentic name pools:
+Finland, Norway, Denmark, Iceland, Scotland, Italy, Portugal, Switzerland, Austria, Croatia,
+Serbia, Bosnia, Armenia, Azerbaijan, Kyrgyzstan, Mongolia, India, Morocco, Egypt, Colombia and
+Cuba, at low generation weights so the world's balance barely shifts. Fifty five countries now.
+
+**Switching gyms, with a reason.** The player can move camps from any gym's page. The move is
+understood when the destination is clearly better or the current room has stopped working;
+leaving a healthy room burns the bridge, the team takes it personally, and the sport remembers.
+Refused mid camp, because changing rooms mid preparation is how fights are lost.
+
+**The time between camps matters.** Ordinary weeks in the gym now build a base, scaled by the
+quality of the room, that the next camp starts from: it trains slightly better and opens slightly
+sharper. Bounded small, because a camp is still where fights are won. This also softens the
+"impossible to level up" complaint without recalibrating the development model.
+
+**Tracking.** Vercel Web Analytics is wired into the root, and the project is linked to the
+mma-gm deployment so pushing is followed by deploying.
