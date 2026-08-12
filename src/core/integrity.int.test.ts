@@ -12,7 +12,7 @@ import { retireFighter } from './world/career';
 import { importSaveFromFile } from './save/store';
 import { pruneLedger, record, summarize } from './world/finance';
 import { createContractOffer, signContractOffer } from './world/economy';
-import { CAMP_PRESETS, normalizeFocus, setFocusShare, transferFocusShare } from './world/camp';
+import { CAMP_PRESETS, normalizeFocus, setFocusShare } from './world/camp';
 import { recordMatchupInterest } from './world/matchup-interest';
 import { runMatchupInterestPass } from './world/matchup-pass';
 import { createFightOffer } from './world/offers';
@@ -596,39 +596,33 @@ describe('the camp focus sliders are one camp, not six dials', () => {
     }
   });
 
-  it('takes time from the others in proportion to what they had', () => {
-    const focus = normalizeFocus({ striking: 0.4, grappling: 0.2, wrestling: 0.2, submissions: 0.1, cardio: 0.1, durability: 0 });
-    const next = setFocusShare(focus, 'striking', 0.6);
-    // Grappling and wrestling were equal before, so they stay equal after.
-    expect(next.grappling).toBeCloseTo(next.wrestling, 6);
-    // And each keeps its relative standing against the others.
-    expect(next.grappling / next.submissions).toBeCloseTo(focus.grappling / focus.submissions, 6);
-  });
-
-  it('moves time from one area into its neighbour without changing the whole', () => {
-    // This is what dragging a boundary does, and it is the only kind of change an allocation with
-    // a fixed whole can undergo: what one area gains comes off the one beside it.
-    let focus = normalizeFocus(CAMP_PRESETS[0].focus);
-    const before = { ...focus };
-    focus = transferFocusShare(focus, 'grappling', 'striking', 0.05);
-    expect(total(focus)).toBeCloseTo(1, 6);
-    expect(focus.striking).toBeCloseTo(before.striking + 0.05, 6);
-    expect(focus.grappling).toBeCloseTo(before.grappling - 0.05, 6);
-    // Nothing else moved.
+  it('moves the other five equally, which is the rule the player asked for', () => {
+    const focus = normalizeFocus({ striking: 0.3, grappling: 0.2, wrestling: 0.2, submissions: 0.1, cardio: 0.1, durability: 0.1 });
+    const raised = setFocusShare(focus, 'striking', 0.4);
+    // Ten points of raise, two points off each of the five others.
     for (const k of RATING_KEYS) {
-      if (k === 'striking' || k === 'grappling') continue;
-      expect(focus[k]).toBeCloseTo(before[k], 6);
+      if (k === 'striking') continue;
+      expect(raised[k]).toBeCloseTo(focus[k] - 0.02, 6);
+    }
+    const lowered = setFocusShare(focus, 'striking', 0.2);
+    for (const k of RATING_KEYS) {
+      if (k === 'striking') continue;
+      expect(lowered[k]).toBeCloseTo(focus[k] + 0.02, 6);
     }
   });
 
-  it('stops at zero rather than letting an area go negative', () => {
-    let focus = normalizeFocus(CAMP_PRESETS[0].focus);
-    focus = transferFocusShare(focus, 'durability', 'striking', 5);
-    expect(focus.durability).toBeCloseTo(0, 6);
+  it('takes what an empty area cannot give from those who still can', () => {
+    let focus = normalizeFocus({ striking: 0.5, grappling: 0.5, wrestling: 0, submissions: 0, cardio: 0, durability: 0 });
+    focus = setFocusShare(focus, 'durability', 0.4);
     expect(total(focus)).toBeCloseTo(1, 6);
+    expect(focus.durability).toBeCloseTo(0.4, 6);
+    // The whole raise came off the two areas that had anything, equally.
+    expect(focus.striking).toBeCloseTo(0.3, 6);
+    expect(focus.grappling).toBeCloseTo(0.3, 6);
+    for (const k of ['wrestling', 'submissions', 'cardio'] as const) expect(focus[k]).toBeCloseTo(0, 6);
   });
 
-  it('splits evenly when one area had taken the whole camp', () => {
+  it('recovers when one area had taken the whole camp', () => {
     let focus = normalizeFocus(CAMP_PRESETS[0].focus);
     focus = setFocusShare(focus, 'striking', 1);
     for (const k of RATING_KEYS) if (k !== 'striking') expect(focus[k]).toBeCloseTo(0, 6);

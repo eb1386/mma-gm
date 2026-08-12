@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
 import { addDays, daysBetween, formatDate, formatMoney } from '@core/types/common';
-import { RATING_KEYS, RATING_LABEL, RATING_LONG_LABEL, type RatingKey } from '@core/types/fighter';
+import { RATING_KEYS, RATING_LONG_LABEL, type RatingKey } from '@core/types/fighter';
 import type { CampFocus, GamePlanKey, TrainingCamp } from '@core/types/world';
-import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus, setFocusShare, transferFocusShare, baseBuildingFor } from '@core/world/camp';
+import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus, setFocusShare, baseBuildingFor } from '@core/world/camp';
 import { activeInjuries, trainingCapacityOf } from '@core/world/health';
 import { useGame } from '../store';
 import { planSourceLabel, recallPlan, rememberPlan } from '@core/world/gameplan-memory';
@@ -74,53 +74,10 @@ export function CampPage() {
 
   const totalFocus = RATING_KEYS.reduce((s, k) => s + focus[k], 0);
 
-  // The allocation rules live in the core, so the camp the player builds and the camp the engine
-  // runs agree about what a share means.
+  // The allocation rule lives in the core, so the camp the player builds and the camp the
+  // engine runs agree about what a share means: move one slider and the other five give or take
+  // the difference in equal parts, so the six always total one camp.
   const setShare = (key: RatingKey, nextShare: number) => setFocus(setFocusShare(focus, key, nextShare));
-
-  // Dragging the boundary between two blocks moves time from one into the other. Nothing else can
-  // happen to an allocation whose whole is fixed, which is what makes the widths trustworthy.
-  const allocRef = useRef<HTMLDivElement | null>(null);
-  const dragging = useRef<{ index: number; x: number } | null>(null);
-
-  const startDrag = (index: number, e: PointerEvent) => {
-    dragging.current = { index, x: e.clientX };
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    e.preventDefault();
-  };
-
-  const endDrag = () => {
-    dragging.current = null;
-  };
-
-  const onAllocPointerMove = (e: PointerEvent) => {
-    const drag = dragging.current;
-    const box = allocRef.current?.getBoundingClientRect();
-    if (!drag || !box || box.width <= 0) return;
-    const moved = (e.clientX - drag.x) / box.width;
-    if (Math.abs(moved) < 0.001) return;
-    const left = RATING_KEYS[drag.index];
-    const right = RATING_KEYS[drag.index + 1];
-    // Right is growing when the pointer moves right, and the time comes from left.
-    setFocus((current) =>
-      moved > 0 ? transferFocusShare(current, left, right, moved) : transferFocusShare(current, right, left, -moved)
-    );
-    dragging.current = { index: drag.index, x: e.clientX };
-  };
-
-  /** Keyboard equivalent of dragging a boundary, so this is usable without a pointer. */
-  const onGripKey = (index: number, e: KeyboardEvent) => {
-    const step = 0.02;
-    const left = RATING_KEYS[index];
-    const right = RATING_KEYS[index + 1];
-    if (e.key === 'ArrowLeft') {
-      setFocus((current) => transferFocusShare(current, left, right, step));
-      e.preventDefault();
-    } else if (e.key === 'ArrowRight') {
-      setFocus((current) => transferFocusShare(current, right, left, step));
-      e.preventDefault();
-    }
-  };
 
   const startCamp = async () => {
     if (!bout || busy) return;
@@ -273,59 +230,23 @@ export function CampPage() {
 
             <h3>Focus</h3>
             <p className="small dim">
-              One camp, split six ways. The length of each block is the time that area gets, so giving more to one
-              takes it from the others. Durability focus means safe preparation, recovery and injury prevention. It
+              One camp, split six ways. Move a slider and the other five adjust equally, so the shares always add
+              up to the whole week. Durability focus means safe preparation, recovery and injury prevention. It
               reduces avoidable damage, it does not make anyone hard to hurt.
             </p>
-
-            {/*
-              A row of range inputs could not express this. Every range input renders the same width
-              whatever its value, so the six looked identical no matter how the camp was split and only
-              the percentage moved. Here the block widths are the shares, so the split is the picture.
-            */}
-            <div
-              className="alloc"
-              ref={allocRef}
-              onPointerMove={onAllocPointerMove}
-              onPointerUp={endDrag}
-              onPointerLeave={endDrag}
-              onPointerCancel={endDrag}
-            >
-              {RATING_KEYS.map((k: RatingKey, i: number) => {
-                const pct = (focus[k] / Math.max(0.0001, totalFocus)) * 100;
-                return (
-                  <div key={k} className={`alloc-seg seg-${k}`} style={{ width: `${pct}%` }} title={`${RATING_LONG_LABEL[k]} ${Math.round(pct)}%`}>
-                    <span className="alloc-label">{pct >= 9 ? RATING_LABEL[k] : ''}</span>
-                    {i < RATING_KEYS.length - 1 && (
-                      <button
-                        type="button"
-                        className="alloc-grip"
-                        aria-label={`Move time between ${RATING_LONG_LABEL[k]} and ${RATING_LONG_LABEL[RATING_KEYS[i + 1]]}`}
-                        onPointerDown={(e) => startDrag(i, e)}
-                        onKeyDown={(e) => onGripKey(i, e)}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* The same six numbers, adjustable without a mouse. */}
             {RATING_KEYS.map((k: RatingKey) => {
               const pct = Math.round((focus[k] / Math.max(0.0001, totalFocus)) * 100);
               return (
                 <div className="focus-row" key={k}>
                   <label>{RATING_LONG_LABEL[k]}</label>
-                  <span className={`alloc-chip seg-${k}`} style={{ width: `${Math.max(2, pct)}%` }} />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={pct}
+                    onChange={(e) => setShare(k, Number(e.target.value) / 100)}
+                  />
                   <span className="num mono small">{pct}%</span>
-                  <span className="alloc-nudge">
-                    <button type="button" className="small" aria-label={`Less ${RATING_LONG_LABEL[k]}`} onClick={() => setShare(k, Math.max(0, pct - 5) / 100)}>
-                      -
-                    </button>
-                    <button type="button" className="small" aria-label={`More ${RATING_LONG_LABEL[k]}`} onClick={() => setShare(k, Math.min(100, pct + 5) / 100)}>
-                      +
-                    </button>
-                  </span>
                 </div>
               );
             })}

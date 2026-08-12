@@ -121,44 +121,37 @@ export function normalizeFocus(focus: Partial<CampFocus>): CampFocus {
 }
 
 /**
- * Sets one area's share of the camp and rebalances the other five against it.
+ * Sets one area's share of the camp; the other five move equally to keep the whole at one.
  *
- * A camp is a fixed amount of time, so the six areas are shares of one whole rather than six
- * independent dials. They used to be independent weights: every slider at the top gave the same
- * camp as every slider at the bottom, because the share shown was each weight over their total.
- * The bars said one thing and the camp did another, and nothing the player did to them mattered.
- *
- * Moving one area takes its time from the others in proportion to what they already had, so the
- * six always add up to the whole camp and the bars mean what they show.
+ * Exactly the rule the player asked for, in their words: six bars, move one, the others all go
+ * down equally. Raising an area takes the difference from the other five in equal parts, with
+ * anything an empty area cannot give taken equally from whoever still has time to give; lowering
+ * an area hands the freed time back to the other five in equal parts. The six always total one.
  */
 export function setFocusShare(focus: CampFocus, key: RatingKey, share: number): CampFocus {
   const target = clamp(share, 0, 1);
   const others = RATING_KEYS.filter((k) => k !== key);
-  const otherTotal = others.reduce((sum, k) => sum + Math.max(0, focus[k]), 0);
-  const remaining = 1 - target;
   const out = { ...focus, [key]: target } as CampFocus;
-  if (otherTotal <= 0) {
-    // Nothing else is claiming any time, so what is left is split evenly.
-    for (const k of others) out[k] = remaining / others.length;
-  } else {
-    for (const k of others) out[k] = (Math.max(0, focus[k]) / otherTotal) * remaining;
+  for (const k of others) out[k] = Math.max(0, out[k]);
+  const delta = target - Math.max(0, focus[key]);
+  if (delta > 0) {
+    // An area at zero has nothing to give, so its part falls equally on whoever still does.
+    let remaining = delta;
+    for (let pass = 0; pass < RATING_KEYS.length && remaining > 1e-9; pass++) {
+      const donors = others.filter((k) => out[k] > 1e-9);
+      if (donors.length === 0) break;
+      const per = remaining / donors.length;
+      for (const k of donors) {
+        const taken = Math.min(out[k], per);
+        out[k] -= taken;
+        remaining -= taken;
+      }
+    }
+  } else if (delta < 0) {
+    const per = -delta / others.length;
+    for (const k of others) out[k] += per;
   }
   return out;
-}
-
-/**
- * Moves time from one area to another, which is what dragging a boundary between them does.
- *
- * The whole is fixed, so this is the only kind of change that can happen to an allocation: time
- * given to one area comes off the one beside it. Neither can go below zero, so a drag past the
- * end simply stops.
- */
-export function transferFocusShare(focus: CampFocus, fromKey: RatingKey, toKey: RatingKey, amount: number): CampFocus {
-  if (fromKey === toKey || amount <= 0) return focus;
-  const available = Math.max(0, focus[fromKey]);
-  const moved = Math.min(available, amount);
-  if (moved <= 0) return focus;
-  return { ...focus, [fromKey]: available - moved, [toKey]: Math.max(0, focus[toKey]) + moved };
 }
 
 export interface CampSetup {
