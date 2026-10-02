@@ -36,6 +36,43 @@ npm run perf          # phase by phase performance report
 `npm run test:flow` is the practical pre commit suite: it covers the whole player flow in
 under twenty seconds.
 
+## iPhone app
+
+The iPhone app is the same game in a native iOS shell, built with Capacitor. The Xcode project
+lives in `ios/`.
+
+```bash
+npm run ios          # build, sync into ios/, and open the project in Xcode
+npm run ios:sim      # build, sync and run on a simulator
+npm run icons        # re-render the app icon, launch screen and touch icons from tools/icons
+```
+
+To install on a real iPhone, open the project with `npm run ios`, choose your Apple developer team
+under Signing and Capabilities for the App target, and press Run. Bundle identifier `app.mmagm.game`.
+
+What the app does differently from the website:
+
+- Saves live in the app's own storage, which iOS does not clear the way it can clear a website's.
+- Export a career from Settings or the save list. In the app this opens the iOS share sheet, so a
+  save can go to Files, AirDrop or anywhere else. Import uses the iOS file picker.
+- The layout handles the notch, the Dynamic Island and the home indicator, form fields are 16px so
+  iOS never zooms the page, and every control is sized for a finger.
+
+## The regional circuit
+
+A created fighter can start on a fictional regional promotion instead of the main roster, as young as
+sixteen. Bouts before eighteen are amateur: they pay nothing and count on the amateur record only.
+There are eighteen promotions across every region at three levels (local circuit, national promotion,
+major international promotion), each with its own rankings, champion and cards every five to nine
+weeks.
+
+The main promotion calls a regional fighter up on what players asked for: how they perform at their
+promotion, where they sit in its rankings, and their rating. The Regional page shows a readiness score
+out of 100 and every factor behind it. At 50 the fighter is invited to a Proving Ground tryout; at 68
+a contract offer arrives. Signing it vacates any regional belt and moves the career to the main
+roster, where the debut is against another newcomer. The best regional fighters around the player are
+called up too, so a regional rival can turn up again later.
+
 ## Deployment
 
 The app is a static single page build. `npm run build` writes to `dist/`.

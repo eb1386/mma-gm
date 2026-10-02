@@ -44,8 +44,31 @@ export function addInboxMessage(save: SaveGame, msg: NewMessage): InboxMessage {
     category: msg.category,
   };
   save.inbox.unshift(message);
-  if (save.inbox.length > 3000) save.inbox.length = 3000;
+  if (save.inbox.length > INBOX_CAP) trimInbox(save);
   return message;
+}
+
+const INBOX_CAP = 3000;
+
+/**
+ * Drops the oldest settled item to keep the inbox at its cap.
+ *
+ * Cutting the array to length dropped the oldest items whatever they were, so in a long save an
+ * open offer or an unanswered decision could vanish while the clock still waited on it. Closed and
+ * read items go first, then unread notices. An open item that needs an answer is never dropped:
+ * the inbox runs over its cap rather than lose one.
+ */
+function trimInbox(save: SaveGame): void {
+  const settled = (m: InboxMessage) => m.status === 'resolved' || m.status === 'expired' || (m.status === 'read' && !m.requiresAction);
+  const passive = (m: InboxMessage) => settled(m) || !m.requiresAction;
+  for (const droppable of [settled, passive]) {
+    while (save.inbox.length > INBOX_CAP) {
+      let i = save.inbox.length - 1;
+      while (i >= 0 && !droppable(save.inbox[i])) i--;
+      if (i < 0) break;
+      save.inbox.splice(i, 1);
+    }
+  }
 }
 
 export function markRead(save: SaveGame, messageId: string): void {

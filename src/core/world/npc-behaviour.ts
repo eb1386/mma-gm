@@ -1,4 +1,5 @@
 import { DIVISION_BY_ID } from '../config/divisions';
+import { mainRosterFighters } from './circuit';
 import { clamp, Rng } from '../rng';
 import { addDays, ageOn, daysBetween, type FighterId } from '../types/common';
 import type { Fighter } from '../types/fighter';
@@ -11,6 +12,7 @@ import { calloutPressure, getRelationship, makeCallout, relationshipState, type 
 import { adjacentDivisions, carriedWalkingWeight, frameFitsDivision } from './weightclass';
 import { forfeitContenderStatus, grantContenderStatus } from './contender';
 import { assessChampionMove } from './weightclass';
+import { dial } from './identity';
 
 /**
  * What other fighters do on their own.
@@ -31,6 +33,11 @@ export function calloutLikelihood(save: SaveGame, npc: Fighter, player: Fighter)
   const npcRank = npc.isChampion ? 0 : (npc.ranking ?? 99);
   const playerRank = player.isChampion ? 0 : (player.ranking ?? 99);
   if (npcRank > 15 && playerRank > 15) return 0;
+  const rel = getRelationship(save, npc.id, player.id);
+  // A ranked fighter does not call down to somebody outside the rankings. There is nothing in it
+  // for them, and it is what had the champion and the whole top ten calling out a debutant. A
+  // real feud or an earlier meeting is the exception, because then there is a story to sell.
+  if (playerRank > 15 && npcRank <= 15 && !((rel?.rivalry ?? 0) >= 45 || (rel?.fights.length ?? 0) > 0)) return 0;
 
   let score = 0;
   // Ranking proximity: calling out someone six places away is normal, twenty is not.
@@ -47,7 +54,6 @@ export function calloutLikelihood(save: SaveGame, npc: Fighter, player: Fighter)
   if (npc.winStreak >= 5) score += 0.1;
   if (npc.lossStreak > 0) score -= 0.2;
 
-  const rel = getRelationship(save, npc.id, player.id);
   const state = relationshipState(rel);
   if (state === 'bitter-rival' || state === 'enemy') score += 0.4;
   else if (state === 'heated-rival') score += 0.28;
@@ -56,22 +62,28 @@ export function calloutLikelihood(save: SaveGame, npc: Fighter, player: Fighter)
   // An unfinished rematch is a strong pull.
   if (rel && rel.fights.length > 0 && rel.fights[rel.fights.length - 1].winnerId === player.id) score += 0.2;
 
-  score += clamp((npc.popularity - 40) / 200, -0.1, 0.15);
+  // Popularity helps a callout land, but across a gap of more than twelve places it is not a reason
+  // to make one, so on its own it can never carry such a callout past the candidate filter.
+  const popularity = clamp((npc.popularity - 40) / 200, -0.1, 0.15);
+  score += gap > 12 ? Math.min(0, popularity) : popularity;
   // A fighter who is busy has nothing to gain by calling anyone out.
   if (hasLiveBooking(save, npc)) score -= 0.5;
-  const ego = npc.personality?.ego ?? 0.5;
-  const temper = npc.personality?.temper ?? 0.5;
+  // The dials are stored 0 to 100. Read raw they multiplied the score by about forty, so every
+  // fighter with any reason at all sat at the cap and the ranking of who wants this most was lost.
+  const ego = dial(npc.personality, 'ego');
+  const temper = dial(npc.personality, 'temper');
   score *= 0.6 + ego * 0.5 + temper * 0.2;
   return clamp(score, 0, 0.9);
 }
 
-function toneFor(save: SaveGame, npc: Fighter, playerId: FighterId, rng: Rng): CalloutTone {
+export function toneFor(save: SaveGame, npc: Fighter, playerId: FighterId, rng: Rng): CalloutTone {
   const state = relationshipState(getRelationship(save, npc.id, playerId));
   if (state === 'bitter-rival' || state === 'enemy') return rng.chance(0.6) ? 'personal' : 'aggressive';
   if (state === 'heated-rival') return rng.chance(0.5) ? 'aggressive' : 'confident';
-  const temper = npc.personality?.temper ?? 0.5;
+  // Dials are 0 to 100. Read raw, every callout was aggressive.
+  const temper = dial(npc.personality, 'temper');
   if (temper > 0.7) return 'aggressive';
-  const charisma = npc.personality?.charisma ?? 0.5;
+  const charisma = dial(npc.personality, 'charisma');
   if (charisma > 0.65) return 'promotional';
   return rng.chance(0.5) ? 'confident' : 'respectful';
 }
@@ -91,7 +103,7 @@ export function runNpcCallouts(save: SaveGame, rng: Rng): string[] {
   if (openIncoming) return [];
   if (!mayNotify(save, { signature: `npc-callout|${playerId}`, cooldownDays: COOLDOWNS.callout })) return [];
 
-  const candidates = Object.values(save.fighters).filter((f) => !f.retired && f.id !== playerId);
+  const candidates = mainRosterFighters(save).filter((f) => !f.retired && f.id !== playerId);
   const scored = candidates
     .map((f) => ({ f, p: calloutLikelihood(save, f, player) }))
     .filter((x) => x.p > 0.12)
@@ -157,6 +169,18 @@ export const CHAMPION_MOVE_DAMPING = 0.25;
 export const CHAMPION_CLEARED_OUT_RELIEF = 0.25;
 export const CHAMPION_HARD_CUT_RELIEF = 0.2;
 
+/** The desire a fighter needs before they move up a division. */
+export const UP_MOVE_THRESHOLD = 0.35;
+/**
+ * The desire a fighter needs before they move down. Lower than the step up, because the reasons
+ * to move down are fewer and smaller: every term of the down desire together tops out at 0.30,
+ * so sharing the 0.35 bar made a move down impossible and every NPC move in a long save was
+ * upward, piling lightweights into welterweight and thinning the lighter divisions out.
+ */
+export const DOWN_MOVE_THRESHOLD = 0.22;
+/** The share of weekly moves that go down when somebody has a real reason to. Rarer than up. */
+export const DOWN_MOVE_SHARE = 0.25;
+
 export function moveDesire(save: SaveGame, f: Fighter): { up: number; down: number } {
   if (f.retired || hasLiveBooking(save, f)) return { up: 0, down: 0 };
   const division = DIVISION_BY_ID[f.divisionId];
@@ -178,7 +202,15 @@ export function moveDesire(save: SaveGame, f: Fighter): { up: number; down: numb
   let down = 0;
   // Moving down is rarer and is about finding a title path.
   if (strain < 0.45 && age < 31) down += 0.16;
+  // A fighter who could make the weight below without wrecking themselves has the option at all.
+  // Walking weights sit close to a full cut for almost everyone outside heavyweight, so the light
+  // for the division term above almost never applies, and without this no NPC below heavyweight
+  // had any reason to look down.
+  const below = adjacentDivisions(f).down;
+  if (below && age < 33 && f.walkingWeightLb - below.limitLb <= healthy * 1.15) down += 0.1;
   if (f.ranking !== null && f.ranking > 8) down += 0.08;
+  // Stuck outside the rankings, the same new road the step up offers.
+  if (f.ranking === null && f.weeksRanked === 0) down += 0.06;
   if (f.lossStreak >= 2) down += 0.06;
   if (f.weightMisses > 0) down -= 0.3;
 
@@ -207,17 +239,37 @@ export function moveDesire(save: SaveGame, f: Fighter): { up: number; down: numb
 export function runNpcWeightClassMoves(save: SaveGame, rng: Rng): NpcMoveDecision[] {
   const moves: NpcMoveDecision[] = [];
   const playerId = save.player.fighterId;
-  const roster = Object.values(save.fighters).filter((f) => !f.retired && f.id !== playerId);
+  const roster = mainRosterFighters(save).filter((f) => !f.retired && f.id !== playerId);
   // At most one move a week across the entire roster.
   if (!rng.chance(0.35)) return moves;
 
   const candidates = roster
     .map((f) => ({ f, desire: moveDesire(save, f) }))
-    .filter((x) => x.desire.up > 0.35 || x.desire.down > 0.35);
+    .map((x) => {
+      // The direction is whichever desire actually cleared its own bar. A fighter who passed on
+      // the way down with a larger but still insufficient wish to move up used to be sent up.
+      const upPasses = x.desire.up > UP_MOVE_THRESHOLD;
+      const downPasses = x.desire.down > DOWN_MOVE_THRESHOLD;
+      const goUp = upPasses && (!downPasses || x.desire.up >= x.desire.down);
+      return { ...x, goUp, passes: upPasses || downPasses, weight: goUp ? x.desire.up : x.desire.down };
+    })
+    .filter((x) => x.passes);
   if (candidates.length === 0) return moves;
 
-  const pick = rng.weighted(candidates, (x) => Math.max(x.desire.up, x.desire.down));
-  const goUp = pick.desire.up >= pick.desire.down;
+  // The two directions are drawn from separately. The step up pool runs to a hundred or more in a
+  // normal week and the step down pool to a handful, so one weighted draw over both never once
+  // picked a move down. A fighter looking down is only counted when the weight below is one they
+  // can actually make, so a draw from that pool is not spent on a move the frame check refuses.
+  const ups = candidates.filter((x) => x.goUp);
+  const downs = candidates.filter((x) => {
+    if (x.goUp) return false;
+    const below = adjacentDivisions(x.f).down;
+    return below !== null && frameFitsDivision(x.f, below, ageOn(x.f.birthDate, save.date) ?? x.f.ageAtSnapshot ?? 28).ok;
+  });
+  if (ups.length === 0 && downs.length === 0) return moves;
+  const pool = downs.length > 0 && (ups.length === 0 || rng.chance(DOWN_MOVE_SHARE)) ? downs : ups;
+  const pick = rng.weighted(pool, (x) => x.weight);
+  const goUp = pick.goUp;
   const { up, down } = adjacentDivisions(pick.f);
   const target = goUp ? up : down;
   if (!target) return moves;

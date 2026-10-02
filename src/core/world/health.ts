@@ -2,7 +2,7 @@ import { BUILDS } from '../config/builds';
 import { CALIBRATION as C, DIFFICULTY } from '../config/calibration';
 import { DIVISIONS, DIVISION_BY_ID, type DivisionId } from '../config/divisions';
 import { clamp, Rng } from '../rng';
-import { addDays, ageOn, type IsoDate } from '../types/common';
+import { addDays, ageOn, formatDate, type IsoDate } from '../types/common';
 import type { FightResult } from '../types/fight';
 import type { Fighter, Injury, WearComponents } from '../types/fighter';
 import type { SaveGame } from '../types/save';
@@ -182,8 +182,10 @@ export function injuriesFromFight(fighter: Fighter, result: FightResult, rng: Rn
   const isA = result.fighterAId === fighter.id;
   const damage = isA ? result.finalDamageA : result.finalDamageB;
   const out: Injury[] = [];
+  // Thresholds are on the engine's damage scale; see CALIBRATION.fightHealth.
+  const H = C.fightHealth;
 
-  if (damage.cut > 40 && rng.chance(clamp(damage.cut / 200, 0, 0.6))) {
+  if (damage.cut > H.lacerationCut && rng.chance(clamp(damage.cut / H.lacerationCutDivisor, 0, 0.6))) {
     out.push(createInjury(INJURY_TABLE.find((t) => t.type === 'Deep laceration')!, 'fight', result.date, rng));
   }
   if (damage.joint > 14 && rng.chance(clamp(damage.joint / 90, 0, 0.5))) {
@@ -194,11 +196,13 @@ export function injuriesFromFight(fighter: Fighter, result: FightResult, rng: Rn
   if (koLoss && rng.chance(0.35)) {
     out.push(createInjury(INJURY_TABLE.find((t) => t.type === 'Concussion protocol')!, 'fight', result.date, rng));
   }
-  if (damage.head > 70 && rng.chance(0.18)) {
+  if (damage.head > H.orbitalHead && rng.chance(H.orbitalChance)) {
     out.push(createInjury(INJURY_TABLE.find((t) => t.type === 'Broken orbital bone')!, 'fight', result.date, rng));
   }
   const strikesThrown = isA ? result.totalsA.totalStrikesAttempted : result.totalsB.totalStrikesAttempted;
-  if (strikesThrown > 90 && rng.chance(0.07)) {
+  // Thrown strikes per fight rose when blocked shots stopped counting as landed and the pace was
+  // re-tuned, so the threshold sits where it catches the same busiest share of fighters.
+  if (strikesThrown > H.handFractureStrikes && rng.chance(H.handFractureChance)) {
     out.push(createInjury(INJURY_TABLE.find((t) => t.type === 'Hand fracture')!, 'fight', result.date, rng));
   }
   return out;
@@ -210,16 +214,17 @@ export function medicalSuspensionFor(fighter: Fighter, result: FightResult, rng:
   const koLoss = lost && (result.method === 'ko' || result.method === 'tko-strikes' || result.method === 'tko-ground-strikes');
   const isA = result.fighterAId === fighter.id;
   const damage = isA ? result.finalDamageA : result.finalDamageB;
+  const H = C.fightHealth;
 
   let days = 7;
   let reason = 'Standard post fight rest period.';
   if (koLoss) {
     days = rng.int(45, 90);
     reason = 'Mandatory rest following a knockout loss.';
-  } else if (damage.head > 60) {
+  } else if (damage.head > H.headTraumaHead) {
     days = rng.int(30, 60);
     reason = 'Rest period following significant head trauma.';
-  } else if (damage.cut > 45) {
+  } else if (damage.cut > H.cutSuspensionCut) {
     days = rng.int(21, 45);
     reason = 'Rest period for a facial laceration to heal.';
   } else if (result.endRound >= 4) {
@@ -229,7 +234,7 @@ export function medicalSuspensionFor(fighter: Fighter, result: FightResult, rng:
   return {
     until: addDays(result.date, days),
     reason,
-    clearanceRequired: koLoss || damage.head > 60,
+    clearanceRequired: koLoss || damage.head > H.clearanceHead,
   };
 }
 
@@ -240,7 +245,7 @@ export function activeInjuries(fighter: Fighter, on: IsoDate): Injury[] {
 export function canCompete(fighter: Fighter, on: IsoDate): { ok: boolean; reason: string | null } {
   if (fighter.retired) return { ok: false, reason: 'retired' };
   if (fighter.medicalSuspension && fighter.medicalSuspension.until > on) {
-    return { ok: false, reason: `medically suspended until ${fighter.medicalSuspension.until}` };
+    return { ok: false, reason: `medically suspended until ${formatDate(fighter.medicalSuspension.until)}` };
   }
   const blocking = activeInjuries(fighter, on).filter((i) => i.blocksCompetition);
   if (blocking.length > 0) return { ok: false, reason: `injured: ${blocking[0].type}` };
@@ -297,7 +302,17 @@ export function clampWalkingWeight(fighter: Fighter, on: IsoDate): void {
   fighter.walkingWeightLb = Math.min(fighter.walkingWeightLb, Math.round(sustainableWalkingWeight(fighter, on) * 2) / 2);
 }
 
-export function manageWalkingWeight(fighter: Fighter, on: IsoDate): { movedUp: DivisionId | null } {
+/**
+ * `allowMove` is false for a fighter who is booked, and always for the player. A booked fighter
+ * who changed division had the bout cancelled under them later the same week, title defences
+ * included, and the player's division is the player's decision: when the body says it is time,
+ * `wantsMove` names the division and the weekly pass asks them rather than moving them.
+ */
+export function manageWalkingWeight(
+  fighter: Fighter,
+  on: IsoDate,
+  allowMove: boolean
+): { movedUp: DivisionId | null; wantsMove: DivisionId | null } {
   const division = DIVISION_BY_ID[fighter.divisionId];
   const age = ageOn(fighter.birthDate, on) ?? fighter.ageAtSnapshot ?? 28;
   const healthy = healthyCutFor(fighter, age);
@@ -315,6 +330,9 @@ export function manageWalkingWeight(fighter: Fighter, on: IsoDate): { movedUp: D
     const heavier = DIVISIONS.filter(
       (d) => d.gender === division.gender && d.order > division.order && d.activeUntil === null
     ).sort((a, b) => a.order - b.order)[0];
+    // The weight keeps drifting and the misses stay counted, so the case for the move is still there
+    // the week the fighter is free to make it.
+    if (heavier && !allowMove) return { movedUp: null, wantsMove: heavier.id };
     if (heavier) {
       fighter.divisionId = heavier.id;
       if (!fighter.eligibleDivisions.includes(heavier.id)) fighter.eligibleDivisions.push(heavier.id);
@@ -323,10 +341,10 @@ export function manageWalkingWeight(fighter: Fighter, on: IsoDate): { movedUp: D
       // solving.
       fighter.weightMisses = 0;
       fighter.ranking = null;
-      return { movedUp: heavier.id };
+      return { movedUp: heavier.id, wantsMove: null };
     }
   }
-  return { movedUp: null };
+  return { movedUp: null, wantsMove: null };
 }
 
 export type WeightCutOutcome =
@@ -430,7 +448,7 @@ export function simulateWeightCut(fighter: Fighter, input: WeightCutInput, on: I
     severe: 'Severe cut',
     'missed-small': `Missed weight by ${over} lb`,
     'missed-badly': `Missed weight badly by ${over} lb`,
-    'pulled-out': 'Could not complete the cut',
+    'pulled-out': `Abandoned the cut, ${over} lb over`,
   };
   const details: Record<WeightCutOutcome, string> = {
     comfortable: 'Weight came off on schedule and rehydration went well.',
@@ -438,7 +456,11 @@ export function simulateWeightCut(fighter: Fighter, input: WeightCutInput, on: I
     severe: 'A rough cut. Conditioning and durability will both be down on the night.',
     'missed-small': 'The bout goes ahead at catchweight with a purse forfeit.',
     'missed-badly': 'A large miss. The bout is at catchweight, the purse takes a heavy hit, and any title is not on the line.',
-    'pulled-out': 'The cut could not be completed safely and the bout is off.',
+    // A fight night cut that is abandoned still ends in a bout: the card is locked by then, and the
+    // fight goes ahead. It used to say the bout was off and then fight it anyway, at no forfeit at
+    // all, which made the worst miss the cheapest. The official weigh in, which happens before the
+    // card is locked, is what calls a bout off over an abandoned cut.
+    'pulled-out': 'The cut was abandoned. The bout goes ahead at catchweight, the purse takes the maximum hit, and any title is not on the line.',
   };
 
   return {
@@ -447,7 +469,7 @@ export function simulateWeightCut(fighter: Fighter, input: WeightCutInput, on: I
     madeWeight: over === 0,
     cutQuality,
     wear,
-    purseForfeitPct: outcome === 'missed-small' ? 20 : outcome === 'missed-badly' ? 30 : 0,
+    purseForfeitPct: outcome === 'missed-small' ? 20 : outcome === 'missed-badly' || outcome === 'pulled-out' ? 30 : 0,
     headline: headlines[outcome],
     detail: details[outcome],
   };

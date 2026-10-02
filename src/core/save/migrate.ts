@@ -1,13 +1,20 @@
 import { SAVE_SCHEMA_VERSION, DEFAULT_SETTINGS, type SaveGame } from '../types/save';
-import { DIVISIONS } from '../config/divisions';
+import { DIVISION_BY_ID, DIVISIONS } from '../config/divisions';
+import { feminineSurname, NAME_BANKS } from '../data/names';
 import { allDivisionRankings, reconcileChampionFlags } from '../world/rankings';
-import { Rng } from '../rng';
+import { hashString, Rng } from '../rng';
 import { generateActivityProfile, generateFame, generatePersonality, generateSocial } from '../world/identity';
 import { repairInbox } from '../world/decisions';
 import { evaluateInterest } from '../world/matchup-interest';
 import { assignOfficials, ensureOfficials } from '../world/officials';
-import { seedRankedProduced } from '../world/gyms';
+import { playerGymMonthlyCosts, seedRankedProduced } from '../world/gyms';
 import { addDays, daysBetween } from '../types/common';
+import { cleanNickname, estimatedBirthDate, parseGymLocation } from '../data/real-fighter';
+import { longevityFromWear } from '../world/health';
+import { compactSave } from '../world/compaction';
+import { pruneHistory } from '../world/tick';
+import { repairStageSponsors, seedManagers } from '../world/finance';
+import { closeFightWeek } from '../world/fightweek';
 import { fightNightName, numberedEventName, PROMOTION_CONTRACTS, PROMOTION_MARKETING, PROMOTION_MATCHMAKING, PROMOTION_NAME } from '../config/branding';
 
 /**
@@ -73,7 +80,7 @@ const MIGRATION_5: Migration = {
     for (const f of Object.values(save.fighters ?? {})) {
       const rng = new Rng(`identity-${f.id}-${save.seed ?? 0}`);
       if (!f.personality) f.personality = generatePersonality(rng);
-      if (!f.activityProfile) f.activityProfile = generateActivityProfile(rng, f.personality, f);
+      if (!f.activityProfile) f.activityProfile = generateActivityProfile(rng, f.personality, f, save.date);
       if (!f.fame) f.fame = generateFame(rng, f);
       if (!f.social) f.social = generateSocial(rng, f);
       if (!f.publicLabels) f.publicLabels = [];
@@ -606,6 +613,85 @@ const MIGRATION_21: Migration = {
 };
 MIGRATIONS.push(MIGRATION_21);
 
+/**
+ * The regional circuit. Every field it adds is optional and absent means the main promotion, so an
+ * existing save needs nothing for it. The version moves anyway, because a build from before the
+ * circuit would load a regional career and put its regional fighters straight into the main
+ * rankings; with the bump it refuses the save with a clear message instead.
+ *
+ * The same build moved the default calendar from 3.83 cards a month to 4, matching the forty eight a
+ * year the calendar targets. Loading merges stored settings over the defaults, so a career started
+ * on the old default kept 3.83 and ran about four percent fewer cards than a new one. Only that
+ * exact value is moved: the settings field steps by 0.2 from 1, so a player can never have chosen
+ * it, and any value they did choose is left alone.
+ */
+const MIGRATION_22: Migration = {
+  to: 22,
+  describe: 'Introduces the regional circuit, and moves a calendar still on the old default of 3.83 cards a month to 4.',
+  apply: (save) => {
+    if (save.settings && save.settings.eventsPerMonth === 3.83) save.settings.eventsPerMonth = 4;
+  },
+};
+MIGRATIONS.push(MIGRATION_22);
+
+/**
+ * Repairs to values a save copied from the real roster snapshot or its builder. Every step is
+ * idempotent, so it runs on every load without a schema bump.
+ */
+function repairRealRosterData(save: SaveGame): void {
+  const snapshotDate = save.snapshot?.snapshotDate ?? null;
+  for (const f of Object.values(save.fighters ?? {})) {
+    // The snapshot stored nicknames inside the profile's own quotes, and the interface adds its own.
+    f.nickname = cleanNickname(f.nickname);
+    // Real fighters had no birth date and so never aged. The estimate is anchored on the snapshot
+    // date, not today's save date, so a career already years in jumps to the right ages.
+    if (!f.birthDate && f.ageAtSnapshot != null && snapshotDate) {
+      f.birthDate = estimatedBirthDate(f.id, f.ageAtSnapshot, snapshotDate);
+      f.birthDateEstimated = true;
+    }
+    // Longevity is always the value wear implies. Created, generated and snapshot fighters were each
+    // given one that disagreed with their wear until the first health pass replaced it.
+    if (f.wear) f.longevity = longevityFromWear(f.wear);
+    // Georgia's name bank carried the code BR2, which is not a country code.
+    if (f.countryCode === 'BR2') f.countryCode = 'GE';
+  }
+  for (const g of Object.values(save.gyms ?? {})) {
+    if (g.countryCode === 'BR2') g.countryCode = 'GE';
+    // A real gym's city was the home town of the first member the builder met. Only a location the
+    // gym's own name gives is kept.
+    if (g.isReal) {
+      const located = parseGymLocation(g.name);
+      g.city = located?.city ?? 'Unknown';
+      if (located) {
+        g.country = located.country;
+        g.countryCode = located.countryCode;
+      }
+    }
+  }
+}
+
+/**
+ * Generated fighters in women's divisions were given men's first names, because the name banks
+ * held only one list. This renames them from the bank's women's list. The pick hashes the
+ * fighter id rather than drawing from the world rng, so it is the same on every load, leaves the
+ * world's random sequence alone, and a name already from a women's list is never touched again.
+ * Real fighters and the player's own fighter keep the names they have. Old news and history text
+ * keep the name that was printed at the time, as a newspaper would.
+ */
+const WOMENS_FIRST_NAMES = new Set(NAME_BANKS.flatMap((b) => b.firstFemale));
+function repairGeneratedWomensNames(save: SaveGame): void {
+  const playerId = save.player?.fighterId ?? null;
+  for (const f of Object.values(save.fighters ?? {})) {
+    if (f.isRealPerson || f.id === playerId) continue;
+    if (DIVISION_BY_ID[f.divisionId]?.gender !== 'women') continue;
+    if (WOMENS_FIRST_NAMES.has(f.firstName)) continue;
+    const bank = NAME_BANKS.find((b) => b.code === f.countryCode) ?? NAME_BANKS[0];
+    f.firstName = bank.firstFemale[hashString(`womens-name-${f.id}`) % bank.firstFemale.length];
+    f.lastName = feminineSurname(bank.code, f.lastName);
+    f.name = `${f.firstName} ${f.lastName}`;
+  }
+}
+
 export function migrateSave(save: SaveGame): SaveGame {
   const from = save.schemaVersion ?? 1;
   if (from > SAVE_SCHEMA_VERSION) {
@@ -621,6 +707,13 @@ export function migrateSave(save: SaveGame): SaveGame {
   // Defensive repairs that apply at any version. A save that survives decades of play
   // should never fail to open because one optional structure is missing.
   save.settings = { ...DEFAULT_SETTINGS, ...save.settings };
+  // A hand edited or damaged file can arrive without these. Every page that lists gyms, staff or
+  // contracts walks them, so an imported career missing one loaded and then crashed a page later,
+  // and a save with no name could not be exported. Empty is a valid world for each of them.
+  if (!save.gyms) save.gyms = {};
+  if (!save.staff) save.staff = {};
+  if (!save.contracts) save.contracts = {};
+  if (typeof save.saveName !== 'string' || !save.saveName.trim()) save.saveName = 'Imported career';
   if (!save.rankings) save.rankings = allDivisionRankings(save.date);
   for (const d of DIVISIONS) {
     if (!save.rankings[d.id]) {
@@ -687,6 +780,16 @@ export function migrateSave(save: SaveGame): SaveGame {
     if (existing) camp.status = 'abandoned';
     else activeByFighter.set(camp.fighterId, camp.id);
   }
+  // Fight week records for bouts that are over. Older builds never closed final clearance or
+  // fight night, and scheduled a post fight interview and press conference that nothing offered,
+  // so a revisited fight week page still showed them due. Post fight stages are gone from every
+  // bout, booked or not, since none of them can be held.
+  for (const [id, task] of Object.entries(save.fightWeek ?? {})) {
+    if (task.stage === 'post-fight-interview' || task.stage === 'post-fight-press') delete save.fightWeek[id];
+  }
+  for (const boutId of new Set(Object.values(save.fightWeek ?? {}).map((t) => t.boutId))) {
+    if (save.bouts?.[boutId]?.status === 'completed') closeFightWeek(save, boutId);
+  }
   // Inbox repair: stuck decisions, duplicates and items whose linked object is gone.
   repairInbox(save);
   // Every open offer must be in the division its fighter is actually in. A fighter who
@@ -726,9 +829,53 @@ export function migrateSave(save: SaveGame): SaveGame {
     }
   }
 
+  // A gym the player founded inside this save was given a random overhead of up to $60k a month,
+  // which sank it by the second month. Its costs are capped at what a room of its size costs to
+  // run. Only lowered, never raised, so running this on every load changes nothing a second time.
+  for (const gym of Object.values(save.gyms ?? {})) {
+    if (!gym.isPlayerControlled || gym.isReal) continue;
+    if (!save.startDate || !gym.founded || gym.founded < save.startDate) continue;
+    if (typeof gym.capacity !== 'number' || typeof gym.facilities !== 'number') continue;
+    gym.monthlyCosts = Math.min(gym.monthlyCosts, playerGymMonthlyCosts(gym));
+  }
+
+  repairRealRosterData(save);
+  repairGeneratedWomensNames(save);
+  // Sponsor deals signed before sponsorship was scaled to the fighter's stage, and a manager pool
+  // for careers that began before one was seeded. Both are no ops once applied.
+  if (save.sponsors && save.fighters && save.player) repairStageSponsors(save);
+  if (save.player?.mode === 'fighter' && save.player.fighterId && save.managers) seedManagers(save, save.seed ?? 1);
+
+  // A player left suspended with no sanction behind it. With anti-doping switched off, a finding
+  // still suspended the fighter and the clean up removed the sanction but not the status, and no
+  // pass could ever lift it, so the career stopped for good. Only the player is repaired: a real
+  // fighter can be imported as suspended from the official profile, with no sanction recorded.
+  // The sanction question is closed too, since there is nothing left to accept or appeal.
+  const playerFighter = save.player?.fighterId ? save.fighters?.[save.player.fighterId] : null;
+  if (playerFighter && !playerFighter.antiDopingSuspension) {
+    if (playerFighter.activityStatus === 'suspended') playerFighter.activityStatus = 'active';
+    for (const m of save.inbox) {
+      if (m.status === 'resolved' || m.status === 'expired') continue;
+      if (!m.choices?.some((c) => c.key === 'doping-accept' || c.key === 'doping-appeal')) continue;
+      m.status = 'resolved';
+      m.resolution = 'There is no sanction in force.';
+      m.decisionResolvedOn = save.date;
+    }
+  }
+
   // The champion flags are derived from the tables, so a save written before they were reconciled
   // is repaired on load rather than carrying a second champion into the new build.
   reconcileChampionFlags(save);
+
+  // Compaction, run once here for a save written before it existed, so an old save that grew large
+  // shrinks the first time it is opened rather than a month into play. It is not run on every
+  // load: pruning reads the date and the fight count, which move between weekly passes, so a load
+  // on the wrong day removed things the weekly pass had not yet and the reloaded world was no longer
+  // the world that was saved. A current save is compacted by the weekly pass alone.
+  if (from < 22 && save.history?.results && save.contracts && save.fighters && save.player) {
+    pruneHistory(save);
+    compactSave(save);
+  }
 
   save.schemaVersion = SAVE_SCHEMA_VERSION;
   return save;

@@ -1,4 +1,4 @@
-import { daysBetween } from '../types/common';
+import { daysBetween, formatDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 
@@ -64,7 +64,7 @@ export function deriveFighterStatus(save: SaveGame, fighter: Fighter): StatusVer
   if (fighter.retired || fighter.activityStatus === 'retired') {
     return {
       status: 'retired',
-      detail: fighter.retirementDate ? `Retired on ${fighter.retirementDate}.` : 'Retired.',
+      detail: fighter.retirementDate ? `Retired on ${formatDate(fighter.retirementDate)}.` : 'Retired.',
       evidence: fighter.retirementDate && fighter.retirementDate >= save.startDate ? 'simulated' : sourced ? 'sourced' : 'derived',
       until: null,
     };
@@ -93,7 +93,7 @@ export function deriveFighterStatus(save: SaveGame, fighter: Fighter): StatusVer
   if (blocking) {
     return {
       status: 'injured',
-      detail: `${blocking.type}. Expected back around ${blocking.expectedReturn}.`,
+      detail: `${blocking.type}. Expected back around ${formatDate(blocking.expectedReturn)}.`,
       evidence: 'simulated',
       until: blocking.expectedReturn,
     };
@@ -106,7 +106,7 @@ export function deriveFighterStatus(save: SaveGame, fighter: Fighter): StatusVer
       const opponent = save.fighters[opponentId];
       return {
         status: 'booked',
-        detail: `Booked against ${opponent?.name ?? 'an opponent'} on ${bout.date}.`,
+        detail: `Booked against ${opponent?.name ?? 'an opponent'} on ${formatDate(bout.date)}.`,
         evidence: 'simulated',
         until: bout.date,
       };

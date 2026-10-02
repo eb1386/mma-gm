@@ -197,6 +197,18 @@ describe.runIf(Boolean(snapshotFile))('world simulation', () => {
       expect(r.rounds.length).toBeGreaterThan(0);
       expect(r.narrativeSummary.length).toBeGreaterThan(0);
     }
+    // Fights 221 to 400 back keep their closing sequence, which used to be wiped at 220.
+    const newestFirst = Object.values(save.history.results).sort((a, b) => (a.date < b.date ? 1 : -1));
+    const closing = newestFirst.slice(221, 401);
+    expect(closing.length).toBeGreaterThan(0);
+    for (const r of closing) {
+      expect(r.events.length).toBeGreaterThanOrEqual(1);
+      expect(r.events.length).toBeLessThanOrEqual(10);
+    }
+    // A second pass finds nothing left to trim.
+    expect(pruneHistory(save).prunedEvents).toBe(0);
+    // Closed camps do not pile up: what is left is live, recent, or the last one each fighter had.
+    expect(Object.keys(save.camps).length).toBeLessThan(Object.keys(save.fighters).length * 2);
   });
 
   it('spreads a card across more than one division', () => {

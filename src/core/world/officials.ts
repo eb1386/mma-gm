@@ -1,3 +1,4 @@
+import { CALIBRATION as C } from '../config/calibration';
 import { clamp, Rng } from '../rng';
 import type { BoutId, IsoDate } from '../types/common';
 import type { Bout, FightResult } from '../types/fight';
@@ -198,19 +199,32 @@ export function assignOfficials(save: SaveGame, bout: Bout): OfficialAssignment 
   return assignment;
 }
 
-/** Converts assigned judges into the personas the fight engine scores with. */
-export function judgePersonasFor(save: SaveGame, assignment: OfficialAssignment, homeAdvantage = 0): JudgePersona[] {
+/**
+ * Converts assigned judges into the personas the fight engine scores with.
+ *
+ * `homeSide` is 1 when the crowd is behind fighter A, -1 when it is behind B and 0 otherwise.
+ * `boutId` seeds the judge's lean on this particular night. It is drawn from its own seed rather
+ * than the fight rng, so passing it cannot shift the simulation, and it is fresh every bout
+ * because a lasting lean toward slot A would follow the player, who is usually slot A.
+ */
+export function judgePersonasFor(save: SaveGame, assignment: OfficialAssignment, homeSide = 0, boutId?: string): JudgePersona[] {
   const out: JudgePersona[] = [];
   for (const id of assignment.judgeIds) {
     const o = getOfficial(save, id);
     if (!o) continue;
+    // Experience narrows the night to night swing rather than removing it.
+    const nightLean = boutId
+      ? new Rng(`judge-night-${save.seed}-${boutId}-${id}`).normal(0, C.judging.judgeBoutBiasSd * (1 - o.experience / 200))
+      : 0;
     out.push({
       name: o.name,
       grapplingLean: o.grapplingLean + o.controlLean * 0.4,
       damageLean: o.damageLean,
-      // A partisan crowd nudges a susceptible judge toward the home fighter. It is a small
-      // effect on top of an already small bias, never a decisive one.
-      bias: o.bias + homeAdvantage * o.hometownSusceptibility,
+      bias: o.bias + nightLean,
+      // A partisan crowd pulls a susceptible judge toward the home fighter. On the round score
+      // scale it can decide a close round, never a clear one. The old figure was a hundredth of a
+      // landed strike and could not change a card at all.
+      homeBias: Math.sign(homeSide) * C.judging.homeCrowdBias * o.hometownSusceptibility,
       tenEightWillingness: o.tenEightWillingness,
     });
   }

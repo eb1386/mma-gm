@@ -18,6 +18,14 @@ function decode(s) {
     .trim();
 }
 
+// The profile wraps a nickname in quotes, written as &quot; entities, so a quote can only be
+// trimmed after decoding. Only double quotes (straight and curly) come off the ends: a trailing
+// apostrophe can belong to the nickname itself, as in Ragin'.
+function cleanNickname(s) {
+  if (s == null) return null;
+  return decode(s).replace(/^[\s"\u201c\u201d]+|[\s"\u201c\u201d]+$/g, '') || null;
+}
+
 function strip(s) {
   if (s == null) return null;
   return decode(s.replace(/<[^>]+>/g, ' '));
@@ -84,7 +92,7 @@ export function parseAthlete(html, slug) {
   const heroTags = [...html.matchAll(/hero-profile__tag">\s*([^<]*?)\s*</g)].map((x) => decode(x[1])).filter(Boolean);
 
   const nameM = html.match(/hero-profile__name">\s*([^<]+?)\s*</);
-  const nickM = html.match(/hero-profile__nickname">\s*"?([^"<]*?)"?\s*</);
+  const nickM = html.match(/hero-profile__nickname">\s*([^<]*?)\s*</);
   const divM = html.match(/hero-profile__division-title">\s*([^<]+?)\s*</);
   const recM = html.match(/hero-profile__division-body">\s*([0-9]+)-([0-9]+)-([0-9]+)/);
 
@@ -135,11 +143,13 @@ export function parseAthlete(html, slug) {
   return {
     slug,
     name: nameM ? decode(nameM[1]) : null,
-    nickname: nickM ? decode(nickM[1]) || null : null,
+    nickname: nickM ? cleanNickname(nickM[1]) : null,
     divisionLabel: divM ? decode(divM[1]) : null,
     record: recM ? { w: Number(recM[1]), l: Number(recM[2]), d: Number(recM[3]) } : null,
     status: bio['Status'] || null,
-    placeOfBirth: bio['Place of Birth'] || null,
+    // The site relabelled this field from Place of Birth to Hometown during 2026. Both hold the
+    // same "City, Country" text, so either label is read.
+    placeOfBirth: bio['Place of Birth'] || bio['Hometown'] || null,
     trainsAt: bio['Trains at'] || null,
     fightingStyle: bio['Fighting style'] || null,
     age: num(bio['Age']),
@@ -175,4 +185,4 @@ export function parseAthlete(html, slug) {
   };
 }
 
-export const _internal = { decode, strip, num };
+export const _internal = { decode, strip, num, cleanNickname };

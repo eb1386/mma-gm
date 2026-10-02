@@ -1,9 +1,10 @@
 import { DIVISION_BY_ID, type DivisionId } from '../config/divisions';
-import { addDays, daysBetween, type BoutId, type EventId, type FighterId, type IsoDate } from '../types/common';
+import { addDays, daysBetween, type BoutId, type EventId, type FighterId, type IsoDate, joinSentence } from '../types/common';
 import { isChampionshipBout, type Bout } from '../types/fight';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { activeInjuries, canCompete } from './health';
+import { liveCampOf } from './indexes';
 
 /**
  * The single authority on whether a fighter may be offered or booked a fight, and the
@@ -114,11 +115,9 @@ export function hasLiveBooking(save: SaveGame, fighter: Fighter): Bout | null {
 
 /** The fighter's active camp, if any. A fighter may only ever have one. */
 export function activeCampFor(save: SaveGame, fighterId: FighterId): { id: string; boutId: BoutId | null } | null {
-  for (const camp of Object.values(save.camps)) {
-    if (camp.fighterId !== fighterId) continue;
-    if (camp.status === 'planned' || camp.status === 'running') return { id: camp.id, boutId: camp.boutId };
-  }
-  return null;
+  // Indexed during the weekly pass, where this is asked once per fighter.
+  const camp = liveCampOf(save, fighterId);
+  return camp ? { id: camp.id, boutId: camp.boutId } : null;
 }
 
 /** Open offers naming this fighter on either side. */
@@ -223,9 +222,13 @@ export function offerBlockReason(save: SaveGame, fighter: Fighter, opts: Availab
     if (fighter.offerCooldownUntil && fighter.offerCooldownUntil > save.date) return 'offer-cooldown';
   }
 
-  const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
-  if (!contract || contract.status !== 'active') return 'no-contract';
-  if (contract.fightsRemaining <= 0) return 'contract-exhausted';
+  // A regional fighter other than the player fights for their promotion without a stored contract.
+  // The player on the circuit holds a real regional deal, which is checked like any other.
+  if (!fighter.circuit || fighter.id === save.player.fighterId) {
+    const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
+    if (!contract || contract.status !== 'active') return 'no-contract';
+    if (contract.fightsRemaining <= 0) return 'contract-exhausted';
+  }
 
   if (!opts.isReplacementSlot) {
     if (fighter.lastFightDate && daysBetween(fighter.lastFightDate, eventDate) < 35) return 'turnaround-too-short';
@@ -359,7 +362,7 @@ export function postponeBout(save: SaveGame, bout: Bout, toEventId: EventId, rea
   }
   bout.eventId = toEventId;
   bout.date = target.date;
-  bout.bookingReason = `${bout.bookingReason}. ${reason}`;
+  bout.bookingReason = joinSentence(bout.bookingReason, reason);
   if (!target.boutIds.includes(bout.id)) target.boutIds.push(bout.id);
   if (!target.announcedBoutIds) target.announcedBoutIds = [];
   if (!target.announcedBoutIds.includes(bout.id)) target.announcedBoutIds.push(bout.id);

@@ -14,6 +14,11 @@ export interface NameBank {
   /** Relative frequency in the generated prospect pool. */
   weight: number;
   first: string[];
+  /**
+   * Given names for fighters generated into a women's division. Required, so a bank
+   * added later cannot quietly hand a woman a man's name.
+   */
+  firstFemale: string[];
   last: string[];
   cities: string[];
   /** Continent grouping used for travel distance and regional popularity. */
@@ -27,6 +32,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 26,
     region: 'north-america',
     first: ['Michael', 'Chris', 'Tyler', 'Andre', 'Cole', 'Devin', 'Marcus', 'Brandon', 'Elijah', 'Jared', 'Trevor', 'Nate', 'Damon', 'Isaiah', 'Kyle', 'Shane', 'Dominic', 'Grant', 'Malik', 'Caleb', 'Wyatt', 'Rashad', 'Bryce', 'Logan', 'Xavier'],
+    firstFemale: ['Jessica', 'Ashley', 'Brittany', 'Kayla', 'Mackenzie', 'Tatiana', 'Alexis', 'Courtney', 'Jasmine', 'Taylor', 'Morgan', 'Danielle', 'Brooke', 'Kendra'],
     last: ['Harper', 'Whitfield', 'Marsh', 'Coleman', 'Bryant', 'Dawson', 'Reyes', 'Fletcher', 'Osborne', 'Mercer', 'Vaughn', 'Ellison', 'Nash', 'Barlow', 'Kincaid', 'Prescott', 'Hollins', 'Ramsey', 'Blackwell', 'Sutton', 'Kearney', 'Alvarado', 'Doyle', 'Winters', 'Boone'],
     cities: ['Denver', 'Sacramento', 'Albuquerque', 'Milwaukee', 'Tampa', 'Columbus', 'Portland', 'Baton Rouge', 'Tulsa', 'Fresno', 'Boise', 'Buffalo', 'Charlotte', 'Omaha'],
   },
@@ -36,6 +42,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 15,
     region: 'south-america',
     first: ['Rafael', 'Thiago', 'Bruno', 'Lucas', 'Matheus', 'Vinicius', 'Gabriel', 'Diego', 'Caio', 'Rodrigo', 'Felipe', 'Leandro', 'Anderson', 'Douglas', 'Wanderson', 'Igor', 'Marlon', 'Everton', 'Danilo', 'Renan'],
+    firstFemale: ['Amanda', 'Juliana', 'Larissa', 'Mariana', 'Bruna', 'Leticia', 'Fernanda', 'Camila', 'Tainara', 'Viviane', 'Priscila', 'Jessica', 'Livia'],
     last: ['Barbosa', 'Oliveira', 'Ferreira', 'Nascimento', 'Cavalcante', 'Rodrigues', 'Almeida', 'Moraes', 'Teixeira', 'Bastos', 'Carvalho', 'Guimaraes', 'Vieira', 'Pontes', 'Macedo', 'Queiroz', 'Rezende', 'Fontoura', 'Sampaio', 'Lacerda'],
     cities: ['Rio de Janeiro', 'Sao Paulo', 'Curitiba', 'Belo Horizonte', 'Fortaleza', 'Manaus', 'Porto Alegre', 'Salvador', 'Recife', 'Belem'],
   },
@@ -45,6 +52,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 11,
     region: 'europe',
     first: ['Ruslan', 'Timur', 'Magomed', 'Anton', 'Sergei', 'Artem', 'Rustam', 'Alexey', 'Vadim', 'Marat', 'Islam', 'Denis', 'Nikita', 'Shamil', 'Zaur', 'Roman', 'Aslan', 'Ivan'],
+    firstFemale: ['Anastasia', 'Ekaterina', 'Yana', 'Olga', 'Daria', 'Svetlana', 'Irina', 'Viktoria', 'Marina', 'Polina', 'Ksenia', 'Aminat'],
     last: ['Sokolov', 'Volkov', 'Gadzhiev', 'Kuznetsov', 'Ismailov', 'Petrov', 'Abdulaev', 'Morozov', 'Lebedev', 'Nurmagomedov', 'Aliev', 'Zaytsev', 'Orlov', 'Kadyrov', 'Suleymanov', 'Yakovlev', 'Baturin', 'Ryabov'],
     cities: ['Makhachkala', 'Moscow', 'Saint Petersburg', 'Kazan', 'Grozny', 'Yekaterinburg', 'Krasnodar', 'Novosibirsk', 'Vladikavkaz'],
   },
@@ -54,6 +62,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 7,
     region: 'europe',
     first: ['Callum', 'Liam', 'Jack', 'Harrison', 'Nathan', 'Reece', 'Ashton', 'Joe', 'Danny', 'Louis', 'Kieran', 'Owen', 'Curtis', 'Bradley', 'Jordan'],
+    firstFemale: ['Charlotte', 'Molly', 'Lauren', 'Chloe', 'Hannah', 'Rosie', 'Amy', 'Sophie', 'Ellie', 'Jade', 'Gemma'],
     last: ['Whitaker', 'Beckett', 'Hollow', 'Ashcroft', 'Pemberton', 'Crawley', 'Radcliffe', 'Marston', 'Kendrick', 'Fairbrother', 'Dunmore', 'Sallis', 'Grimshaw', 'Aldridge'],
     cities: ['Liverpool', 'Manchester', 'Birmingham', 'Leeds', 'Newcastle', 'Sheffield', 'Bristol', 'Nottingham', 'London'],
   },
@@ -63,6 +72,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 5,
     region: 'north-america',
     first: ['Emiliano', 'Rodrigo', 'Alejandro', 'Cesar', 'Ivan', 'Hector', 'Rogelio', 'Ulises', 'Fernando', 'Adan', 'Joaquin', 'Ramiro', 'Damian', 'Efrain'],
+    firstFemale: ['Alexa', 'Daniela', 'Fernanda', 'Lupita', 'Ximena', 'Valeria', 'Yazmin', 'Itzel', 'Paola', 'Mariana', 'Gabriela'],
     last: ['Zamudio', 'Cardenas', 'Villalobos', 'Escamilla', 'Alcantar', 'Peralta', 'Bermudez', 'Ochoa', 'Cisneros', 'Robledo', 'Tapia', 'Quintero', 'Ibarra', 'Salgado'],
     cities: ['Guadalajara', 'Monterrey', 'Mexico City', 'Tijuana', 'Puebla', 'Merida', 'Leon', 'Culiacan'],
   },
@@ -72,6 +82,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 4,
     region: 'north-america',
     first: ['Cole', 'Mitchell', 'Tanner', 'Reid', 'Gavin', 'Brendan', 'Keenan', 'Landon', 'Dane', 'Aiden'],
+    firstFemale: ['Chelsea', 'Jessica', 'Danielle', 'Kaitlyn', 'Megan', 'Brianna', 'Sarah', 'Emily', 'Nicole', 'Genevieve', 'Avery'],
     last: ['Larose', 'Gauthier', 'Beaulieu', 'Tremblay', 'Cormier', 'Fortin', 'Mackay', 'Pelletier', 'Nadeau', 'Sinclair'],
     cities: ['Montreal', 'Toronto', 'Vancouver', 'Calgary', 'Halifax', 'Edmonton', 'Winnipeg', 'Ottawa'],
   },
@@ -81,6 +92,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 3.5,
     region: 'europe',
     first: ['Mateusz', 'Kacper', 'Bartosz', 'Damian', 'Szymon', 'Adrian', 'Krzysztof', 'Michal', 'Pawel', 'Tomasz'],
+    firstFemale: ['Karolina', 'Joanna', 'Agnieszka', 'Katarzyna', 'Marta', 'Aleksandra', 'Natalia', 'Monika', 'Weronika', 'Zofia'],
     last: ['Wisniewski', 'Kaczmarek', 'Zielinski', 'Sikora', 'Malinowski', 'Adamczyk', 'Jaworski', 'Czerwinski', 'Baranowski', 'Sobczak'],
     cities: ['Warsaw', 'Krakow', 'Wroclaw', 'Gdansk', 'Poznan', 'Lodz', 'Katowice'],
   },
@@ -90,15 +102,17 @@ export const NAME_BANKS: NameBank[] = [
     weight: 3.5,
     region: 'oceania',
     first: ['Jett', 'Riley', 'Beau', 'Hudson', 'Archie', 'Lachlan', 'Cody', 'Blake', 'Declan', 'Marcus'],
+    firstFemale: ['Casey', 'Megan', 'Jessica', 'Bec', 'Chloe', 'Tahlia', 'Kirra', 'Jade', 'Ella', 'Brooke'],
     last: ['Kerrigan', 'Rowntree', 'Halloran', 'Whitmore', 'Baxendale', 'Considine', 'Tolhurst', 'Merrick', 'Lansbury', 'Dunning'],
     cities: ['Sydney', 'Melbourne', 'Perth', 'Brisbane', 'Adelaide', 'Gold Coast', 'Canberra'],
   },
   {
-    code: 'BR2',
+    code: 'GE',
     country: 'Georgia',
     weight: 2.5,
     region: 'europe',
     first: ['Giorgi', 'Levan', 'Nika', 'Irakli', 'Zurab', 'Beka', 'Vakhtang', 'Davit'],
+    firstFemale: ['Nino', 'Tamar', 'Mariam', 'Ketevan', 'Ana', 'Salome', 'Nana', 'Eka'],
     last: ['Kvaratskhelia', 'Gogoladze', 'Chikhladze', 'Beridze', 'Tsiklauri', 'Machavariani', 'Kobakhidze', 'Jaliashvili'],
     cities: ['Tbilisi', 'Kutaisi', 'Batumi', 'Rustavi', 'Gori'],
   },
@@ -108,6 +122,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 2,
     region: 'europe',
     first: ['Cian', 'Ronan', 'Eoin', 'Padraig', 'Fergal', 'Niall', 'Darragh', 'Oisin'],
+    firstFemale: ['Aoife', 'Siobhan', 'Niamh', 'Ciara', 'Sinead', 'Orla', 'Roisin', 'Clodagh', 'Grainne'],
     last: ["O'Callaghan", 'Mulcahy', 'Devlin', 'Hennessy', 'Rafferty', 'Gallagher', 'Corrigan', 'Blaney'],
     cities: ['Dublin', 'Cork', 'Galway', 'Limerick', 'Belfast', 'Waterford'],
   },
@@ -117,6 +132,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 3,
     region: 'asia',
     first: ['Kaito', 'Sota', 'Ren', 'Hayato', 'Riku', 'Yuto', 'Daiki', 'Shota', 'Takumi', 'Kenta'],
+    firstFemale: ['Ayaka', 'Mizuki', 'Rin', 'Kanako', 'Saori', 'Yuka', 'Haruka', 'Miyu', 'Emi', 'Nanami'],
     last: ['Ishikawa', 'Fujimoto', 'Kurosawa', 'Hasegawa', 'Nakagawa', 'Morita', 'Sugimoto', 'Kikuchi', 'Yamashita', 'Ogawa'],
     cities: ['Tokyo', 'Osaka', 'Nagoya', 'Fukuoka', 'Sapporo', 'Yokohama', 'Kobe'],
   },
@@ -126,6 +142,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 2.5,
     region: 'asia',
     first: ['Jaehyun', 'Minjun', 'Seojun', 'Doyoon', 'Hyunwoo', 'Jiho', 'Taeyang', 'Sangwoo'],
+    firstFemale: ['Ji-yeon', 'Seo-yeon', 'Min-ji', 'Ha-eun', 'Yu-na', 'Su-bin', 'Ji-woo', 'Hye-jin', 'Da-eun'],
     last: ['Kang', 'Jeong', 'Yoon', 'Bae', 'Seo', 'Moon', 'Hwang', 'Shin'],
     cities: ['Seoul', 'Busan', 'Incheon', 'Daegu', 'Daejeon', 'Gwangju'],
   },
@@ -135,6 +152,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 3,
     region: 'asia',
     first: ['Wei', 'Hao', 'Jian', 'Lei', 'Yong', 'Feng', 'Bo', 'Chen', 'Kun', 'Peng'],
+    firstFemale: ['Weili', 'Yan', 'Jingnan', 'Lina', 'Xiaonan', 'Na', 'Ying', 'Mei', 'Rong', 'Jie'],
     last: ['Zhang', 'Wang', 'Liu', 'Zhao', 'Sun', 'Xu', 'Guo', 'Song', 'Tang', 'Fan'],
     cities: ['Beijing', 'Shanghai', 'Chengdu', 'Xian', 'Shenyang', 'Kunming', 'Urumqi'],
   },
@@ -144,6 +162,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 2,
     region: 'africa',
     first: ['Chidi', 'Emeka', 'Tunde', 'Obinna', 'Kelechi', 'Ifeanyi', 'Sola', 'Uche'],
+    firstFemale: ['Chioma', 'Ngozi', 'Funmilayo', 'Adaeze', 'Blessing', 'Yetunde', 'Amaka', 'Folake', 'Ifeoma'],
     last: ['Okonkwo', 'Adeyemi', 'Nwachukwu', 'Balogun', 'Eze', 'Okafor', 'Adebayo', 'Oyelaran'],
     cities: ['Lagos', 'Abuja', 'Port Harcourt', 'Ibadan', 'Kano'],
   },
@@ -153,6 +172,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1,
     region: 'africa',
     first: ['Landry', 'Serge', 'Aurelien', 'Bertrand', 'Yannick', 'Christian'],
+    firstFemale: ['Brigitte', 'Clarisse', 'Estelle', 'Mireille', 'Pauline', 'Josiane', 'Florence', 'Celestine'],
     last: ['Mbappe', 'Ngassa', 'Tchoumi', 'Etoundi', 'Njoya', 'Fotso'],
     cities: ['Douala', 'Yaounde', 'Bafoussam', 'Garoua'],
   },
@@ -162,6 +182,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'africa',
     first: ['Sipho', 'Jacques', 'Thabo', 'Ruan', 'Lwazi', 'Dewald'],
+    firstFemale: ['Thandiwe', 'Lerato', 'Nomvula', 'Zanele', 'Busisiwe', 'Lindiwe', 'Chantelle', 'Michelle', 'Annika'],
     last: ['Venter', 'Mokoena', 'Botha', 'Dlamini', 'Kruger', 'Ndlovu'],
     cities: ['Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth'],
   },
@@ -171,6 +192,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 2.5,
     region: 'europe',
     first: ['Theo', 'Enzo', 'Mathis', 'Bastien', 'Corentin', 'Yanis', 'Loic', 'Gaetan'],
+    firstFemale: ['Manon', 'Camille', 'Lea', 'Chloe', 'Pauline', 'Oceane', 'Lucie', 'Marion', 'Elodie', 'Justine'],
     last: ['Perrin', 'Lemoine', 'Brunet', 'Rousseau', 'Vidal', 'Charpentier', 'Delacroix', 'Marchand'],
     cities: ['Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice', 'Nantes', 'Strasbourg'],
   },
@@ -180,6 +202,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'europe',
     first: ['Alvaro', 'Iker', 'Pau', 'Nicolas', 'Sergio', 'Marc', 'Adrian'],
+    firstFemale: ['Lucia', 'Paula', 'Carmen', 'Laura', 'Marta', 'Alba', 'Irene', 'Nerea', 'Ainhoa', 'Sara'],
     last: ['Bermejo', 'Iglesias', 'Carrasco', 'Montero', 'Salinas', 'Arribas', 'Palomo'],
     cities: ['Madrid', 'Barcelona', 'Valencia', 'Seville', 'Bilbao', 'Malaga'],
   },
@@ -189,6 +212,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'europe',
     first: ['Sven', 'Bram', 'Jasper', 'Ruben', 'Thijs', 'Daan', 'Stijn'],
+    firstFemale: ['Germaine', 'Sanne', 'Lotte', 'Femke', 'Anouk', 'Fleur', 'Eva', 'Iris', 'Lieke'],
     last: ['Van Dijk', 'De Groot', 'Bakker', 'Visser', 'Hendriks', 'Van Leeuwen', 'Kuipers'],
     cities: ['Amsterdam', 'Rotterdam', 'Utrecht', 'Eindhoven', 'The Hague'],
   },
@@ -198,6 +222,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1,
     region: 'europe',
     first: ['Emil', 'Viktor', 'Oskar', 'Hampus', 'Elias', 'Axel'],
+    firstFemale: ['Johanna', 'Elin', 'Maja', 'Linnea', 'Ebba', 'Frida', 'Sofia', 'Klara', 'Matilda'],
     last: ['Lindgren', 'Bergstrom', 'Nyquist', 'Sandberg', 'Holmberg', 'Ekstrom'],
     cities: ['Stockholm', 'Gothenburg', 'Malmo', 'Uppsala'],
   },
@@ -207,6 +232,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'asia',
     first: ['Nurlan', 'Yerlan', 'Aibek', 'Damir', 'Sanzhar', 'Askar'],
+    firstFemale: ['Aigerim', 'Dana', 'Aruzhan', 'Madina', 'Dinara', 'Ainur', 'Saule', 'Zhanna'],
     last: ['Zhaksylykov', 'Bekturov', 'Serikbay', 'Amanzhol', 'Tulegenov', 'Kaliyev'],
     cities: ['Almaty', 'Astana', 'Shymkent', 'Karaganda'],
   },
@@ -216,6 +242,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.2,
     region: 'asia',
     first: ['Jasur', 'Bekzod', 'Otabek', 'Sardor', 'Javohir', 'Ulugbek'],
+    firstFemale: ['Dilnoza', 'Malika', 'Nilufar', 'Gulnora', 'Shahnoza', 'Feruza', 'Zarina', 'Kamola'],
     last: ['Rakhimov', 'Yusupov', 'Tashkentov', 'Nazarov', 'Ergashev', 'Ismoilov'],
     cities: ['Tashkent', 'Samarkand', 'Bukhara', 'Namangan'],
   },
@@ -225,6 +252,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'europe',
     first: ['Bohdan', 'Andriy', 'Oleksandr', 'Yaroslav', 'Vitaliy', 'Maksym'],
+    firstFemale: ['Maryna', 'Oksana', 'Yulia', 'Kateryna', 'Tetiana', 'Liliya', 'Iryna', 'Olena', 'Viktoriia'],
     last: ['Shevchenko', 'Kovalenko', 'Bondarenko', 'Melnyk', 'Tkachenko', 'Kravchuk'],
     cities: ['Kyiv', 'Kharkiv', 'Odesa', 'Lviv', 'Dnipro'],
   },
@@ -234,6 +262,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'south-america',
     first: ['Santiago', 'Franco', 'Tomas', 'Agustin', 'Ignacio', 'Lautaro'],
+    firstFemale: ['Florencia', 'Agustina', 'Sofia', 'Micaela', 'Carolina', 'Valentina', 'Luciana', 'Romina'],
     last: ['Ferraro', 'Bustamante', 'Quiroga', 'Ledesma', 'Ocampo', 'Suarez'],
     cities: ['Buenos Aires', 'Cordoba', 'Rosario', 'Mendoza'],
   },
@@ -243,6 +272,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'south-america',
     first: ['Bryan', 'Jefferson', 'Anderson', 'Wilmer', 'Jorge'],
+    firstFemale: ['Andrea', 'Gabriela', 'Karina', 'Daniela', 'Mishel', 'Paola', 'Estefania', 'Veronica'],
     last: ['Quinonez', 'Zambrano', 'Cedeno', 'Andrade', 'Paredes'],
     cities: ['Quito', 'Guayaquil', 'Cuenca'],
   },
@@ -252,6 +282,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'south-america',
     first: ['Kevin', 'Diego', 'Renzo', 'Alonso', 'Piero'],
+    firstFemale: ['Rosa', 'Milagros', 'Lucero', 'Claudia', 'Fiorella', 'Karina', 'Ximena', 'Andrea'],
     last: ['Chumpitaz', 'Vilchez', 'Cardenas', 'Rojas', 'Meza'],
     cities: ['Lima', 'Arequipa', 'Trujillo'],
   },
@@ -261,6 +292,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.2,
     region: 'oceania',
     first: ['Tane', 'Rangi', 'Cooper', 'Finn', 'Kahu'],
+    firstFemale: ['Aroha', 'Kiri', 'Hana', 'Mere', 'Ruby', 'Georgia', 'Olivia', 'Tayla'],
     last: ['Ngata', 'Waitere', 'Hemara', 'Bracewell', 'Tapsell'],
     cities: ['Auckland', 'Wellington', 'Christchurch', 'Hamilton'],
   },
@@ -270,6 +302,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1,
     region: 'asia',
     first: ['Jomar', 'Renz', 'Dexter', 'Carlo', 'Rafael'],
+    firstFemale: ['Angelica', 'Kristine', 'Maricel', 'Jasmine', 'Rhea', 'Lovely', 'Princess', 'Joy', 'Mae'],
     last: ['Bautista', 'Aguinaldo', 'Villanueva', 'Salcedo', 'Domingo'],
     cities: ['Manila', 'Cebu', 'Davao', 'Baguio'],
   },
@@ -279,6 +312,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1,
     region: 'europe',
     first: ['Emre', 'Kerem', 'Burak', 'Onur', 'Serkan'],
+    firstFemale: ['Elif', 'Zeynep', 'Busra', 'Merve', 'Ayse', 'Esra', 'Selin', 'Ebru', 'Dilara'],
     last: ['Yildirim', 'Demirci', 'Kaplan', 'Aydin', 'Ozturk'],
     cities: ['Istanbul', 'Ankara', 'Izmir', 'Bursa'],
   },
@@ -288,6 +322,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'europe',
     first: ['Jakub', 'Vojtech', 'Ondrej', 'Marek', 'Filip'],
+    firstFemale: ['Lucie', 'Tereza', 'Veronika', 'Katerina', 'Petra', 'Barbora', 'Klara', 'Adela'],
     last: ['Novotny', 'Prochazka', 'Kucera', 'Havlicek', 'Blazek'],
     cities: ['Prague', 'Brno', 'Ostrava', 'Plzen'],
   },
@@ -297,6 +332,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.5,
     region: 'europe',
     first: ['Lukas', 'Jonas', 'Felix', 'Niklas', 'Tim'],
+    firstFemale: ['Lena', 'Sarah', 'Julia', 'Anna', 'Katharina', 'Laura', 'Miriam', 'Jana', 'Svenja', 'Nina'],
     last: ['Brandt', 'Hofmann', 'Kellner', 'Reinhardt', 'Sauer'],
     cities: ['Berlin', 'Munich', 'Hamburg', 'Cologne', 'Frankfurt'],
   },
@@ -306,6 +342,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'asia',
     first: ['Amir', 'Reza', 'Hossein', 'Mehdi', 'Navid'],
+    firstFemale: ['Maryam', 'Zahra', 'Fatemeh', 'Niloufar', 'Shirin', 'Parisa', 'Sara', 'Leila', 'Roya'],
     last: ['Ghorbani', 'Tavakoli', 'Sadeghi', 'Naderi', 'Rostami'],
     cities: ['Tehran', 'Mashhad', 'Isfahan', 'Tabriz'],
   },
@@ -315,6 +352,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.6,
     region: 'europe',
     first: ['Ion', 'Vasile', 'Dumitru', 'Petru'],
+    firstFemale: ['Ana', 'Cristina', 'Mihaela', 'Natalia', 'Elena', 'Victoria', 'Doina', 'Corina'],
     last: ['Ceban', 'Rusu', 'Cebotari', 'Munteanu'],
     cities: ['Chisinau', 'Balti', 'Tiraspol'],
   },
@@ -324,6 +362,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'asia',
     first: ['Somchai', 'Nattapong', 'Anon', 'Kittisak'],
+    firstFemale: ['Siriporn', 'Ploy', 'Nong', 'Kanyarat', 'Warunee', 'Pimchanok', 'Supaporn', 'Ratchanok'],
     last: ['Chaiyaphum', 'Sitthichai', 'Rungrueang', 'Phromkhan'],
     cities: ['Bangkok', 'Chiang Mai', 'Phuket', 'Pattaya'],
   },
@@ -333,6 +372,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.2,
     region: 'europe',
     first: ['Mikko', 'Juho', 'Eero', 'Aleksi', 'Niko', 'Teemu', 'Joona', 'Ville', 'Santeri', 'Oskari', 'Elias', 'Antti', 'Jere', 'Lauri'],
+    firstFemale: ['Aino', 'Emmi', 'Sanna', 'Linnea', 'Veera', 'Noora', 'Henna', 'Johanna'],
     last: ['Korhonen', 'Virtanen', 'Nieminen', 'Makinen', 'Hamalainen', 'Laine', 'Heikkinen', 'Koskinen', 'Jarvinen', 'Lehtonen', 'Salminen', 'Rantanen', 'Tuominen', 'Hiltunen'],
     cities: ['Helsinki', 'Tampere', 'Turku', 'Oulu', 'Jyvaskyla', 'Lahti'],
   },
@@ -342,6 +382,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'europe',
     first: ['Magnus', 'Sander', 'Henrik', 'Kristian', 'Emil', 'Jonas', 'Marius', 'Sindre', 'Eirik', 'Anders', 'Tobias', 'Mathias'],
+    firstFemale: ['Ingrid', 'Ida', 'Nora', 'Silje', 'Kristine', 'Hanne', 'Marte', 'Thea'],
     last: ['Hansen', 'Johansen', 'Olsen', 'Berg', 'Haugen', 'Hagen', 'Dahl', 'Solberg', 'Moen', 'Nygaard', 'Strand', 'Lund'],
     cities: ['Oslo', 'Bergen', 'Trondheim', 'Stavanger', 'Drammen'],
   },
@@ -351,6 +392,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'europe',
     first: ['Mads', 'Frederik', 'Rasmus', 'Casper', 'Nikolaj', 'Anders', 'Simon', 'Jonas', 'Malte', 'Oliver', 'Victor', 'Emil'],
+    firstFemale: ['Freja', 'Mette', 'Signe', 'Camilla', 'Line', 'Sofie', 'Mathilde', 'Ida'],
     last: ['Jensen', 'Nielsen', 'Andersen', 'Pedersen', 'Christensen', 'Larsen', 'Rasmussen', 'Sorensen', 'Thomsen', 'Dalgaard', 'Holm', 'Vestergaard'],
     cities: ['Copenhagen', 'Aarhus', 'Odense', 'Aalborg', 'Esbjerg'],
   },
@@ -360,6 +402,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.4,
     region: 'europe',
     first: ['Gunnar', 'Bjorn', 'Kristjan', 'Aron', 'Dagur', 'Einar', 'Hakon', 'Olafur', 'Sigurdur', 'Viktor'],
+    firstFemale: ['Sunna', 'Gudrun', 'Sigrun', 'Helga', 'Katrin', 'Thora', 'Asdis', 'Kolbrun'],
     last: ['Jonsson', 'Sigurdsson', 'Gudmundsson', 'Einarsson', 'Magnusson', 'Olafsson', 'Kristjansson', 'Thorsteinsson', 'Arnarsson', 'Halldorsson'],
     cities: ['Reykjavik', 'Kopavogur', 'Hafnarfjordur', 'Akureyri'],
   },
@@ -369,6 +412,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.9,
     region: 'europe',
     first: ['Callum', 'Ewan', 'Fraser', 'Lachlan', 'Ross', 'Angus', 'Cameron', 'Finlay', 'Rory', 'Struan', 'Blair', 'Craig'],
+    firstFemale: ['Kirsty', 'Eilidh', 'Isla', 'Morag', 'Fiona', 'Ailsa', 'Shona', 'Catriona'],
     last: ['MacLeod', 'Campbell', 'Stewart', 'MacDonald', 'Ferguson', 'Grant', 'Bruce', 'Sinclair', 'Munro', 'Lamont', 'Cunningham', 'Boyd'],
     cities: ['Glasgow', 'Edinburgh', 'Aberdeen', 'Dundee', 'Inverness'],
   },
@@ -378,6 +422,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 1.4,
     region: 'europe',
     first: ['Marco', 'Alessandro', 'Luca', 'Matteo', 'Davide', 'Andrea', 'Simone', 'Federico', 'Riccardo', 'Stefano', 'Gabriele', 'Nicola'],
+    firstFemale: ['Giulia', 'Chiara', 'Francesca', 'Martina', 'Alessia', 'Federica', 'Sara', 'Valentina', 'Elisa'],
     last: ['Rossi', 'Russo', 'Ferrari', 'Esposito', 'Bianchi', 'Romano', 'Colombo', 'Ricci', 'Greco', 'Conti', 'Marino', 'Gallo'],
     cities: ['Rome', 'Milan', 'Naples', 'Turin', 'Bologna', 'Palermo', 'Florence'],
   },
@@ -387,6 +432,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.9,
     region: 'europe',
     first: ['Joao', 'Tiago', 'Miguel', 'Andre', 'Goncalo', 'Ricardo', 'Diogo', 'Bruno', 'Nuno', 'Rui', 'Pedro', 'Vasco'],
+    firstFemale: ['Ines', 'Beatriz', 'Mariana', 'Rita', 'Joana', 'Catarina', 'Filipa', 'Sofia'],
     last: ['Silva', 'Santos', 'Pereira', 'Costa', 'Fernandes', 'Goncalves', 'Martins', 'Sousa', 'Ribeiro', 'Carvalho', 'Pinto', 'Moreira'],
     cities: ['Lisbon', 'Porto', 'Braga', 'Coimbra', 'Setubal'],
   },
@@ -396,6 +442,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.5,
     region: 'europe',
     first: ['Luca', 'Noah', 'Jan', 'Livio', 'Fabian', 'Silvan', 'Remo', 'Joel', 'Pascal', 'Sandro'],
+    firstFemale: ['Lara', 'Selina', 'Noemi', 'Jana', 'Lea', 'Seraina', 'Nadine', 'Corinne'],
     last: ['Muller', 'Meier', 'Schmid', 'Keller', 'Weber', 'Huber', 'Schneider', 'Frei', 'Baumann', 'Brunner'],
     cities: ['Zurich', 'Geneva', 'Basel', 'Bern', 'Lausanne'],
   },
@@ -405,6 +452,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.5,
     region: 'europe',
     first: ['Lukas', 'Florian', 'Sebastian', 'Tobias', 'Maximilian', 'Julian', 'Fabio', 'Dominik', 'Matthias', 'Philipp'],
+    firstFemale: ['Katharina', 'Theresa', 'Lisa', 'Verena', 'Magdalena', 'Johanna', 'Sabrina', 'Marlene'],
     last: ['Gruber', 'Huber', 'Bauer', 'Wagner', 'Steiner', 'Moser', 'Mayr', 'Hofer', 'Leitner', 'Berger'],
     cities: ['Vienna', 'Graz', 'Linz', 'Salzburg', 'Innsbruck'],
   },
@@ -414,6 +462,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.8,
     region: 'europe',
     first: ['Ivan', 'Marko', 'Luka', 'Ante', 'Josip', 'Mateo', 'Petar', 'Karlo', 'Stjepan', 'Tomislav', 'Dario', 'Niko'],
+    firstFemale: ['Ana', 'Ivana', 'Petra', 'Marija', 'Lucija', 'Matea', 'Nikolina', 'Dora'],
     last: ['Horvat', 'Kovacevic', 'Babic', 'Maric', 'Juric', 'Novak', 'Vukovic', 'Knezevic', 'Pavlovic', 'Bosnjak', 'Peric', 'Matic'],
     cities: ['Zagreb', 'Split', 'Rijeka', 'Osijek', 'Zadar'],
   },
@@ -423,6 +472,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.9,
     region: 'europe',
     first: ['Nikola', 'Stefan', 'Marko', 'Dusan', 'Milos', 'Nemanja', 'Uros', 'Aleksandar', 'Vuk', 'Lazar', 'Filip', 'Bogdan'],
+    firstFemale: ['Jelena', 'Milica', 'Nina', 'Ivana', 'Teodora', 'Marija', 'Jovana', 'Katarina'],
     last: ['Jovanovic', 'Petrovic', 'Nikolic', 'Stojanovic', 'Ilic', 'Markovic', 'Pavlovic', 'Djordjevic', 'Stankovic', 'Todorovic', 'Milosevic', 'Zivkovic'],
     cities: ['Belgrade', 'Novi Sad', 'Nis', 'Kragujevac', 'Subotica'],
   },
@@ -432,6 +482,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.5,
     region: 'europe',
     first: ['Amar', 'Emir', 'Tarik', 'Adnan', 'Kenan', 'Harun', 'Mirza', 'Eldar', 'Semir', 'Damir'],
+    firstFemale: ['Amra', 'Lejla', 'Selma', 'Emina', 'Ajla', 'Merima', 'Dzenana', 'Nermina'],
     last: ['Hodzic', 'Begic', 'Hadzic', 'Cehic', 'Mujic', 'Softic', 'Delic', 'Ahmetovic', 'Zukic', 'Salihovic'],
     cities: ['Sarajevo', 'Banja Luka', 'Tuzla', 'Zenica', 'Mostar'],
   },
@@ -441,6 +492,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.6,
     region: 'asia',
     first: ['Armen', 'Tigran', 'Vahag', 'Gor', 'Narek', 'Hayk', 'Aram', 'Sargis', 'Davit', 'Karen'],
+    firstFemale: ['Ani', 'Lilit', 'Anahit', 'Mariam', 'Narine', 'Gayane', 'Arpi', 'Siranush'],
     last: ['Petrosyan', 'Grigoryan', 'Sargsyan', 'Harutyunyan', 'Hovhannisyan', 'Karapetyan', 'Khachatryan', 'Vardanyan', 'Avetisyan', 'Manukyan'],
     cities: ['Yerevan', 'Gyumri', 'Vanadzor'],
   },
@@ -450,6 +502,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.6,
     region: 'asia',
     first: ['Rufat', 'Elvin', 'Kamran', 'Tural', 'Orkhan', 'Nijat', 'Rashad', 'Emin', 'Farid', 'Samir'],
+    firstFemale: ['Aysel', 'Gunel', 'Leyla', 'Nigar', 'Sevinj', 'Aynur', 'Nargiz', 'Ulviyya'],
     last: ['Aliyev', 'Mammadov', 'Hasanov', 'Huseynov', 'Guliyev', 'Ismayilov', 'Karimov', 'Jafarov', 'Suleymanov', 'Bagirov'],
     cities: ['Baku', 'Ganja', 'Sumqayit'],
   },
@@ -459,6 +512,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.7,
     region: 'asia',
     first: ['Azamat', 'Bekzat', 'Nurlan', 'Erlan', 'Talant', 'Kubanych', 'Aibek', 'Daniyar', 'Ulan', 'Marat'],
+    firstFemale: ['Aizada', 'Begimai', 'Nurzat', 'Aidana', 'Kanykei', 'Meerim', 'Asel', 'Cholpon'],
     last: ['Abdyldaev', 'Toktogulov', 'Sadykov', 'Osmonov', 'Isakov', 'Zhumabekov', 'Kadyrov', 'Mamytov', 'Beishenaliev', 'Orozbekov'],
     cities: ['Bishkek', 'Osh', 'Jalal-Abad'],
   },
@@ -468,6 +522,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.5,
     region: 'asia',
     first: ['Batbayar', 'Erdene', 'Ganbold', 'Temuulen', 'Chinguun', 'Munkh', 'Tuguldur', 'Bilguun', 'Sukhbat', 'Naranbaatar'],
+    firstFemale: ['Oyunchimeg', 'Enkhjin', 'Bolormaa', 'Nomin', 'Saruul', 'Anujin', 'Tsetseg', 'Khulan'],
     last: ['Bat-Erdene', 'Ganzorig', 'Enkhbold', 'Tumurbaatar', 'Altangerel', 'Dorjsuren', 'Byambadorj', 'Otgonbayar', 'Purevdorj', 'Munkhbat'],
     cities: ['Ulaanbaatar', 'Erdenet', 'Darkhan'],
   },
@@ -477,6 +532,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.9,
     region: 'asia',
     first: ['Arjun', 'Rohan', 'Vikram', 'Aditya', 'Karan', 'Rahul', 'Siddharth', 'Anish', 'Dev', 'Nikhil', 'Raj', 'Varun'],
+    firstFemale: ['Priya', 'Ananya', 'Pooja', 'Ritu', 'Sakshi', 'Neha', 'Kavya', 'Divya', 'Sonam'],
     last: ['Singh', 'Sharma', 'Yadav', 'Kumar', 'Thapa', 'Patel', 'Rana', 'Chauhan', 'Bhullar', 'Verma', 'Malhotra', 'Negi'],
     cities: ['Mumbai', 'Delhi', 'Bangalore', 'Pune', 'Chandigarh', 'Kolkata'],
   },
@@ -486,6 +542,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.7,
     region: 'africa',
     first: ['Youssef', 'Amine', 'Hamza', 'Mehdi', 'Omar', 'Ayoub', 'Zakaria', 'Ilias', 'Reda', 'Anas'],
+    firstFemale: ['Fatima', 'Khadija', 'Salma', 'Nadia', 'Imane', 'Houda', 'Samira', 'Yasmine'],
     last: ['El Amrani', 'Benali', 'Chakiri', 'Ouazzani', 'El Idrissi', 'Bouzid', 'Haddadi', 'Rachidi', 'Belhaj', 'Tahiri'],
     cities: ['Casablanca', 'Rabat', 'Marrakesh', 'Fes', 'Tangier'],
   },
@@ -495,6 +552,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.6,
     region: 'africa',
     first: ['Ahmed', 'Mohamed', 'Omar', 'Youssef', 'Karim', 'Mostafa', 'Hassan', 'Amr', 'Tarek', 'Khaled'],
+    firstFemale: ['Nour', 'Mariam', 'Habiba', 'Salma', 'Aya', 'Yasmin', 'Rana', 'Dina'],
     last: ['Hassan', 'Ibrahim', 'Mahmoud', 'Saleh', 'Farouk', 'Abdelrahman', 'Elsayed', 'Nasser', 'Fathy', 'Shalaby'],
     cities: ['Cairo', 'Alexandria', 'Giza', 'Port Said'],
   },
@@ -504,6 +562,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.9,
     region: 'south-america',
     first: ['Santiago', 'Sebastian', 'Camilo', 'Andres', 'Julian', 'Mateo', 'Cristian', 'Felipe', 'Esteban', 'Duvan', 'Jhon', 'Brayan'],
+    firstFemale: ['Valentina', 'Daniela', 'Manuela', 'Luisa', 'Catalina', 'Juliana', 'Paola', 'Natalia'],
     last: ['Rodriguez', 'Gomez', 'Martinez', 'Lopez', 'Hernandez', 'Cardona', 'Restrepo', 'Ospina', 'Zapata', 'Montoya', 'Giraldo', 'Quintero'],
     cities: ['Bogota', 'Medellin', 'Cali', 'Barranquilla', 'Bucaramanga'],
   },
@@ -513,6 +572,7 @@ export const NAME_BANKS: NameBank[] = [
     weight: 0.7,
     region: 'north-america',
     first: ['Yordan', 'Yasiel', 'Osniel', 'Lazaro', 'Yunier', 'Rey', 'Osvaldo', 'Yoel', 'Dariel', 'Maikel'],
+    firstFemale: ['Yaimara', 'Yanet', 'Idalys', 'Yudelkis', 'Dayana', 'Yarisleidy', 'Marlenis', 'Yaneisy'],
     last: ['Hernandez', 'Garcia', 'Diaz', 'Fernandez', 'Alvarez', 'Castillo', 'Sosa', 'Despaigne', 'Morejon', 'Batista'],
     cities: ['Havana', 'Santiago de Cuba', 'Camaguey', 'Holguin'],
   },
@@ -522,6 +582,35 @@ export const TOTAL_NAME_WEIGHT = NAME_BANKS.reduce((s, b) => s + b.weight, 0);
 
 export function bankForCountry(country: string): NameBank | null {
   return NAME_BANKS.find((b) => b.country === country) ?? null;
+}
+
+/**
+ * The feminine form of a surname, for the naming conventions that inflect by gender.
+ *
+ * The banks store the masculine form, so without this a generated Russian woman would be
+ * 'Anastasia Orlov'. Only plain, regular endings are changed: Slavic and Central Asian
+ * -ov/-ev/-in take an -a, Polish -ski/-cki become -ska/-cka, Czech -y becomes -a and
+ * Icelandic -sson becomes -sdottir. Anything irregular is left as it is, which reads far
+ * better than a wrong guess.
+ */
+export function feminineSurname(code: string, last: string): string {
+  switch (code) {
+    case 'RU':
+    case 'KZ':
+    case 'UZ':
+    case 'KG':
+    case 'AZ':
+    case 'UA':
+      return /(ov|ev|in|yn)$/.test(last) ? `${last}a` : last;
+    case 'PL':
+      return /[sc]ki$/.test(last) ? `${last.slice(0, -1)}a` : last;
+    case 'CZ':
+      return /[nk]y$/.test(last) ? `${last.slice(0, -1)}a` : last;
+    case 'IS':
+      return /sson$/.test(last) ? `${last.slice(0, -4)}sdottir` : last;
+    default:
+      return last;
+  }
 }
 
 /** Nicknames stay generic and neutral. Many fighters have none at all. */

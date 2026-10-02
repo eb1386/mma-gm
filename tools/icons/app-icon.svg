@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100">
+  <rect width="100" height="100" fill="#0d1117"/>
+  <g transform="translate(50 50) scale(0.74) translate(-50 -50)">
+    <polygon points="92.50,67.60 67.60,92.50 32.40,92.50 7.50,67.60 7.50,32.40 32.40,7.50 67.60,7.50 92.50,32.40" fill="#e6533c" opacity="0.14"/>
+    <polygon points="92.50,67.60 67.60,92.50 32.40,92.50 7.50,67.60 7.50,32.40 32.40,7.50 67.60,7.50 92.50,32.40" fill="none" stroke="#e6533c" stroke-width="6.5" stroke-linejoin="round"/>
+  </g>
+  <text x="50" y="59.5" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="800" font-size="25" letter-spacing="-0.5" fill="#f0f3f6">GM</text>
+</svg>

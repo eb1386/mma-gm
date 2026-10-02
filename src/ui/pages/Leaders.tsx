@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { DIVISIONS, type DivisionId } from '@core/config/divisions';
+import { DIVISION_BY_ID, DIVISIONS, type DivisionId } from '@core/config/divisions';
 import { formatNumber } from '@core/types/common';
 import type { FightResult } from '@core/types/fight';
+import { isMainResult } from '@core/world/circuit';
 import { useGame } from '../store';
 import { DataTable, Panel } from '../components';
 
@@ -70,6 +71,8 @@ export function LeadersPage() {
       row.control += mine.controlSeconds;
     };
     for (const r of Object.values(save.history.results)) {
+      // The promotion's fights only, so regional and amateur cards do not seed the table.
+      if (!isMainResult(save, r)) continue;
       add(r.fighterAId, r, true);
       add(r.fighterBId, r, false);
     }
@@ -80,7 +83,7 @@ export function LeadersPage() {
     <div className="page">
       <div className="page-head">
         <h1>Statistical leaders</h1>
-        <span className="sub">Rate statistics from fights simulated in this save</span>
+        <span className="sub">Rate statistics from promotional fights simulated in this save</span>
       </div>
 
       <Panel flush>
@@ -105,7 +108,7 @@ export function LeadersPage() {
           rowClass={(r) => (r.fighterId === save.player.fighterId ? 'highlight' : undefined)}
           columns={[
             { key: 'name', label: 'Fighter', sort: (r) => r.name, render: (r) => <Link to={`/fighter/${r.fighterId}`}>{r.name}</Link> },
-            { key: 'div', label: 'Div', sort: (r) => r.divisionId, render: (r) => r.divisionId },
+            { key: 'div', label: 'Div', sort: (r) => r.divisionId, render: (r) => <Link to={`/division/${r.divisionId}`}>{DIVISION_BY_ID[r.divisionId]?.abbr ?? r.divisionId}</Link> },
             { key: 'fights', label: 'Fights', numeric: true, sort: (r) => r.fights, render: (r) => r.fights },
             { key: 'minutes', label: 'Minutes', numeric: true, sort: (r) => r.minutes, render: (r) => formatNumber(r.minutes, 1) },
             {

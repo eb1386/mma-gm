@@ -27,6 +27,7 @@ const TICKET_PRICE_BY_TIER: Record<FightCardEvent['tier'], number> = {
   international: 165,
   'fight-night': 120,
   apex: 0,
+  regional: 45,
 };
 
 /**
@@ -71,7 +72,7 @@ export function computeEventBusiness(save: SaveGame, event: FightCardEvent, rng:
   const lateCancellationPenalty = clamp(cancellations * 0.03, 0, 0.2);
 
   // A competing major event in the same fortnight splits attention.
-  const competing = Object.values(save.events).filter(
+  const competing = Object.values(save.events).filter((e) => !e.promotionId).filter(
     (e) => e.id !== event.id && e.tier === 'numbered-ppv' && Math.abs(daysBetween(e.date, event.date)) <= 10
   ).length;
   if (competing > 0) notes.push('A competing major card landed in the same window.');

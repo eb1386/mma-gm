@@ -1,11 +1,15 @@
 import { DIVISION_BY_ID, type DivisionId } from '../config/divisions';
+import { MATCHMAKING as M } from '../config/matchmaking';
 import { clamp } from '../rng';
 import { addDays, daysBetween, type FighterId, type IsoDate } from '../types/common';
+import type { FightResult } from '../types/fight';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { canCompete } from './health';
 import { getRelationship, relationshipState } from './relationships';
-import { existingTitleBout } from './title-eligibility';
+import { existingTitleBout, titleShotEligibility, type TitleBlocker } from './title-eligibility';
+import { fightCloseness } from './title-logic';
+import { meetingsBetween } from './indexes';
 
 /**
  * Persistent matchmaking interest.
@@ -43,7 +47,9 @@ export type MatchupBlocker =
   | 'promotion-uninterested'
   | 'title-obligation'
   | 'target-unavailable'
-  | 'move-not-completed';
+  | 'move-not-completed'
+  | 'not-earned'
+  | 'rematch-not-earned';
 
 export const MATCHUP_BLOCKER_TEXT: Record<MatchupBlocker, string> = {
   'target-booked': 'They are already booked for another fight. The matchup can be revisited afterwards.',
@@ -56,7 +62,37 @@ export const MATCHUP_BLOCKER_TEXT: Record<MatchupBlocker, string> = {
   'title-obligation': 'A championship obligation in the division takes priority.',
   'target-unavailable': 'They are not available to be matched.',
   'move-not-completed': 'Your weight class move has not been completed yet.',
+  'not-earned': 'The promotion will not make this fight yet. The step up has not been earned on results.',
+  'rematch-not-earned': 'The last meeting was not close enough to run back this soon.',
 };
+
+/**
+ * The blocker text read from the target's side.
+ *
+ * The caller and target blockers are named for the two sides of the record, and the plain text is
+ * written for the caller. When an opponent called the player out the player is the target, and
+ * reading the caller text told them "You are already booked" about the fighter who was.
+ */
+const TARGET_VIEW_BLOCKER_TEXT: Partial<Record<MatchupBlocker, string>> = {
+  'target-booked': MATCHUP_BLOCKER_TEXT['caller-booked'],
+  'caller-booked': MATCHUP_BLOCKER_TEXT['target-booked'],
+  'target-injured': MATCHUP_BLOCKER_TEXT['caller-injured'],
+  'caller-injured': MATCHUP_BLOCKER_TEXT['target-injured'],
+  'target-declined': 'You turned the fight down.',
+  'target-unavailable': 'You are not available to be matched.',
+  'move-not-completed': 'Their weight class move has not been completed yet.',
+};
+
+/** The blocker's text for whoever is reading it. */
+export function blockerText(interest: MatchupInterest, blocker: MatchupBlocker, viewerId: FighterId | null): string {
+  if (viewerId !== null && viewerId === interest.targetId) return TARGET_VIEW_BLOCKER_TEXT[blocker] ?? MATCHUP_BLOCKER_TEXT[blocker];
+  return MATCHUP_BLOCKER_TEXT[blocker];
+}
+
+/** The side of the interest that is not the viewer. With no viewer on either side, the target. */
+export function otherSide(interest: MatchupInterest, viewerId: FighterId | null): FighterId {
+  return viewerId === interest.targetId ? interest.callerId : interest.targetId;
+}
 
 export interface MatchupInterest {
   id: string;
@@ -193,6 +229,9 @@ export function evaluateInterest(save: SaveGame, interest: MatchupInterest): Mat
   if (interest.expiresOn < save.date) {
     interest.eligibility = 'expired';
     interest.resolution = interest.resolution ?? 'The moment passed and the promotion moved on.';
+    // An expired matchup is finished. Keeping the old blockers left it reading as on hold.
+    interest.blockers = [];
+    interest.priority = 0;
     return interest;
   }
 
@@ -213,6 +252,10 @@ export function evaluateInterest(save: SaveGame, interest: MatchupInterest): Mat
 
   if (interest.opponentResponse === 'declined') blockers.push('target-declined');
   if (interest.interestScore < 18) blockers.push('promotion-uninterested');
+  if (interest.source === 'callout' || interest.source === 'rivalry') {
+    const gate = unearnedBlocker(save, caller, target);
+    if (gate) blockers.push(gate);
+  }
 
   interest.blockers = blockers;
   interest.divisionId = target.divisionId;
@@ -227,6 +270,57 @@ export function evaluateInterest(save: SaveGame, interest: MatchupInterest): Mat
   interest.priority = interest.eligibility === 'eligible' ? clamp(base * 0.6 + (accepted ? 0.35 : 0.1) + rivalryBoost, 0, 1) : 0;
 
   return interest;
+}
+
+/** Title eligibility blockers that are about standing rather than circumstance. */
+const STANDING_TITLE_BLOCKERS: readonly TitleBlocker[] = ['unranked-without-claim', 'coming-off-loss', 'contender-ahead'];
+
+/**
+ * Whether the promotion would refuse this pairing on merit, whatever was said in public.
+ *
+ * A callout or a feud is a reason to make a fight that is close to earned, not a way around every
+ * rule the matchmaker applies to an ordinary card. Without this an unranked fighter at nought and
+ * two who accepted a callout was handed the number three, then the champion in a non title three
+ * rounder, then a rematch of a lopsided loss. The rules mirror the card gates in scoreCandidate.
+ */
+export function unearnedBlocker(save: SaveGame, caller: Fighter, target: Fighter): MatchupBlocker | null {
+  if (caller.divisionId !== target.divisionId) return null;
+  const table = save.rankings[target.divisionId];
+  if (!table) return null;
+  const rankOf = (f: Fighter): number | null => (table.championId === f.id ? 0 : f.ranking);
+
+  // A fight with the champion is a title fight, and only somebody eligible for one gets it.
+  const champion = table.championId === caller.id ? caller : table.championId === target.id ? target : null;
+  if (champion) {
+    const challenger = champion === caller ? target : caller;
+    const eligibility = titleShotEligibility(save, challenger, target.divisionId, {
+      vacant: false,
+      ignoreBoutId: challenger.nextBoutId,
+    });
+    if (eligibility.blockers.some((b) => STANDING_TITLE_BLOCKERS.includes(b))) return 'not-earned';
+  } else {
+    const rankC = rankOf(caller);
+    const rankT = rankOf(target);
+    if (rankC !== null && rankT !== null) {
+      if (Math.abs(rankC - rankT) > M.gate.interestMaxRankGap) return 'not-earned';
+    } else if (rankC !== null || rankT !== null) {
+      const unranked = rankC === null ? caller : target;
+      const rankedAt = (rankC ?? rankT)!;
+      const losing = unranked.ufcRecord.losses > unranked.ufcRecord.wins;
+      const needed = rankedAt <= M.gate.contenderRank ? M.gate.prospectStreakForTopFive : M.gate.prospectStreakForRanked;
+      if (losing || unranked.winStreak < needed) return 'not-earned';
+    }
+  }
+
+  // The same rematch rule as an ordinary card: inside the cooldown, only a close fight is run back.
+  let last: FightResult | null = null;
+  for (const r of meetingsBetween(save, caller.id, target.id)) {
+    if (!last || r.date > last.date) last = r;
+  }
+  if (last && daysBetween(last.date, save.date) < M.rematch.cooldownDays && fightCloseness(last).value < M.rematch.closenessRequired) {
+    return 'rematch-not-earned';
+  }
+  return null;
 }
 
 /** Re-evaluates every live interest. Called once per weekly pass. */
@@ -251,17 +345,51 @@ export function fulfilInterest(interest: MatchupInterest, offerId: string | null
   interest.resolution = 'The fight was made.';
 }
 
-/** The reason line an offer carries when it came from an interest. */
-export function interestReason(save: SaveGame, interest: MatchupInterest): string {
-  const target = save.fighters[interest.targetId];
-  const name = target?.name ?? 'the opponent';
+/**
+ * The reason line an offer or a bout carries when it came from an interest.
+ *
+ * Written for the viewer, the fighter the line is shown to. Either side can be the viewer: an
+ * opponent calling the player out records the player as the target, and naming the target
+ * unconditionally told the player "You called out" themselves. When the viewer is not the player
+ * (a bout between two other fighters) the line is in the third person, because "you" there means
+ * nobody.
+ */
+export function interestReason(save: SaveGame, interest: MatchupInterest, viewerId: FighterId | null): string {
+  const division = DIVISION_BY_ID[interest.divisionId].name;
+  const callerName = save.fighters[interest.callerId]?.name ?? 'the caller';
+  const targetName = save.fighters[interest.targetId]?.name ?? 'the opponent';
+  const isSide = viewerId !== null && (viewerId === interest.callerId || viewerId === interest.targetId);
+  const secondPerson = isSide && viewerId === save.player.fighterId;
+  if (!secondPerson) {
+    switch (interest.source) {
+      case 'callout':
+        return `Successful callout. ${callerName} called out ${targetName} and the promotion has made the fight.`;
+      case 'rivalry':
+        return `Rivalry fight. The history between ${callerName} and ${targetName} sells itself.`;
+      case 'division-debut':
+        return `Divisional debut for ${callerName} at ${division} against ${targetName}.`;
+      case 'title-claim':
+        return `Title eliminator between ${callerName} and ${targetName}.`;
+      case 'rematch-claim':
+        return `Rematch between ${callerName} and ${targetName}.`;
+      case 'unification':
+        return `Unification fight between ${callerName} and ${targetName}.`;
+    }
+  }
+  const viewerIsCaller = viewerId === interest.callerId;
+  const name = viewerIsCaller ? targetName : callerName;
   switch (interest.source) {
     case 'callout':
-      return `Successful callout. You called out ${name} and the promotion has made the fight.`;
+      if (viewerIsCaller) return `Successful callout. You called out ${name} and the promotion has made the fight.`;
+      return interest.opponentResponse === 'accepted'
+        ? `${name} called you out, you accepted, and the promotion has made the fight.`
+        : `${name} called you out and the promotion has made the fight.`;
     case 'rivalry':
       return `Rivalry fight. The history between you and ${name} sells itself.`;
     case 'division-debut':
-      return `Divisional debut at ${DIVISION_BY_ID[interest.divisionId].name} against ${name}.`;
+      return viewerIsCaller
+        ? `Divisional debut at ${division} against ${name}.`
+        : `${name} makes a ${division} debut against you.`;
     case 'title-claim':
       return `Title eliminator against ${name}.`;
     case 'rematch-claim':
@@ -314,20 +442,20 @@ export function pruneMatchupInterests(save: SaveGame, keepDays = 500): number {
  * Used by the interface and by the weekly update message so the player is never left with a
  * callout that simply vanished.
  */
-export function interestStatusLine(save: SaveGame, interest: MatchupInterest): string {
-  const target = save.fighters[interest.targetId];
-  const name = target?.name ?? 'them';
+export function interestStatusLine(save: SaveGame, interest: MatchupInterest, viewerId: FighterId | null): string {
+  // The name is the other side from the viewer's seat, never the viewer themselves.
+  const name = save.fighters[otherSide(interest, viewerId)]?.name ?? 'them';
   switch (interest.eligibility) {
     case 'eligible':
       return interest.priority > 0.55
         ? `The promotion is working on ${name} next. Expect an offer.`
         : `Live with the matchmaker. ${name} is on the list but not agreed.`;
     case 'blocked':
-      return interest.blockers.map((b) => MATCHUP_BLOCKER_TEXT[b]).join(' ');
+      return interest.blockers.map((b) => blockerText(interest, b, viewerId)).join(' ');
     case 'fulfilled':
       return interest.resolution ?? 'The fight was made.';
     case 'rejected':
-      return interest.resolution ?? `${name} is not taking the fight.`;
+      return interest.resolution ?? (viewerId === interest.targetId ? 'You turned the fight down.' : `${name} is not taking the fight.`);
     case 'expired':
       return interest.resolution ?? 'The moment passed.';
   }

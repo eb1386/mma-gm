@@ -47,6 +47,9 @@ export function MoneyPage() {
   const manager = managerFor(save, me.id);
   const sponsorIncome = finance.incomeByKind.find((r) => r.kind === 'sponsorship')?.amount ?? 0;
   const commission = finance.expenseByKind.find((r) => r.kind === 'manager-commission')?.amount ?? 0;
+  const amateur = Boolean(me.circuit?.endsWith(':am'));
+  // An overdrawn fighter has no runway at all, not a negative number of months.
+  const runway = finance.cash <= 0 ? 'None, in debt' : `${finance.runwayMonths} months`;
 
   return (
     <div className="page">
@@ -84,14 +87,22 @@ export function MoneyPage() {
                 ['Net worth estimate', formatMoney(finance.netWorthEstimate)],
                 ['Debt', finance.debt > 0 ? formatMoney(finance.debt) : 'None'],
                 ['Monthly outgoings', formatMoney(finance.monthlyExpenses)],
-                ['Runway', `${finance.runwayMonths} months`],
+                ['Runway', runway],
                 ['Financial pressure', finance.pressure],
                 ['Retirement security', finance.retirementSecurity],
               ]}
             />
-            {finance.pressure === 'in trouble' && (
-              <Notice kind="bad">You are spending more than you bring in. Another fight or a sponsor would help.</Notice>
-            )}
+            {finance.pressure === 'in trouble' &&
+              (amateur ? (
+                // Amateur bouts pay nothing and amateurs cannot take sponsorship, so telling one that
+                // another fight or a sponsor would help pointed at two things they cannot do.
+                <Notice kind="warn">
+                  Amateur bouts pay nothing, so money stays tight until you turn professional. Costs are kept low while
+                  you build the amateur record.
+                </Notice>
+              ) : (
+                <Notice kind="bad">You are spending more than you bring in. Another fight or a sponsor would help.</Notice>
+              ))}
           </Panel>
 
           <Panel title="What is coming in">
@@ -142,7 +153,7 @@ export function MoneyPage() {
             rows={[
               ['Monthly outgoings', formatMoney(finance.monthlyExpenses)],
               ['Cash now', formatMoney(finance.cash)],
-              ['Months covered', `${finance.runwayMonths}`],
+              ['Months covered', runway],
               ['Pressure', finance.pressure],
               ['Retirement security', finance.retirementSecurity],
             ]}

@@ -19,7 +19,8 @@ import {
   type SocialProfile,
 } from '../types/identity';
 import type { SaveGame } from '../types/save';
-import { record } from './finance';
+import { record, sponsorsFor } from './finance';
+import { addHypeMoment, escalateRivalry, findRivalry } from './hype';
 
 /**
  * Personality, activity, fame and social media.
@@ -124,7 +125,10 @@ export const ACTIVITY_LABEL: Record<ActivityProfileKey, string> = {
   'long-recovery': 'Long recovery preference',
 };
 
-export function generateActivityProfile(rng: Rng, personality: Personality, fighter: Fighter): ActivityProfile {
+export function generateActivityProfile(rng: Rng, personality: Personality, fighter: Fighter, on?: IsoDate): ActivityProfile {
+  // At generation the snapshot age is the current age. A save that backfills the profile later
+  // passes its own date, so a fighter who has aged since is weighed at the age they are now.
+  const age = (on ? ageOn(fighter.birthDate, on) : null) ?? fighter.ageAtSnapshot ?? 29;
   const weights: [ActivityProfileKey, number][] = [
     ['very-active', 0.9 + personality.discipline / 120],
     ['normally-active', 3.2],
@@ -137,7 +141,7 @@ export function generateActivityProfile(rng: Rng, personality: Personality, figh
     ['frequent-defender', fighter.isChampion ? 1.4 : 0.15],
     ['waits-for-big-events', fighter.isChampion ? 1.0 : 0.35],
     ['regional-preference', 0.5],
-    ['long-recovery', 0.5 + Math.max(0, (fighter.ageAtSnapshot ?? 29) - 32) / 12],
+    ['long-recovery', 0.5 + Math.max(0, age - 32) / 12],
   ];
   const key = rng.weighted(weights, (w) => w[1])[0];
   return { key, ...ACTIVITY_TEMPLATES[key] };
@@ -468,6 +472,44 @@ export function socialActionAllowance(save: SaveGame, fighter: Fighter): { remai
   };
 }
 
+/** The opponent in the fighter's next booked bout, if one is still scheduled. */
+function bookedOpponent(save: SaveGame, fighter: Fighter): Fighter | null {
+  const bout = fighter.nextBoutId ? save.bouts[fighter.nextBoutId] : null;
+  if (!bout || bout.status !== 'scheduled') return null;
+  return save.fighters[bout.fighterAId === fighter.id ? bout.fighterBId : bout.fighterAId] ?? null;
+}
+
+/**
+ * Why an action makes no sense for this fighter right now, or null when it does.
+ *
+ * A champion was offered "Demand a title shot", anyone could announce an injury they did not
+ * have, and a callout with nobody booked had no fight to build. The interface hides these and
+ * the core refuses them, so no other caller can take them either.
+ */
+export function socialActionBlockReason(save: SaveGame, fighter: Fighter, key: SocialActionKey): string | null {
+  switch (key) {
+    case 'demand-title-shot':
+      return fighter.isChampion ? 'You already hold the belt.' : null;
+    case 'announce-injury':
+      return fighter.injuries.some((i) => i.actualReturn === null) ? null : 'There is no injury to announce.';
+    case 'callout':
+    case 'compliment-opponent':
+      return bookedOpponent(save, fighter) ? null : 'Nobody is booked against you.';
+    case 'promote-sponsor':
+      return sponsorsFor(save, fighter.id).some((sp) => sp.status === 'active') ? null : 'You have no sponsor to promote.';
+    default:
+      return null;
+  }
+}
+
+/** The social actions that make sense for this fighter right now. */
+export function availableSocialActions(save: SaveGame, fighter: Fighter): SocialActionDefinition[] {
+  return SOCIAL_ACTIONS.filter((a) => socialActionBlockReason(save, fighter, a.key) === null);
+}
+
+/** What a successful sponsored post pays, before the sponsor's appeal is counted. */
+export const SPONSORED_POST_BASE = 1500;
+
 export function performSocialAction(save: SaveGame, fighter: Fighter, key: SocialActionKey, rng: Rng): SocialActionOutcome {
   const def = SOCIAL_ACTIONS.find((a) => a.key === key)!;
   const personality = fighter.personality;
@@ -489,6 +531,12 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
     succeeded: true,
   };
   if (!social || !fame || !personality) return out;
+  const blocked = socialActionBlockReason(save, fighter, key);
+  if (blocked) {
+    out.detail = blocked;
+    out.succeeded = false;
+    return out;
+  }
   // The allowance is enforced here, not only shown in the interface. Counting without refusing
   // left the limit as advice that any other caller could ignore.
   if (key !== 'go-silent' && social) {
@@ -536,11 +584,17 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
         out.detail = 'It read as desperate. The fighter called out did not even respond.';
       }
       break;
-    case 'compliment-opponent':
+    case 'compliment-opponent': {
       out.favorabilityChange = success ? 3 : 0.5;
       applyFollowers(success ? 0.004 : 0);
-      out.detail = success ? 'Well received, and it cooled the temperature.' : 'Barely noticed.';
+      // It cools a rivalry that exists. It never starts one: escalating with a negative delta
+      // would create a record for a pair that had no feud at all.
+      const opponent = bookedOpponent(save, fighter);
+      const rivalry = success && opponent ? findRivalry(save, fighter.id, opponent.id) : null;
+      if (rivalry) escalateRivalry(save, fighter.id, opponent!.id, rivalry.type, -6, 'a compliment in public');
+      out.detail = success ? (rivalry ? 'Well received, and it cooled the temperature.' : 'Well received.') : 'Barely noticed.';
       break;
+    }
     case 'respond-to-criticism':
       if (success) {
         out.favorabilityChange = 2.5;
@@ -553,11 +607,19 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
         out.detail = 'It came across as thin skinned and gave the story another day.';
       }
       break;
-    case 'promote-sponsor':
+    case 'promote-sponsor': {
       out.favorabilityChange = success ? -0.5 : -2.5;
       applyFollowers(success ? 0.001 : -0.003);
+      // Described as paying, and it does: a modest fee scaled by how much a sponsor values the
+      // fighter, and a happier sponsor. Only the player's own money is recorded here.
+      const sponsor = sponsorsFor(save, fighter.id).find((sp) => sp.status === 'active');
+      if (success && sponsor && save.player.fighterId === fighter.id) {
+        record(save, fighter.id, 'in', 'sponsorship', SPONSORED_POST_BASE + Math.round(fame.sponsorAppeal * 40), `Sponsored post for ${sponsor.name}`);
+        sponsor.satisfaction = clamp(sponsor.satisfaction + 4, 0, 100);
+      }
       out.detail = success ? 'The sponsor is happy with the reach.' : 'It read as a paid post and the audience said so.';
       break;
+    }
     case 'make-a-joke':
       if (success) {
         applyFollowers(0.022);
@@ -607,6 +669,7 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
     case 'defend-teammate':
       out.favorabilityChange = success ? 2.5 : -1;
       applyFollowers(success ? 0.006 : 0);
+      if (success) fighter.relationships.team = clamp(fighter.relationships.team + 3, 0, 100);
       out.detail = success ? 'The gym appreciated it publicly.' : 'It dragged the gym into a story it did not want.';
       break;
     case 'go-silent':
@@ -633,6 +696,13 @@ export function performSocialAction(save: SaveGame, fighter: Fighter, key: Socia
       out.detail = 'A manager is now handling the accounts. Posts will land better.';
       break;
     }
+  }
+
+  // The hype a post promises reaches the fight it is about. It was set on the outcome and read by
+  // nothing, so a callout that "landed and got picked up widely" left the bout exactly as it was.
+  // addHypeMoment does nothing for a bout with no hype record.
+  if (out.succeeded && out.hypeChange && fighter.nextBoutId) {
+    addHypeMoment(save, fighter.nextBoutId, def.label, out.hypeChange);
   }
 
   applyFollowerChange(fighter, out.followerChange);
@@ -728,6 +798,11 @@ export function activityReport(save: SaveGame, fighter: Fighter): ActivityReport
  * circumstances. This is what stops every fighter competing at the same rate.
  */
 export function willingToFight(save: SaveGame, fighter: Fighter, noticeDays: number, on: IsoDate): boolean {
+  // The player decides for themselves, by accepting or declining the offer. The profile is an AI
+  // fighter's appetite, and applying it to the player let a setting they never chose and cannot
+  // change veto their bookings: a number one contender sat idle for seven months and was passed
+  // over for the title shot because a two fight year read as too busy for their profile.
+  if (fighter.id === save.player.fighterId) return true;
   const profile = fighter.activityProfile;
   if (!profile) return true;
 
@@ -739,9 +814,30 @@ export function willingToFight(save: SaveGame, fighter: Fighter, noticeDays: num
   }
   if (noticeDays < 24 && profile.shortNoticeWillingness < 0.3) return false;
 
-  // Someone already at their yearly target becomes harder to book.
-  const report = activityReport(save, fighter);
-  if (report.fightsPerYear > profile.targetFightsPerYear * 1.35) return false;
+  // Someone already at their yearly target becomes harder to book. Only in game results are
+  // counted, so the rate is not judged until there is a year of them to judge: two fights in a
+  // save's first months read as a pace far above any yearly target and shut a fighter out for
+  // months. This runs for every candidate on every card, so it counts dates without sorting or
+  // building the full activity report.
+  let count = 0;
+  let first: IsoDate | null = null;
+  for (const id of fighter.boutIds) {
+    const date = save.history.results[id]?.date;
+    if (!date) continue;
+    count++;
+    if (first === null || date < first) first = date;
+  }
+  if (count >= 2 && first !== null) {
+    const span = daysBetween(first, save.date);
+    if (span >= 365 && (count / span) * 365 > profile.targetFightsPerYear * 1.35) return false;
+  }
 
   return true;
 }
+
+/** A personality dial, stored 0 to 100, read as a 0 to 1 fraction. A missing dial reads as the middle. */
+export function dial(p: Personality | null | undefined, key: PersonalityDial): number {
+  return (p?.[key] ?? 50) / 100;
+}
+
+export type PersonalityDial = 'charisma' | 'mediaComfort' | 'ego' | 'loyalty' | 'moneyMotivation' | 'legacyMotivation' | 'riskTolerance' | 'discipline' | 'temper';

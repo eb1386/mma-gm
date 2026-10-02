@@ -5,12 +5,18 @@ import { ovrDisplayed } from '@core/types/fighter';
 import { METHOD_LABEL } from '@core/types/fight';
 import { activeInjuries, healthReport } from '@core/world/health';
 import { computeLeverage } from '@core/world/economy';
+import { gymLocation } from '@core/world/gyms';
 import { recentEvents, upcomingEvents } from '@core/world/tick';
 import { useCareerStatus, useGame } from '../store';
 import { CAREER_STATE_LABEL } from '@core/world/career';
 import { stageLabel } from '@core/world/fightweek';
-import { Bar, FighterLink, KeyValues, Notice, Panel, Rating, RealTag } from '../components';
+import { Bar, EstimatedRating, FighterLink, KeyValues, Notice, Panel, Rating, RealTag } from '../components';
+import { scheduledBoutLabel } from '../bouts';
+import { estimateRatings } from '@core/world/scouting';
 import { actionableMessages } from '@core/world/inbox';
+import { CALL_UP_THRESHOLD, callUpReadiness, promotionConfig, promotionOfFighter, TRYOUT_THRESHOLD } from '@core/world/regional';
+import { displayedPot } from '@core/world/pot';
+import { headliner } from '../headliner';
 
 export function DashboardPage() {
   const save = useGame((s) => s.save)!;
@@ -28,6 +34,8 @@ export function DashboardPage() {
   // navigation badge both contradicted.
   const actionable = actionableMessages(save);
   const injuries = fighter ? activeInjuries(fighter, save.date) : [];
+  const upcoming = upcomingEvents(save, 8);
+  const recent = recentEvents(save, 6);
 
   return (
     <div className="page">
@@ -67,7 +75,7 @@ export function DashboardPage() {
                     : 'None',
               ],
               ['Injury', status.injurySummary ?? 'None active'],
-              ['Expected return', status.expectedReturn ?? 'Not applicable'],
+              ['Expected return', status.expectedReturn ? formatDate(status.expectedReturn) : 'Not applicable'],
               ['Fight week stage', status.fightWeekStage ? stageLabel(status.fightWeekStage) : 'Not in fight week'],
               ['Unresolved decisions', status.openDecisions],
               ['Time advancement', status.advanceBlocked ? `Blocked: ${status.blockedReason}` : 'Available'],
@@ -119,24 +127,24 @@ export function DashboardPage() {
                 ['Record', `${fighter.record.wins}-${fighter.record.losses}${fighter.record.draws ? `-${fighter.record.draws}` : ''}`],
                 ['Promotional record', `${fighter.ufcRecord.wins}-${fighter.ufcRecord.losses}`],
                 ['Ovr', <Rating value={ovrDisplayed(fighter.ratings)} key="o" />],
-                ['Pot', <Rating value={fighter.pot} key="p" />],
+                ['Pot', <Rating value={displayedPot(fighter)} key="p" />],
                 ['Longevity', <span key="l" className="row tight" style={{ justifyContent: 'flex-end' }}><Bar value={fighter.longevity} /> <Rating value={fighter.longevity} /></span>],
                 ['Morale', <Bar key="m" value={fighter.morale} />],
                 ['Popularity', <Bar key="pop" value={fighter.popularity} />],
-                ['Career earnings', formatMoney(fighter.careerEarnings)],
+                ['Career purses', formatMoney(fighter.careerEarnings)],
               ]}
             />
             {injuries.length > 0 && (
               <div className="mt">
                 <span className="tag bad">Injured</span>{' '}
                 <span className="small">
-                  {injuries.map((i) => `${i.type} until ${i.expectedReturn}`).join('. ')}
+                  {injuries.map((i) => `${i.type} until ${formatDate(i.expectedReturn)}`).join('. ')}
                 </span>
               </div>
             )}
             {fighter.medicalSuspension && (
               <p className="small warn mt">
-                Medically suspended until {fighter.medicalSuspension.until}. {fighter.medicalSuspension.reason}
+                Medically suspended until {formatDate(fighter.medicalSuspension.until)}. {fighter.medicalSuspension.reason}
               </p>
             )}
           </Panel>
@@ -146,9 +154,7 @@ export function DashboardPage() {
           <Panel title="Your gym" actions={<Link to="/coach" className="btn small">Manage</Link>}>
             <div className="row mb">
               <strong style={{ fontSize: 15 }}>{gym.name}</strong>
-              <span className="dim small">
-                {gym.city}, {gym.country}
-              </span>
+              <span className="dim small">{gymLocation(gym)}</span>
             </div>
             <KeyValues
               rows={[
@@ -166,6 +172,19 @@ export function DashboardPage() {
           </Panel>
         )}
 
+        {fighter?.circuit && (() => {
+          const promotion = promotionOfFighter(fighter);
+          const readiness = callUpReadiness(save, fighter);
+          return (
+            <Panel title={`Regional: ${promotion?.abbreviation ?? 'circuit'}`} actions={<Link to="/regional" className="btn small">Details</Link>}>
+              <p className="small">
+                {fighter.name} fights for {promotion?.name ?? 'a regional promotion'}. Call up readiness {readiness.score} of 100.
+              </p>
+              <Bar value={readiness.score} tone={readiness.score >= CALL_UP_THRESHOLD ? 'good' : readiness.score >= TRYOUT_THRESHOLD ? 'warn' : 'bad'} />
+              <p className="small dim mt">{readiness.verdict}</p>
+            </Panel>
+          );
+        })()}
         <Panel title="Next fight">
           {nextBout && opponent ? (
             <>
@@ -181,7 +200,16 @@ export function DashboardPage() {
                   ['Days out', daysBetween(save.date, nextBout.date)],
                   ['Rounds', nextBout.scheduledRounds],
                   ['Weight', `${nextBout.contractedWeightLb} lb${nextBout.isCatchweight ? ' catchweight' : ''}`],
-                  ['Title fight', nextBout.isTitleFight ? 'Yes' : nextBout.isInterimTitleFight ? 'Interim' : 'No'],
+                  [
+                    'Title fight',
+                    nextBout.isTitleFight
+                      ? 'Yes'
+                      : nextBout.isInterimTitleFight
+                        ? 'Interim'
+                        : nextBout.regionalTitle
+                          ? `${promotionConfig(save.events[nextBout.eventId]?.promotionId)?.abbreviation ?? 'Regional'} title`
+                          : 'No',
+                  ],
                   ['Show pay', formatMoney(nextBout.fighterAId === fighter?.id ? nextBout.purseA.show : nextBout.purseB.show)],
                   ['Win bonus', formatMoney(nextBout.fighterAId === fighter?.id ? nextBout.purseA.win : nextBout.purseB.win)],
                 ]}
@@ -233,13 +261,16 @@ export function DashboardPage() {
                 const t = save.rankings[d.id];
                 const champ = t.championId ? save.fighters[t.championId] : null;
                 const interim = t.interimChampionId ? save.fighters[t.interimChampionId] : null;
+                // Through the scouting fog like every other rival's Ovr; the true number here gave away
+                // what the champion's own page hides.
+                const est = champ ? estimateRatings(save, champ) : null;
                 return (
                   <tr key={d.id}>
                     <td>
                       <Link to={`/division/${d.id}`}>{d.shortName}</Link>
                     </td>
                     <td>{champ ? <FighterLink fighter={champ} showTags={false} /> : <span className="faint">Vacant</span>}</td>
-                    <td className="num">{champ ? <Rating value={ovrDisplayed(champ.ratings)} /> : null}</td>
+                    <td className="num">{est ? <EstimatedRating estimate={est.ovr} low={est.exact ? undefined : est.ovrLow} high={est.exact ? undefined : est.ovrHigh} /> : null}</td>
                     <td className="small dim">{interim ? `interim: ${interim.name}` : ''}</td>
                   </tr>
                 );
@@ -251,14 +282,21 @@ export function DashboardPage() {
         <Panel title="Upcoming events" flush>
           <table>
             <tbody>
-              {upcomingEvents(save, 8).map((e) => (
+              {upcoming.length === 0 && (
+                <tr>
+                  <td className="faint small" colSpan={4}>
+                    No events scheduled.
+                  </td>
+                </tr>
+              )}
+              {upcoming.map((e) => (
                 <tr key={e.id}>
                   <td className="dim small">{formatDate(e.date)}</td>
                   <td>
                     <Link to={`/event/${e.id}`}>{e.name}</Link>
                   </td>
                   <td className="dim small">{e.city}</td>
-                  <td className="num small dim">{e.boutIds.length} bouts</td>
+                  <td className="num small dim">{scheduledBoutLabel(save, e)}</td>
                 </tr>
               ))}
             </tbody>
@@ -268,23 +306,30 @@ export function DashboardPage() {
         <Panel title="Recent results" flush>
           <table>
             <tbody>
-              {recentEvents(save, 6).map((e) => {
-                const main = [...e.boutIds].map((id) => save.bouts[id]).find((b) => b?.isMainEvent);
-                const result = main?.resultId ? save.history.results[main.resultId] : null;
+              {recent.length === 0 && (
+                <tr>
+                  <td className="faint small" colSpan={3}>
+                    No events have been contested yet.
+                  </td>
+                </tr>
+              )}
+              {recent.map((e) => {
+                const main = headliner(save, e);
+                const result = main ? (save.history.results[main.resultId ?? main.id] ?? null) : null;
                 return (
                   <tr key={e.id}>
                     <td className="dim small">{formatDate(e.date)}</td>
                     <td>
                       <Link to={`/event/${e.id}`}>{e.name}</Link>
                     </td>
-                    <td className="small">
+                    <td className="small wrap">
                       {result ? (
                         <>
                           {result.winnerId ? save.fighters[result.winnerId]?.name : 'Draw'}{' '}
                           <span className="dim">{METHOD_LABEL[result.method]}</span>
                         </>
                       ) : (
-                        <span className="faint">no main event recorded</span>
+                        <span className="faint">no result recorded</span>
                       )}
                     </td>
                   </tr>
@@ -301,10 +346,10 @@ export function DashboardPage() {
                 {healthReport(fighter).map((r) => (
                   <tr key={r.label}>
                     <td>{r.label}</td>
-                    <td style={{ width: 90 }}>
+                    <td className="health-bar">
                       <Bar value={100 - r.value} />
                     </td>
-                    <td className="small dim">{r.note}</td>
+                    <td className="small dim wrap">{r.note}</td>
                   </tr>
                 ))}
               </tbody>
@@ -320,7 +365,7 @@ export function DashboardPage() {
             <tbody>
               {save.history.news.slice(0, 10).map((n) => (
                 <tr key={n.id}>
-                  <td className="dim small nowrap">{n.date}</td>
+                  <td className="dim small nowrap">{formatDate(n.date)}</td>
                   <td className="wrap">{n.headline}</td>
                 </tr>
               ))}

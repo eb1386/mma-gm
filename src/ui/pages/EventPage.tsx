@@ -143,7 +143,9 @@ export function EventPage() {
         if (rows.length === 0) return null;
         return (
           <Panel key={seg.key} title={seg.label} flush>
-            <table>
+            {/* card-table: on a phone each bout stacks into three lines (styles.css), because ten columns
+                pushed the opponent, the result and the View button off the right edge. */}
+            <table className="card-table">
               <thead>
                 <tr>
                   <th>Division</th>
@@ -168,34 +170,35 @@ export function EventPage() {
                   const playerInvolved = save.player.fighterId === a?.id || save.player.fighterId === c?.id;
                   return (
                     <tr key={b.id} className={playerInvolved ? 'highlight' : undefined}>
-                      <td className="small dim">
+                      <td className="small dim bt-div">
                         {DIVISION_BY_ID[b.divisionId].abbr}
                         {b.isTitleFight && <span className="tag champ" style={{ marginLeft: 4 }}>title</span>}
+                        {b.regionalTitle && <span className="tag champ" style={{ marginLeft: 4 }}>regional title</span>}
                         {b.isInterimTitleFight && <span className="tag interim" style={{ marginLeft: 4 }}>interim</span>}
                         {b.isCatchweight && <span className="tag warn" style={{ marginLeft: 4 }}>catchweight</span>}
                       </td>
-                      <td className={result?.winnerId === a?.id ? 'good' : undefined}>
+                      <td className={`bt-name bt-a${result?.winnerId === a?.id ? ' good' : ''}`}>
                         {a ? <Link to={`/fighter/${a.id}`}>{a.name}</Link> : 'TBD'}
                         {b.weighInA && !b.weighInA.madeWeight && <span className="tag bad" style={{ marginLeft: 4 }}>missed weight</span>}
                       </td>
-                      <td className="num">{estA && <EstimatedRating estimate={estA.ovr} low={estA.exact ? undefined : estA.ovrLow} high={estA.exact ? undefined : estA.ovrHigh} />}</td>
-                      <td className="dim center">vs</td>
-                      <td className={result?.winnerId === c?.id ? 'good' : undefined}>
+                      <td className="num bt-ovr-a">{estA && <EstimatedRating estimate={estA.ovr} low={estA.exact ? undefined : estA.ovrLow} high={estA.exact ? undefined : estA.ovrHigh} />}</td>
+                      <td className="dim center bt-vs">vs</td>
+                      <td className={`bt-name bt-b${result?.winnerId === c?.id ? ' good' : ''}`}>
                         {c ? <Link to={`/fighter/${c.id}`}>{c.name}</Link> : 'TBD'}
                         {b.weighInB && !b.weighInB.madeWeight && <span className="tag bad" style={{ marginLeft: 4 }}>missed weight</span>}
                       </td>
-                      <td className="num">{estB && <EstimatedRating estimate={estB.ovr} low={estB.exact ? undefined : estB.ovrLow} high={estB.exact ? undefined : estB.ovrHigh} />}</td>
-                      <td className="small">
+                      <td className="num bt-ovr-b">{estB && <EstimatedRating estimate={estB.ovr} low={estB.exact ? undefined : estB.ovrLow} high={estB.exact ? undefined : estB.ovrHigh} />}</td>
+                      <td className="small bt-res">
                         {result ? METHOD_LABEL[result.method] : b.status === 'canceled' ? <span className="bad">canceled</span> : <span className="dim">{b.scheduledRounds} rounds</span>}
                       </td>
-                      <td className="num">{result ? result.endRound : ''}</td>
-                      <td className="num small">{result ? formatClock(result.endTimeSeconds) : ''}</td>
-                      <td>
+                      <td className="num bt-rd">{result ? result.endRound : ''}</td>
+                      <td className="num small bt-time">{result ? formatClock(result.endTimeSeconds) : ''}</td>
+                      <td className="bt-act">
                         {result ? (
                           <Link className="btn small" to={`/fight/${b.id}`}>
                             View
                           </Link>
-                        ) : playerInvolved ? (
+                        ) : playerInvolved && b.status !== 'canceled' ? (
                           <Link className="btn small" to={`/fight/${b.id}`}>
                             Preview
                           </Link>
@@ -212,27 +215,29 @@ export function EventPage() {
 
       {bouts.length === 0 && <Notice>No bouts have been announced for this card yet.</Notice>}
 
-      <Panel title="Booking notes" flush>
-        <table>
-          <tbody>
-            {bouts.map((b) => (
-              <tr key={b.id}>
-                <td className="small">
-                  {save.fighters[b.fighterAId]?.name} against {save.fighters[b.fighterBId]?.name}
-                </td>
-                <td className="small dim wrap">{b.bookingReason}</td>
-                {b.replacementHistory.length > 0 && (
-                  <td className="small warn wrap">
-                    {b.replacementHistory
-                      .map((r) => `${save.fighters[r.replacedFighterId]?.name ?? 'A fighter'} out, ${save.fighters[r.newFighterId]?.name ?? 'a replacement'} in (${r.reason})`)
-                      .join('. ')}
+      {bouts.length > 0 && (
+        <Panel title="Booking notes" flush>
+          <table className="booking-table">
+            <tbody>
+              {bouts.map((b) => (
+                <tr key={b.id}>
+                  <td className="small">
+                    {save.fighters[b.fighterAId]?.name} against {save.fighters[b.fighterBId]?.name}
                   </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
+                  <td className="small dim wrap">{b.bookingReason}</td>
+                  {b.replacementHistory.length > 0 && (
+                    <td className="small warn wrap">
+                      {b.replacementHistory
+                        .map((r) => `${save.fighters[r.replacedFighterId]?.name ?? 'A fighter'} out, ${save.fighters[r.newFighterId]?.name ?? 'a replacement'} in (${r.reason})`)
+                        .join('. ')}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
     </div>
   );
 }

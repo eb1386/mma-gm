@@ -1,7 +1,7 @@
 {
   "source": "ufc.com/rankings",
   "sourceUrl": "https://www.ufc.com/rankings",
-  "fetchedAt": "2026-07-29T04:38:03.792Z",
+  "fetchedAt": "2026-10-01T20:46:12.435Z",
   "divisions": [
     {
       "name": "Flyweight",
@@ -47,43 +47,43 @@
         },
         {
           "rank": 8,
-          "slug": "amir-albazi",
-          "name": "Amir Albazi"
-        },
-        {
-          "rank": 9,
           "slug": "brandon-moreno",
           "name": "Brandon Moreno"
         },
         {
+          "rank": 9,
+          "slug": "amir-albazi",
+          "name": "Amir Albazi"
+        },
+        {
           "rank": 10,
-          "slug": "alex-perez",
-          "name": "Alex Perez"
-        },
-        {
-          "rank": 11,
-          "slug": "steve-erceg",
-          "name": "Steve Erceg"
-        },
-        {
-          "rank": 12,
-          "slug": "tim-elliott",
-          "name": "Tim Elliott"
-        },
-        {
-          "rank": 13,
           "slug": "ramazan-temirov",
           "name": "Ramazan Temirov"
         },
         {
+          "rank": 11,
+          "slug": "tim-elliott",
+          "name": "Tim Elliott"
+        },
+        {
+          "rank": 12,
+          "slug": "steve-erceg",
+          "name": "Steve Erceg"
+        },
+        {
           "rank": 13,
+          "slug": "sumudaerji",
+          "name": "Sumudaerji"
+        },
+        {
+          "rank": 14,
           "slug": "tagir-ulanbekov",
           "name": "Tagir Ulanbekov"
         },
         {
           "rank": 15,
-          "slug": "edgar-chairez",
-          "name": "Edgar Chairez"
+          "slug": "alex-perez",
+          "name": "Alex Perez"
         }
       ]
     },
@@ -106,23 +106,23 @@
         },
         {
           "rank": 3,
+          "slug": "song-yadong",
+          "name": "Song Yadong"
+        },
+        {
+          "rank": 4,
           "slug": "umar-nurmagomedov",
           "name": "Umar Nurmagomedov"
         },
         {
-          "rank": 4,
+          "rank": 5,
           "slug": "mario-bautista",
           "name": "Mario Bautista"
         },
         {
-          "rank": 5,
+          "rank": 6,
           "slug": "cory-sandhagen",
           "name": "Cory Sandhagen"
-        },
-        {
-          "rank": 6,
-          "slug": "song-yadong",
-          "name": "Song Yadong"
         },
         {
           "rank": 7,
@@ -146,23 +146,23 @@
         },
         {
           "rank": 11,
-          "slug": "payton-talbott",
-          "name": "Payton Talbott"
-        },
-        {
-          "rank": 12,
           "slug": "raul-rosas-jr",
           "name": "Raul Rosas Jr."
         },
         {
+          "rank": 12,
+          "slug": "payton-talbott",
+          "name": "Payton Talbott"
+        },
+        {
           "rank": 13,
-          "slug": "raoni-barcelos",
-          "name": "Raoni Barcelos"
+          "slug": "farid-basharat",
+          "name": "Farid Basharat"
         },
         {
           "rank": 14,
-          "slug": "farid-basharat",
-          "name": "Farid Basharat"
+          "slug": "raoni-barcelos",
+          "name": "Raoni Barcelos"
         },
         {
           "rank": 15,
@@ -200,13 +200,13 @@
         },
         {
           "rank": 5,
-          "slug": "yair-rodriguez",
-          "name": "Yair Rodriguez"
+          "slug": "jean-silva",
+          "name": "Jean Silva"
         },
         {
           "rank": 6,
-          "slug": "jean-silva",
-          "name": "Jean Silva"
+          "slug": "yair-rodriguez",
+          "name": "Yair Rodriguez"
         },
         {
           "rank": 7,
@@ -230,28 +230,28 @@
         },
         {
           "rank": 11,
-          "slug": "brian-ortega",
-          "name": "Brian Ortega"
-        },
-        {
-          "rank": 12,
           "slug": "aaron-pico",
           "name": "Aaron Pico"
         },
         {
-          "rank": 13,
+          "rank": 12,
           "slug": "melquizael-costa",
           "name": "Melquizael Costa"
         },
         {
+          "rank": 13,
+          "slug": "brian-ortega",
+          "name": "Brian Ortega"
+        },
+        {
           "rank": 14,
-          "slug": "david-onama",
-          "name": "David Onama"
+          "slug": "patricio-freire",
+          "name": "Patricio Pitbull"
         },
         {
           "rank": 15,
-          "slug": "patricio-freire",
-          "name": "Patricio Pitbull"
+          "slug": "david-onama",
+          "name": "David Onama"
         }
       ]
     },
@@ -294,23 +294,23 @@
         },
         {
           "rank": 7,
+          "slug": "quillan-salkilld",
+          "name": "Quillan Salkilld"
+        },
+        {
+          "rank": 8,
           "slug": "mauricio-ruffy",
           "name": "Mauricio Ruffy"
         },
         {
-          "rank": 8,
-          "slug": "mateusz-gamrot",
-          "name": "Mateusz Gamrot"
-        },
-        {
           "rank": 9,
-          "slug": "dan-hooker",
-          "name": "Dan Hooker"
+          "slug": "salahdine-parnasse",
+          "name": "Salahdine Parnasse"
         },
         {
           "rank": 10,
-          "slug": "renato-moicano",
-          "name": "Renato Moicano"
+          "slug": "mateusz-gamrot",
+          "name": "Mateusz Gamrot"
         },
         {
           "rank": 11,
@@ -319,23 +319,23 @@
         },
         {
           "rank": 12,
-          "slug": "quillan-salkilld",
-          "name": "Quillan Salkilld"
+          "slug": "renato-moicano",
+          "name": "Renato Moicano"
         },
         {
           "rank": 13,
+          "slug": "dan-hooker",
+          "name": "Dan Hooker"
+        },
+        {
+          "rank": 14,
           "slug": "tom-nolan",
           "name": "Tom Nolan"
         },
         {
-          "rank": 14,
+          "rank": 15,
           "slug": "beneil-dariush",
           "name": "Beneil Dariush"
-        },
-        {
-          "rank": 15,
-          "slug": "manuel-torres",
-          "name": "Manuel Torres"
         }
       ]
     },
@@ -403,23 +403,23 @@
         },
         {
           "rank": 12,
-          "slug": "mike-malott",
-          "name": "Mike Malott"
-        },
-        {
-          "rank": 13,
-          "slug": "michael-page",
-          "name": "Michael Venom Page"
-        },
-        {
-          "rank": 14,
           "slug": "uros-medic",
           "name": "Uroš Medić"
         },
         {
-          "rank": 15,
+          "rank": 13,
+          "slug": "mike-malott",
+          "name": "Mike Malott"
+        },
+        {
+          "rank": 14,
           "slug": "daniel-rodriguez",
           "name": "Daniel Rodriguez"
+        },
+        {
+          "rank": 15,
+          "slug": "neil-magny",
+          "name": "Neil Magny"
         }
       ]
     },
@@ -457,23 +457,23 @@
         },
         {
           "rank": 6,
-          "slug": "anthony-hernandez",
-          "name": "Anthony Hernandez"
-        },
-        {
-          "rank": 7,
           "slug": "joe-pyfer",
           "name": "Joe Pyfer"
         },
         {
+          "rank": 7,
+          "slug": "gregory-rodrigues",
+          "name": "Gregory Rodrigues"
+        },
+        {
           "rank": 8,
-          "slug": "israel-adesanya",
-          "name": "Israel Adesanya"
+          "slug": "anthony-hernandez",
+          "name": "Anthony Hernandez"
         },
         {
           "rank": 9,
-          "slug": "reinier-de-ridder",
-          "name": "Reinier de Ridder"
+          "slug": "israel-adesanya",
+          "name": "Israel Adesanya"
         },
         {
           "rank": 10,
@@ -482,13 +482,13 @@
         },
         {
           "rank": 11,
-          "slug": "gregory-rodrigues",
-          "name": "Gregory Rodrigues"
+          "slug": "jared-cannonier",
+          "name": "Jared Cannonier"
         },
         {
           "rank": 12,
-          "slug": "jared-cannonier",
-          "name": "Jared Cannonier"
+          "slug": "abus-magomedov",
+          "name": "Abus Magomedov"
         },
         {
           "rank": 13,
@@ -502,8 +502,8 @@
         },
         {
           "rank": 15,
-          "slug": "roman-dolidze",
-          "name": "Roman Dolidze"
+          "slug": "shara-magomedov",
+          "name": "Shara Magomedov"
         }
       ]
     },
@@ -531,13 +531,13 @@
         },
         {
           "rank": 4,
-          "slug": "jan-blachowicz",
-          "name": "Jan Błachowicz"
+          "slug": "khalil-rountree-jr",
+          "name": "Khalil Rountree Jr."
         },
         {
           "rank": 5,
-          "slug": "khalil-rountree-jr",
-          "name": "Khalil Rountree Jr."
+          "slug": "navajo-stirling",
+          "name": "Navajo Stirling"
         },
         {
           "rank": 6,
@@ -556,28 +556,28 @@
         },
         {
           "rank": 9,
+          "slug": "jan-blachowicz",
+          "name": "Jan Błachowicz"
+        },
+        {
+          "rank": 10,
           "slug": "dominick-reyes",
           "name": "Dominick Reyes"
         },
         {
-          "rank": 10,
+          "rank": 11,
           "slug": "bogdan-guskov",
           "name": "Bogdan Guskov"
         },
         {
-          "rank": 11,
+          "rank": 12,
           "slug": "robert-whittaker",
           "name": "Robert Whittaker"
         },
         {
-          "rank": 12,
+          "rank": 13,
           "slug": "johnny-walker",
           "name": "Johnny Walker"
-        },
-        {
-          "rank": 13,
-          "slug": "aleksandar-rakic",
-          "name": "Aleksandar Rakić"
         },
         {
           "rank": 14,
@@ -586,22 +586,22 @@
         },
         {
           "rank": 15,
-          "slug": "navajo-stirling",
-          "name": "Navajo Stirling"
+          "slug": "nikita-krylov",
+          "name": "Nikita Krylov"
         }
       ]
     },
     {
       "name": "Heavyweight",
       "champion": {
-        "slug": "tom-aspinall",
+        "slug": "ciryl-gane",
         "name": null
       },
       "entries": [
         {
           "rank": 1,
-          "slug": "ciryl-gane",
-          "name": "Ciryl Gane"
+          "slug": "tom-aspinall",
+          "name": "Tom Aspinall"
         },
         {
           "rank": 2,
@@ -620,58 +620,58 @@
         },
         {
           "rank": 5,
-          "slug": "waldo-cortes-acosta",
-          "name": "Waldo Cortes Acosta"
-        },
-        {
-          "rank": 6,
-          "slug": "serghei-spivac",
-          "name": "Serghei Spivac"
-        },
-        {
-          "rank": 7,
           "slug": "curtis-blaydes",
           "name": "Curtis Blaydes"
         },
         {
-          "rank": 8,
+          "rank": 6,
+          "slug": "waldo-cortes-acosta",
+          "name": "Waldo Cortes Acosta"
+        },
+        {
+          "rank": 7,
           "slug": "rizvan-kuniev",
           "name": "Rizvan Kuniev"
         },
         {
+          "rank": 8,
+          "slug": "vitor-petrino",
+          "name": "Vitor Petrino"
+        },
+        {
           "rank": 9,
+          "slug": "serghei-spivac",
+          "name": "Serghei Spivac"
+        },
+        {
+          "rank": 10,
           "slug": "ante-delija",
           "name": "Ante Delija"
         },
         {
-          "rank": 10,
+          "rank": 11,
           "slug": "valter-walker",
           "name": "Valter Walker"
         },
         {
-          "rank": 11,
+          "rank": 12,
           "slug": "tyrell-fortune",
           "name": "Tyrell Fortune"
         },
         {
-          "rank": 12,
+          "rank": 13,
           "slug": "derrick-lewis",
           "name": "Derrick Lewis"
         },
         {
-          "rank": 13,
-          "slug": "marcin-tybura",
-          "name": "Marcin Tybura"
-        },
-        {
           "rank": 14,
-          "slug": "brando-pericic",
-          "name": "Brando Peričić"
+          "slug": "mario-pinto",
+          "name": "Mario Pinto"
         },
         {
           "rank": 15,
-          "slug": "mick-parkin",
-          "name": "Mick Parkin"
+          "slug": "aleksandar-rakic",
+          "name": "Aleksandar Rakić"
         }
       ]
     },
@@ -699,8 +699,8 @@
         },
         {
           "rank": 4,
-          "slug": "xiaonan-yan",
-          "name": "Yan Xiaonan"
+          "slug": "denise-gomes",
+          "name": "Denise Gomes"
         },
         {
           "rank": 5,
@@ -709,43 +709,43 @@
         },
         {
           "rank": 6,
+          "slug": "yan-xiaonan",
+          "name": "Yan Xiaonan"
+        },
+        {
+          "rank": 7,
           "slug": "fatima-kline",
           "name": "Fatima Kline"
         },
         {
-          "rank": 7,
+          "rank": 8,
           "slug": "loopy-godinez",
           "name": "Loopy Godinez"
         },
         {
-          "rank": 8,
-          "slug": "amanda-lemos",
-          "name": "Amanda Lemos"
-        },
-        {
           "rank": 9,
-          "slug": "jessica-andrade",
-          "name": "Jéssica Andrade"
-        },
-        {
-          "rank": 10,
-          "slug": "tabatha-ricci",
-          "name": "Tabatha Ricci"
-        },
-        {
-          "rank": 11,
-          "slug": "amanda-ribas",
-          "name": "Amanda Ribas"
-        },
-        {
-          "rank": 12,
           "slug": "alexia-thainara",
           "name": "Alexia Thainara"
         },
         {
+          "rank": 10,
+          "slug": "jessica-andrade",
+          "name": "Jéssica Andrade"
+        },
+        {
+          "rank": 11,
+          "slug": "tabatha-ricci",
+          "name": "Tabatha Ricci"
+        },
+        {
+          "rank": 12,
+          "slug": "amanda-lemos",
+          "name": "Amanda Lemos"
+        },
+        {
           "rank": 13,
-          "slug": "denise-gomes",
-          "name": "Denise Gomes"
+          "slug": "amanda-ribas",
+          "name": "Amanda Ribas"
         },
         {
           "rank": 14,
@@ -773,13 +773,13 @@
         },
         {
           "rank": 2,
-          "slug": "manon-fiorot",
-          "name": "Manon Fiorot"
+          "slug": "alexa-grasso",
+          "name": "Alexa Grasso"
         },
         {
           "rank": 3,
-          "slug": "alexa-grasso",
-          "name": "Alexa Grasso"
+          "slug": "manon-fiorot",
+          "name": "Manon Fiorot"
         },
         {
           "rank": 4,
@@ -833,8 +833,8 @@
         },
         {
           "rank": 14,
-          "slug": "jj-aldrich",
-          "name": "JJ Aldrich"
+          "slug": "regina-malpica-rivera",
+          "name": "Regina Tarin"
         },
         {
           "rank": 15,
@@ -857,23 +857,23 @@
         },
         {
           "rank": 2,
-          "slug": "raquel-pennington",
-          "name": "Raquel Pennington"
-        },
-        {
-          "rank": 3,
           "slug": "joselyne-edwards",
           "name": "Joselyne Edwards"
         },
         {
-          "rank": 4,
-          "slug": "norma-dumont",
-          "name": "Norma Dumont"
+          "rank": 3,
+          "slug": "ailin-perez",
+          "name": "Ailin Perez"
+        },
+        {
+          "rank": 3,
+          "slug": "raquel-pennington",
+          "name": "Raquel Pennington"
         },
         {
           "rank": 5,
-          "slug": "ailin-perez",
-          "name": "Ailin Perez"
+          "slug": "norma-dumont",
+          "name": "Norma Dumont"
         },
         {
           "rank": 6,
@@ -947,13 +947,13 @@
       },
       {
         "rank": 3,
-        "slug": "petr-yan",
-        "name": "Petr Yan"
+        "slug": "justin-gaethje",
+        "name": "Justin Gaethje"
       },
       {
         "rank": 4,
-        "slug": "justin-gaethje",
-        "name": "Justin Gaethje"
+        "slug": "petr-yan",
+        "name": "Petr Yan"
       },
       {
         "rank": 5,
@@ -962,8 +962,8 @@
       },
       {
         "rank": 6,
-        "slug": "tom-aspinall",
-        "name": "Tom Aspinall"
+        "slug": "joshua-van",
+        "name": "Joshua Van"
       },
       {
         "rank": 7,
@@ -972,23 +972,23 @@
       },
       {
         "rank": 8,
+        "slug": "tom-aspinall",
+        "name": "Tom Aspinall"
+      },
+      {
+        "rank": 9,
         "slug": "merab-dvalishvili",
         "name": "Merab Dvalishvili"
       },
       {
-        "rank": 9,
+        "rank": 10,
         "slug": "alex-pereira",
         "name": "Alex Pereira"
       },
       {
-        "rank": 10,
+        "rank": 11,
         "slug": "ciryl-gane",
         "name": "Ciryl Gane"
-      },
-      {
-        "rank": 11,
-        "slug": "joshua-van",
-        "name": "Joshua Van"
       },
       {
         "rank": 12,
@@ -997,18 +997,18 @@
       },
       {
         "rank": 13,
-        "slug": "alexandre-pantoja",
-        "name": "Alexandre Pantoja"
-      },
-      {
-        "rank": 14,
         "slug": "arman-tsarukyan",
         "name": "Arman Tsarukyan"
       },
       {
+        "rank": 14,
+        "slug": "alexandre-pantoja",
+        "name": "Alexandre Pantoja"
+      },
+      {
         "rank": 15,
-        "slug": "charles-oliveira",
-        "name": "Charles Oliveira"
+        "slug": "carlos-ulberg",
+        "name": "Carlos Ulberg"
       }
     ]
   },
@@ -1041,18 +1041,18 @@
       },
       {
         "rank": 5,
-        "slug": "manon-fiorot",
-        "name": "Manon Fiorot"
-      },
-      {
-        "rank": 6,
         "slug": "mackenzie-dern",
         "name": "Mackenzie Dern"
       },
       {
-        "rank": 7,
+        "rank": 6,
         "slug": "alexa-grasso",
         "name": "Alexa Grasso"
+      },
+      {
+        "rank": 7,
+        "slug": "manon-fiorot",
+        "name": "Manon Fiorot"
       },
       {
         "rank": 8,
@@ -1061,13 +1061,13 @@
       },
       {
         "rank": 9,
-        "slug": "julianna-pena",
-        "name": "Julianna Peña"
+        "slug": "tatiana-suarez",
+        "name": "Tatiana Suarez"
       },
       {
         "rank": 10,
-        "slug": "tatiana-suarez",
-        "name": "Tatiana Suarez"
+        "slug": "julianna-pena",
+        "name": "Julianna Peña"
       },
       {
         "rank": 11,
@@ -1076,8 +1076,8 @@
       },
       {
         "rank": 12,
-        "slug": "xiaonan-yan",
-        "name": "Yan Xiaonan"
+        "slug": "rose-namajunas",
+        "name": "Rose Namajunas"
       },
       {
         "rank": 13,
@@ -1086,8 +1086,8 @@
       },
       {
         "rank": 14,
-        "slug": "rose-namajunas",
-        "name": "Rose Namajunas"
+        "slug": "denise-gomes",
+        "name": "Denise Gomes"
       },
       {
         "rank": 15,

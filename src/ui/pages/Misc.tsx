@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { DIVISIONS } from '@core/config/divisions';
 import { formatDate } from '@core/types/common';
 import { hallOfFameScore } from '@core/world/history';
-import { deleteSave, downloadSave, estimateSaveSize, importSaveFromFile, listSaves, loadGame } from '@core/save/store';
+import { estimateSaveSize, importSaveFromFile, listSaves, loadGame } from '@core/save/store';
+import { applyTheme, exportSave } from '../native';
 import type { SaveIndexEntry } from '@core/types/save';
 import { migrationNotes } from '@core/save/migrate';
-import { useGame, discardPendingSave } from '../store';
-import { DataTable, KeyValues, Notice, Panel, Rating } from '../components';
+import { POT_PATHS_RANGE, POT_PERCENTILE_RANGE } from '@core/world/pot';
+import { deleteCareer, useGame } from '../store';
+import { MODE_LABEL } from './Landing';
+import { StorageNotice } from '../StorageNotice';
+import { DataTable, formatRecord, KeyValues, Notice, Panel, Rating } from '../components';
 
 // ---------------------------------------------------------------------------
 
@@ -15,7 +19,7 @@ export function HallOfFamePage() {
   const save = useGame((s) => s.save)!;
   const inducted = save.history.hallOfFame;
   const candidates = Object.values(save.fighters)
-    .filter((f) => f.retired && f.hallOfFameYear === null)
+    .filter((f) => f.retired && !f.circuit && f.hallOfFameYear === null)
     .map((f) => ({ f, score: hallOfFameScore(save, f) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 25);
@@ -78,10 +82,8 @@ export function HallOfFamePage() {
                 <td>
                   <Link to={`/fighter/${f.id}`}>{f.name}</Link>
                 </td>
-                <td className="small">{f.retirementDate}</td>
-                <td className="mono small">
-                  {f.record.wins}-{f.record.losses}
-                </td>
+                <td className="small nowrap">{f.retirementDate ? formatDate(f.retirementDate) : '-'}</td>
+                <td className="mono small">{formatRecord(f.record)}</td>
                 <td className="num">
                   <Rating value={Math.min(99, score)} />
                 </td>
@@ -127,23 +129,36 @@ export function NewsPage() {
         </div>
         <table>
           <tbody>
-            {items.map((n) => (
-              <tr key={n.id}>
-                <td className="dim small nowrap">{formatDate(n.date)}</td>
-                <td className="wrap">
-                  <strong>{n.headline}</strong>
-                  <br />
-                  <span className="small dim">{n.body}</span>
-                </td>
-                <td className="small">
-                  {n.fighterIds.slice(0, 2).map((id) => (
-                    <span key={id}>
-                      <Link to={`/fighter/${id}`}>{save.fighters[id]?.name}</Link>{' '}
-                    </span>
-                  ))}
+            {items.length === 0 && (
+              <tr>
+                <td className="faint small" colSpan={3}>
+                  {minImportance > 1 ? 'No news at this importance yet.' : 'No news yet.'}
                 </td>
               </tr>
-            ))}
+            )}
+            {items.map((n) => {
+              // A fighter removed from the save leaves an id with no name, which rendered an empty link.
+              const linked = n.fighterIds.slice(0, 2).filter((id) => save.fighters[id]);
+              const links = linked.map((id) => (
+                <Link key={id} to={`/fighter/${id}`} className="news-link">
+                  {save.fighters[id].name}
+                </Link>
+              ));
+              return (
+                <tr key={n.id}>
+                  <td className="dim small nowrap">{formatDate(n.date)}</td>
+                  <td className="wrap">
+                    <strong>{n.headline}</strong>
+                    <br />
+                    <span className="small dim">{n.body}</span>
+                    {/* On a phone the links column took half the width and squeezed the headline to a
+                        word or two per line, so the links follow the body instead. */}
+                    {links.length > 0 && <span className="small news-links m-only">{links}</span>}
+                  </td>
+                  <td className="small wrap news-links-col col-wide">{links}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </Panel>
@@ -153,12 +168,101 @@ export function NewsPage() {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A number setting that is only written when the player is done with it.
+ *
+ * Writing on every keystroke stored whatever was half typed: clearing the field stored 0 (a Pot
+ * percentile of 0 makes Pot the worst simulated path), and the field then showed "0" so the next
+ * digit made "08". The text is kept locally and committed on leaving the field or on Enter, clamped
+ * to what the game honours. Empty or unreadable text puts the stored value back.
+ */
+function NumberSetting({
+  label,
+  value,
+  min,
+  max,
+  step,
+  decimals,
+  onCommit,
+  children,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  decimals: number;
+  onCommit: (value: number) => void;
+  children?: ReactNode;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const commit = () => {
+    const parsed = Number(text);
+    if (text.trim() === '' || !Number.isFinite(parsed)) {
+      setText(String(value));
+      return;
+    }
+    const factor = 10 ** decimals;
+    const next = Math.min(max, Math.max(min, Math.round(parsed * factor) / factor));
+    setText(String(next));
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <input
+        type="number"
+        inputMode="decimal"
+        enterKeyHint="done"
+        min={min}
+        max={max}
+        step={step}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') setText(String(value));
+        }}
+      />
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The size of the loaded career, measured once per career while the browser is idle.
+ *
+ * Measuring serialises the whole world, a large fraction of a second and tens of megabytes on a
+ * long career. It was done while drawing the page, so every toggle on Settings repeated it.
+ */
+function useSaveSize(saveId: string): string | null {
+  const [size, setSize] = useState<string | null>(null);
+  useEffect(() => {
+    setSize(null);
+    const measure = () => {
+      const save = useGame.getState().save;
+      if (save?.saveId === saveId) setSize(`About ${(estimateSaveSize(save) / 1024 / 1024).toFixed(1)} MB`);
+    };
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(measure, { timeout: 3000 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const id = setTimeout(measure, 300);
+    return () => clearTimeout(id);
+  }, [saveId]);
+  return size;
+}
+
 export function SettingsPage() {
   const save = useGame((s) => s.save)!;
   const mutate = useGame((s) => s.mutate);
   const showToast = useGame((s) => s.showToast);
   const persist = useGame((s) => s.persist);
   const [theme, setTheme] = useState(document.documentElement.getAttribute('data-theme') ?? 'dark');
+  const size = useSaveSize(save.saveId);
 
   const set = <K extends keyof typeof save.settings>(key: K, value: (typeof save.settings)[K]) => {
     mutate((s) => {
@@ -180,10 +284,14 @@ export function SettingsPage() {
             <select
               value={theme}
               onChange={(e) => {
-                setTheme(e.target.value);
-                if (e.target.value === 'light') document.documentElement.setAttribute('data-theme', 'light');
-                else document.documentElement.removeAttribute('data-theme');
-                localStorage.setItem('octagon-theme', e.target.value);
+                const next = e.target.value === 'light' ? 'light' : 'dark';
+                setTheme(next);
+                applyTheme(next);
+                try {
+                  localStorage.setItem('octagon-theme', next);
+                } catch {
+                  // Storage can be refused (a private window). The theme still applies for this visit.
+                }
               }}
             >
               <option value="dark">Dark</option>
@@ -247,41 +355,40 @@ export function SettingsPage() {
               <option value="brutal">Brutal</option>
             </select>
           </div>
-          <div className="field">
-            <label>Events per month</label>
-            <input
-              type="number"
-              min={1}
-              max={8}
-              step={0.2}
-              value={save.settings.eventsPerMonth}
-              onChange={(e) => set('eventsPerMonth', Number(e.target.value))}
-            />
-          </div>
-          <div className="field">
-            <label>Pot projection paths</label>
-            <input type="number" min={20} max={400} step={10} value={save.settings.potPaths} onChange={(e) => set('potPaths', Number(e.target.value))} />
+          {/* The calendar scale the matchmaker honours runs from a quarter to twice the usual
+              four cards a month, so the field offers exactly that range. */}
+          <NumberSetting label="Events per month" value={save.settings.eventsPerMonth} min={1} max={8} step={0.2} decimals={2} onCommit={(v) => set('eventsPerMonth', v)} />
+          <NumberSetting
+            label="Pot projection paths"
+            value={save.settings.potPaths}
+            min={POT_PATHS_RANGE.min}
+            max={POT_PATHS_RANGE.max}
+            step={10}
+            decimals={0}
+            onCommit={(v) => set('potPaths', v)}
+          >
             <span className="small dim">
               More paths give a steadier Pot estimate and cost more time on the annual recalculation.
             </span>
-          </div>
-          <div className="field">
-            <label>Pot percentile</label>
-            <input
-              type="number"
-              min={0.5}
-              max={0.95}
-              step={0.01}
-              value={save.settings.potPercentile}
-              onChange={(e) => set('potPercentile', Number(e.target.value))}
-            />
+          </NumberSetting>
+          <NumberSetting
+            label="Pot percentile"
+            value={save.settings.potPercentile}
+            min={POT_PERCENTILE_RANGE.min}
+            max={POT_PERCENTILE_RANGE.max}
+            step={0.01}
+            decimals={2}
+            onCommit={(v) => set('potPercentile', v)}
+          >
             <span className="small dim">
-              Pot is the projected peak Ovr at this percentile across simulated development paths.
+              Pot is the projected peak Ovr at this percentile across simulated development paths. A change applies
+              as each fighter's Pot is next worked out, at the latest at the end of the year.
             </span>
-          </div>
+          </NumberSetting>
         </Panel>
 
         <Panel title="Save">
+          <StorageNotice />
           <KeyValues
             rows={[
               ['Save name', save.saveName],
@@ -289,11 +396,11 @@ export function SettingsPage() {
               ['Schema version', save.schemaVersion],
               ['Created', save.createdAt.slice(0, 10)],
               ['Snapshot', save.snapshot.snapshotId],
-              ['Size', `${(estimateSaveSize(save) / 1024 / 1024).toFixed(1)} MB`],
+              ['Size', size ?? '...'],
             ]}
           />
           <div className="row mt">
-            <button onClick={() => downloadSave(save)}>Export to a file</button>
+            <button onClick={() => void exportSave(save).then((m) => showToast(m, 'good')).catch((e) => showToast(`Export failed: ${(e as Error).message}`, 'bad'))}>Export to a file</button>
             <Link className="btn" to="/load">
               Manage saves
             </Link>
@@ -326,78 +433,155 @@ export function LoadGamePage() {
   const navigate = useNavigate();
   const setSave = useGame((s) => s.setSave);
   const current = useGame((s) => s.save);
+  const showToast = useGame((s) => s.showToast);
   const [saves, setSaves] = useState<SaveIndexEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  // One tap on Delete used to destroy a career for good. It asks first, as the landing screen does.
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
-  const refresh = () => void listSaves().then(setSaves);
-  useEffect(refresh, []);
+  const refresh = async () => {
+    try {
+      setSaves(await listSaves());
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const load = async (s: SaveIndexEntry) => {
+    setError(null);
+    // The career already loaded is newer in memory than in storage.
+    if (current?.saveId === s.saveId) {
+      navigate('/dashboard');
+      return;
+    }
+    setBusyId(s.saveId);
+    try {
+      const loaded = await loadGame(s.saveId);
+      if (!loaded) throw new Error('That career could not be read.');
+      setSave(loaded);
+      navigate('/dashboard');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const exportOne = async (s: SaveIndexEntry) => {
+    setError(null);
+    setBusyId(s.saveId);
+    try {
+      const loaded = current?.saveId === s.saveId ? current : await loadGame(s.saveId);
+      if (!loaded) throw new Error('That career could not be read.');
+      showToast(await exportSave(loaded), 'good');
+    } catch (e) {
+      showToast(`Export failed: ${(e as Error).message}`, 'bad');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const remove = async (s: SaveIndexEntry) => {
+    setError(null);
+    setBusyId(s.saveId);
+    try {
+      await deleteCareer(s.saveId);
+      setConfirmDelete(null);
+      showToast('Career deleted.', 'info');
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const lastPlayed = (s: SaveIndexEntry) => new Date(s.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+
+  const actions = (s: SaveIndexEntry) => (
+    <span className="row tight save-card-actions">
+      <button className="small primary" disabled={busyId !== null} onClick={() => void load(s)}>
+        Load
+      </button>
+      <button className="small" disabled={busyId !== null} onClick={() => void exportOne(s)}>
+        Export
+      </button>
+      {confirmDelete === s.saveId ? (
+        <>
+          <button className="small danger" disabled={busyId !== null} onClick={() => void remove(s)}>
+            Delete permanently
+          </button>
+          <button className="small" onClick={() => setConfirmDelete(null)}>
+            Keep it
+          </button>
+        </>
+      ) : (
+        <button className="small danger" disabled={busyId !== null} onClick={() => setConfirmDelete(s.saveId)}>
+          Delete
+        </button>
+      )}
+    </span>
+  );
 
   return (
     <div className="splash">
       <h1>Saves</h1>
       {error && <Notice kind="bad">{error}</Notice>}
-      <Panel flush>
-        <DataTable
-          rows={saves}
-          rowKey={(s) => s.saveId}
-          initialSort="updatedAt"
-          columns={[
-            { key: 'name', label: 'Save', sort: (s) => s.saveName, render: (s) => s.saveName },
-            { key: 'mode', label: 'Mode', sort: (s) => s.mode, render: (s) => s.mode },
-            { key: 'who', label: 'Playing as', render: (s) => s.fighterName ?? s.gymName ?? 'Spectator' },
-            { key: 'date', label: 'In game date', sort: (s) => s.date, render: (s) => formatDate(s.date) },
-            { key: 'updatedAt', label: 'Last played', sort: (s) => s.updatedAt, render: (s) => s.updatedAt.slice(0, 16).replace('T', ' ') },
-            { key: 'snapshot', label: 'Snapshot', render: (s) => <span className="small dim">{s.snapshotId}</span> },
-            {
-              key: 'actions',
-              label: '',
-              render: (s) => (
-                <span className="row tight">
-                  <button
-                    className="small primary"
-                    onClick={async () => {
-                      try {
-                        const loaded = await loadGame(s.saveId);
-                        if (loaded) {
-                          setSave(loaded);
-                          navigate('/dashboard');
-                        }
-                      } catch (e) {
-                        setError((e as Error).message);
-                      }
-                    }}
-                  >
-                    Load
-                  </button>
-                  <button
-                    className="small"
-                    onClick={async () => {
-                      const loaded = await loadGame(s.saveId);
-                      if (loaded) downloadSave(loaded);
-                    }}
-                  >
-                    Export
-                  </button>
-                  <button
-                    className="small danger"
-                    onClick={async () => {
-                      // Dropped first, or clearing the loaded save flushes a queued write that
-                      // puts the deleted career straight back.
-                      discardPendingSave(s.saveId);
-                      await deleteSave(s.saveId);
-                      if (current?.saveId === s.saveId) setSave(null);
-                      refresh();
-                    }}
-                  >
-                    Delete
-                  </button>
-                </span>
-              ),
-            },
-          ]}
-          empty="No saves yet."
-        />
-      </Panel>
+      {/* The table on a wide screen. On a phone its seventh column, the one with the buttons,
+          started off the right edge, so the same saves are drawn as cards there instead. */}
+      <div className="saves-table">
+        <Panel flush>
+          <DataTable
+            rows={saves}
+            rowKey={(s) => s.saveId}
+            initialSort="updatedAt"
+            columns={[
+              { key: 'name', label: 'Save', sort: (s) => s.saveName, render: (s) => s.saveName },
+              { key: 'mode', label: 'Mode', sort: (s) => s.mode, render: (s) => MODE_LABEL[s.mode] ?? s.mode },
+              { key: 'who', label: 'Playing as', render: (s) => s.fighterName ?? s.gymName ?? 'Spectator' },
+              { key: 'date', label: 'In game date', sort: (s) => s.date, render: (s) => formatDate(s.date) },
+              // Sorted on the stored timestamp, shown in the player's own time and format. The UTC
+              // slice it used to show was hours out for most players.
+              { key: 'updatedAt', label: 'Last played', sort: (s) => s.updatedAt, render: lastPlayed },
+              { key: 'snapshot', label: 'Snapshot', render: (s) => <span className="small dim">{s.snapshotId}</span> },
+              { key: 'actions', label: '', render: actions },
+            ]}
+            empty="No saves yet."
+          />
+        </Panel>
+      </div>
+      <div className="saves-cards save-grid">
+        {saves.length === 0 && <p className="dim">No saves yet.</p>}
+        {saves.map((s) => (
+          <div key={s.saveId} className={`save-card${current?.saveId === s.saveId ? ' active' : ''}`}>
+            <div className="save-card-head">
+              <strong>{s.saveName}</strong>
+              <span className="tag">{MODE_LABEL[s.mode] ?? s.mode}</span>
+            </div>
+            <table className="save-card-table">
+              <tbody>
+                <tr>
+                  <td>Playing as</td>
+                  <td>{s.fighterName ?? s.gymName ?? 'Spectator'}</td>
+                </tr>
+                <tr>
+                  <td>In game date</td>
+                  <td>{formatDate(s.date)}</td>
+                </tr>
+                <tr>
+                  <td>Last played</td>
+                  <td>{lastPlayed(s)}</td>
+                </tr>
+              </tbody>
+            </table>
+            {actions(s)}
+          </div>
+        ))}
+      </div>
 
       <div className="row">
         <button className="primary" onClick={() => navigate('/new')}>
@@ -407,10 +591,14 @@ export function LoadGamePage() {
           Import a save file
           <input
             type="file"
-            accept="application/json"
+            accept="application/json,.json"
             style={{ display: 'none' }}
             onChange={async (e) => {
-              const file = e.target.files?.[0];
+              const input = e.currentTarget;
+              const file = input.files?.[0];
+              // An earlier failure is cleared before the next attempt, so a success never sits under
+              // an old error.
+              setError(null);
               if (!file) return;
               try {
                 const imported = await importSaveFromFile(file);
@@ -418,6 +606,10 @@ export function LoadGamePage() {
                 navigate('/dashboard');
               } catch (err) {
                 setError((err as Error).message);
+              } finally {
+                // Picking the same file again after a failure fired no change at all, so nothing
+                // happened and nothing said why.
+                input.value = '';
               }
             }}
           />
@@ -576,10 +768,13 @@ export function DataPage() {
 // ---------------------------------------------------------------------------
 
 export function HelpPage() {
+  const hasSave = useGame((s) => s.save !== null);
   return (
     <div className="page">
       <div className="page-head">
         <h1>Help</h1>
+        {/* Without a career there is no menu or tab bar, and the iPhone app has no back button. */}
+        {!hasSave && <Link to="/home">Back</Link>}
       </div>
 
       <div className="grid c2">
@@ -641,10 +836,16 @@ export function HelpPage() {
         </Panel>
 
         <Panel title="Advancing time">
-          <p className="small">
-            The advance controls at the top of every page move the world forward. The leftmost button is context aware:
-            it becomes answering a decision, going to a weigh in, or entering the fight. Auto advance stops whenever a
-            decision needs an answer.
+          {/* The controls are in a different place on a phone, so each layout gets its own directions. */}
+          <p className="small d-only">
+            The advance bar at the top of every page moves the world forward. Its first button is the career's next
+            step: it becomes answering a decision, going to a weigh in, or entering the fight. The buttons beside it
+            advance by a set span. Auto advance stops whenever a decision needs an answer.
+          </p>
+          <p className="small m-only">
+            The large button docked above the tab bar moves the world forward. It is the career's next step: it becomes
+            answering a decision, going to a weigh in, or entering the fight. The clock button next to it advances by a
+            set span. Auto advance stops whenever a decision needs an answer.
           </p>
         </Panel>
 

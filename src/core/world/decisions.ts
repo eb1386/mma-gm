@@ -4,6 +4,7 @@ import type { InboxMessage } from '../types/world';
 import type { SaveGame } from '../types/save';
 import { messageNeedsAction, reconcileInbox } from './inbox';
 import { syncCareerState } from './career';
+import { checkPlayerInjuries } from './injury-flow';
 
 /**
  * The one decision transaction.
@@ -145,7 +146,10 @@ export function resolvePlayerDecision(save: SaveGame, request: ResolveRequest, r
   message.status = 'resolved';
   message.resolution = resolution;
 
-  // Everything that depended on this item is brought up to date now, not next week.
+  // Everything that depended on this item is brought up to date now, not next week. That includes
+  // the player's injuries: an answer can move a booking or end one, and a booking the injury can
+  // no longer make has to be a question before the career status is read, not after Monday.
+  checkPlayerInjuries(save);
   reconcileInbox(save);
   syncCareerState(save);
 

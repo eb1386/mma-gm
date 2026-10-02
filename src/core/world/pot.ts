@@ -2,6 +2,7 @@ import { clamp, hashString, Rng } from '../rng';
 import { ageOn, type IsoDate } from '../types/common';
 import { ovrRaw, RATING_KEYS, type Fighter } from '../types/fighter';
 import { DEFAULT_SETTINGS, type SaveGame } from '../types/save';
+import { DIFFICULTY } from '../config/calibration';
 import { estimatePot, potConfidenceFor } from './development';
 
 /**
@@ -16,7 +17,12 @@ import { estimatePot, potConfidenceFor } from './development';
  * The projection model itself is unchanged. Only how often and how finely it runs.
  */
 
-export const POT_MODEL_VERSION = 2;
+/**
+ * Bumped whenever the projection model changes, so every cached Pot recomputes. 3: the projection
+ * trains at the blended in camp and out of camp quality a career actually gets, and the player's
+ * difficulty setting reaches the player's own Pot.
+ */
+export const POT_MODEL_VERSION = 3;
 
 export type PotTier =
   | 'player'
@@ -69,6 +75,11 @@ export function potTierFor(save: SaveGame, fighter: Fighter): PotTier {
  * hit is only possible when recomputing would produce the same answer.
  */
 export function potCacheKey(save: SaveGame, fighter: Fighter, tier: PotTier): string {
+  return `${potInputsKey(save, fighter, tier)}${potSettingsKey(save)}`;
+}
+
+/** The fighter's own inputs. The projection seed is drawn from this part alone. */
+function potInputsKey(save: SaveGame, fighter: Fighter, tier: PotTier): string {
   const age = ageOn(fighter.birthDate, save.date) ?? fighter.ageAtSnapshot ?? 29;
   let ratingsHash = 0;
   for (const k of RATING_KEYS) ratingsHash = (ratingsHash * 101 + Math.round(fighter.ratings[k])) >>> 0;
@@ -79,6 +90,55 @@ export function potCacheKey(save: SaveGame, fighter: Fighter, tier: PotTier): st
   const blockingInjury = fighter.injuries.some((i) => i.actualReturn === null && i.severity >= 3) ? 1 : 0;
   const devVersion = Math.round(fighter.development.hiddenCeiling * 10);
   return `${POT_MODEL_VERSION}|${tier}|${ratingsHash}|${age}|${longevityBand}|${wearBand}|${gymBand}|${blockingInjury}|${devVersion}`;
+}
+
+/**
+ * The player's projection settings are inputs too. Leaving them out meant a change in Settings only
+ * reached a fighter whose other inputs happened to move, so most of the world kept the old answer
+ * and the control looked like it did nothing. They are part of the cache key but not of the
+ * projection seed, so a changed setting changes only what it should. On the defaults they add
+ * nothing, so a save on the defaults keeps every cached projection it had.
+ */
+function potSettingsKey(save: SaveGame): string {
+  const paths = potPathsSetting(save);
+  const percentile = potPercentileSetting(save);
+  if (paths === DEFAULT_SETTINGS.potPaths && percentile === DEFAULT_SETTINGS.potPercentile) return '';
+  return `|s${paths}-${percentile}`;
+}
+
+/**
+ * The difficulty's development rate as this fighter actually trains under it.
+ *
+ * The player's own fighter develops at the difficulty's rate in and out of camp. A fighter at the
+ * player's gym gets it only in camp, about eight weeks of every seventeen, so their projection
+ * takes that share of it. Everybody else develops at the plain rate. Pot ignored the setting, so on
+ * hard difficulty the player's Pot promised growth the setting then withheld.
+ */
+export function potDifficultyScale(save: SaveGame, fighter: Fighter): number {
+  const scale = DIFFICULTY[save.settings.difficulty]?.developmentScale ?? 1;
+  if (scale === 1) return 1;
+  if (save.player.fighterId === fighter.id) return scale;
+  if (save.player.gymId !== null && fighter.gymId === save.player.gymId) return Math.round((1 + (scale - 1) * (8 / 17)) * 1000) / 1000;
+  return 1;
+}
+
+/**
+ * The projection settings, clamped to what the model honours. The Settings page clamps too, but a
+ * save from an older build or a hand edited import can carry anything: a percentile of 0 made Pot
+ * the worst simulated path and 7 made it the best, and the path budget is capped at four times
+ * the default below whatever the field said.
+ */
+export const POT_PATHS_RANGE = { min: DEFAULT_SETTINGS.potPaths / 4, max: DEFAULT_SETTINGS.potPaths * 4 } as const;
+export const POT_PERCENTILE_RANGE = { min: 0.5, max: 0.95 } as const;
+
+function potPathsSetting(save: SaveGame): number {
+  const v = save.settings.potPaths;
+  return Number.isFinite(v) && v > 0 ? clamp(Math.round(v), POT_PATHS_RANGE.min, POT_PATHS_RANGE.max) : DEFAULT_SETTINGS.potPaths;
+}
+
+function potPercentileSetting(save: SaveGame): number {
+  const v = save.settings.potPercentile;
+  return Number.isFinite(v) ? clamp(v, POT_PERCENTILE_RANGE.min, POT_PERCENTILE_RANGE.max) : DEFAULT_SETTINGS.potPercentile;
 }
 
 interface PotCacheEntry {
@@ -118,12 +178,15 @@ export function updatePot(save: SaveGame, fighter: Fighter, opts: PotUpdateOptio
 
   // Scaled by the player's setting rather than ignoring it. The tier decides the relative effort,
   // the setting decides the total budget, and previously the setting was read nowhere at all.
-  const budget = save.settings.potPaths > 0 ? save.settings.potPaths / DEFAULT_SETTINGS.potPaths : 1;
-  const paths = Math.max(4, Math.round(POT_PATHS[tier] * clamp(budget, 0.25, 4)));
+  const budget = potPathsSetting(save) / DEFAULT_SETTINGS.potPaths;
+  const paths = Math.max(4, Math.round(POT_PATHS[tier] * budget));
   // The projection seed is derived from the save seed and the fighter id so the answer is
   // reproducible and does not depend on how many other fighters were processed first.
-  const rng = new Rng((hashString(`pot-${fighter.id}-${key}`) ^ save.seed) >>> 0);
-  const pot = estimatePot(fighter, save.date, paths, save.settings.potPercentile, rng, { stepWeeks: stepWeeksFor(tier) });
+  const rng = new Rng((hashString(`pot-${fighter.id}-${potInputsKey(save, fighter, tier)}`) ^ save.seed) >>> 0);
+  const pot = estimatePot(fighter, save.date, paths, potPercentileSetting(save), rng, {
+    stepWeeks: stepWeeksFor(tier),
+    difficultyScale: potDifficultyScale(save, fighter),
+  });
 
   fighter.pot = pot;
   fighter.potConfidence = potConfidenceFor(fighter, save.date);

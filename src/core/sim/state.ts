@@ -121,6 +121,11 @@ export interface SideState {
   aggression: number;
   paceTarget: number;
   wantsGround: boolean;
+  /**
+   * How much better this fighter's grappling matchup is than their striking matchup, in
+   * effective points. Positive means the ground is where they win. Refreshed with the tactics.
+   */
+  styleEdge: number;
   wantsDistance: boolean;
   protectingLead: boolean;
   desperate: boolean;

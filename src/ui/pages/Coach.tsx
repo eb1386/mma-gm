@@ -1,22 +1,30 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Rng } from '@core/rng';
-import { formatMoney } from '@core/types/common';
+import { DIVISION_BY_ID, type DivisionId } from '@core/config/divisions';
+import { formatDate, formatMoney } from '@core/types/common';
 import { RATING_LONG_LABEL } from '@core/types/fighter';
 import type { GymStaff } from '@core/types/world';
 import {
+  buyGymUpgrade,
   fireStaff,
   generateStaffCandidates,
   GYM_UPGRADES,
   happinessFactors,
   hireStaff,
   moveFighterToGym,
+  pitchCoolingDown,
+  pitchFighter,
+  pitchRefusedOn,
   recruitmentChance,
   runGymMonth,
   STAFF_ROLE_LABEL,
+  staffCandidateRng,
 } from '@core/world/gyms';
+import { Rng } from '@core/rng';
 import { estimateRatings } from '@core/world/scouting';
+import { displayedPot } from '@core/world/pot';
 import { useGame } from '../store';
+import { nameMatches } from '../search';
 import { Bar, DataTable, KeyValues, Notice, Panel, Rating, Tabs } from '../components';
 
 const HIRABLE: GymStaff['role'][] = [
@@ -44,6 +52,10 @@ export function CoachPage() {
   const [hireRole, setHireRole] = useState<GymStaff['role']>('striking-coach');
   const [candidates, setCandidates] = useState<GymStaff[]>([]);
   const [recruitTarget, setRecruitTarget] = useState('');
+  // Releasing a fighter or letting a coach go cannot be undone, so each asks once before it
+  // happens. Keyed by id, so only the row that was tapped asks.
+  const [confirmRelease, setConfirmRelease] = useState<string | null>(null);
+  const [confirmFire, setConfirmFire] = useState<string | null>(null);
 
   const gym = save.player.gymId ? save.gyms[save.player.gymId] : null;
   if (!gym) {
@@ -56,13 +68,18 @@ export function CoachPage() {
 
   const roster = gym.fighterIds.map((id) => save.fighters[id]).filter(Boolean);
   const staff = gym.staffIds.map((id) => save.staff[id]).filter(Boolean);
-  const monthly = useMemo(() => {
-    const salaries = staff.reduce((s, c) => s + c.salary / 12, 0);
-    return { salaries, overhead: gym.monthlyCosts };
-  }, [staff, gym.monthlyCosts]);
+  // Computed inline: a hook here, after the early return above, broke the rules of hooks, and the
+  // memo never cached anything because the staff list is a new array on every render.
+  const monthly = { salaries: staff.reduce((s, c) => s + c.salary / 12, 0), overhead: gym.monthlyCosts };
+  const inDebt = gym.balance < 0;
+  const changeTab = (next: string) => {
+    setTab(next);
+    setConfirmRelease(null);
+    setConfirmFire(null);
+  };
 
   const freeAgents = Object.values(save.fighters)
-    .filter((f) => !f.retired && f.activityStatus === 'active' && f.gymId !== gym.id)
+    .filter((f) => !f.retired && !f.circuit && f.activityStatus === 'active' && f.gymId !== gym.id)
     .sort((a, b) => b.popularity - a.popularity)
     .slice(0, 300);
 
@@ -89,7 +106,7 @@ export function CoachPage() {
           { key: 'finance', label: 'Finances' },
         ]}
         active={tab}
-        onChange={setTab}
+        onChange={changeTab}
       />
 
       {tab === 'roster' && (
@@ -100,10 +117,10 @@ export function CoachPage() {
             initialSort="ovr"
             columns={[
               { key: 'name', label: 'Fighter', sort: (f) => f.name, render: (f) => <Link to={`/fighter/${f.id}`}>{f.name}</Link> },
-              { key: 'div', label: 'Division', sort: (f) => f.divisionId, render: (f) => f.divisionId },
+              { key: 'div', label: 'Division', sort: (f) => DIVISION_BY_ID[f.divisionId]?.order ?? 0, render: (f) => divisionLabel(f.divisionId) },
               { key: 'rank', label: 'Rk', numeric: true, sort: (f) => (f.isChampion ? 0 : (f.ranking ?? 99)), render: (f) => (f.isChampion ? 'C' : (f.ranking ?? '-')) },
               { key: 'ovr', label: 'Ovr', numeric: true, sort: (f) => estimateRatings(save, f).ovr, render: (f) => <Rating value={estimateRatings(save, f).ovr} /> },
-              { key: 'pot', label: 'Pot', numeric: true, sort: (f) => f.pot, render: (f) => <Rating value={f.pot} /> },
+              { key: 'pot', label: 'Pot', numeric: true, sort: (f) => displayedPot(f), render: (f) => <Rating value={displayedPot(f)} /> },
               { key: 'lng', label: 'Lng', numeric: true, sort: (f) => f.longevity, render: (f) => <Rating value={f.longevity} /> },
               { key: 'happy', label: 'Happiness', numeric: true, sort: (f) => f.happiness, render: (f) => <Bar value={f.happiness} /> },
               { key: 'trust', label: 'Trust in you', numeric: true, sort: (f) => f.relationships.player, render: (f) => <Bar value={f.relationships.player} /> },
@@ -118,17 +135,30 @@ export function CoachPage() {
               {
                 key: 'release',
                 label: '',
-                render: (f) => (
-                  <button
-                    className="small danger"
-                    onClick={() => {
-                      mutate((s) => moveFighterToGym(s, f.id, null));
-                      showToast(`${f.name} has left the gym.`, 'info');
-                    }}
-                  >
-                    Release
-                  </button>
-                ),
+                render: (f) =>
+                  confirmRelease === f.id ? (
+                    <div className="row tight" style={{ maxWidth: 220 }}>
+                      <span className="small">Release {f.name}?</span>
+                      <button
+                        className="small danger"
+                        disabled={busy}
+                        onClick={() => {
+                          mutate((s) => moveFighterToGym(s, f.id, null));
+                          setConfirmRelease(null);
+                          showToast(`${f.name} has left the gym.`, 'info');
+                        }}
+                      >
+                        Confirm
+                      </button>
+                      <button className="small" onClick={() => setConfirmRelease(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="small danger" disabled={busy} onClick={() => setConfirmRelease(f.id)}>
+                      Release
+                    </button>
+                  ),
               },
             ]}
             empty="No fighters at the gym yet. Recruit from the recruiting tab."
@@ -153,17 +183,30 @@ export function CoachPage() {
                 {
                   key: 'fire',
                   label: '',
-                  render: (s) => (
-                    <button
-                      className="small danger"
-                      onClick={() => {
-                        mutate((sv) => fireStaff(sv, sv.gyms[gym.id], s.id));
-                        showToast(`${s.name} has been let go. The room noticed.`, 'info');
-                      }}
-                    >
-                      Release
-                    </button>
-                  ),
+                  render: (s) =>
+                    confirmFire === s.id ? (
+                      <div className="row tight" style={{ maxWidth: 220 }}>
+                        <span className="small">Let {s.name} go? Every fighter loses a little happiness.</span>
+                        <button
+                          className="small danger"
+                          disabled={busy}
+                          onClick={() => {
+                            mutate((sv) => fireStaff(sv, sv.gyms[gym.id], s.id));
+                            setConfirmFire(null);
+                            showToast(`${s.name} has been let go. The room noticed.`, 'info');
+                          }}
+                        >
+                          Confirm
+                        </button>
+                        <button className="small" onClick={() => setConfirmFire(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button className="small danger" disabled={busy} onClick={() => setConfirmFire(s.id)}>
+                        Release
+                      </button>
+                    ),
                 },
               ]}
             />
@@ -182,9 +225,7 @@ export function CoachPage() {
                 ))}
               </select>
               <button
-                onClick={() =>
-                  setCandidates(generateStaffCandidates(save, gym, hireRole, new Rng(`${save.seed}-${hireRole}-${save.date}`)))
-                }
+                onClick={() => setCandidates(generateStaffCandidates(save, gym, hireRole, staffCandidateRng(save, hireRole)))}
               >
                 Find candidates
               </button>
@@ -216,9 +257,11 @@ export function CoachPage() {
                       <td>
                         <button
                           className="small primary"
-                          disabled={gym.balance < c.salary / 4}
+                          disabled={busy || gym.balance < c.salary / 4}
                           onClick={() => {
                             mutate((s) => {
+                              // Checked again at the moment of hiring: a gym in debt has hiring frozen.
+                              if (s.gyms[gym.id].balance < c.salary / 4) return;
                               const hired = hireStaff(s, s.gyms[gym.id], c.role, new Rng(`${s.seed}-hire-${c.id}`), c.quality);
                               hired.name = c.name;
                               hired.salary = c.salary;
@@ -275,31 +318,32 @@ export function CoachPage() {
           </Panel>
 
           <Panel title="Upgrades">
-            <p className="small dim">Balance {formatMoney(gym.balance)}.</p>
+            <p className="small dim">
+              Balance {formatMoney(gym.balance)}.{inDebt ? ' The gym is in debt, so upgrades and hiring are frozen.' : ''}
+            </p>
             <table>
               <tbody>
-                {GYM_UPGRADES.map((u) => (
-                  <tr key={u.key}>
-                    <td>{u.label}</td>
-                    <td className="num">{formatMoney(u.cost)}</td>
-                    <td>
-                      <button
-                        className="small"
-                        disabled={gym.balance < u.cost}
-                        onClick={() => {
-                          mutate((s) => {
-                            const g = s.gyms[gym.id];
-                            g.balance -= u.cost;
-                            u.apply(g);
-                          });
-                          showToast(`${u.label} complete.`, 'good');
-                        }}
-                      >
-                        Buy
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {GYM_UPGRADES.map((u) => {
+                  const maxed = u.isMaxed(gym);
+                  return (
+                    <tr key={u.key}>
+                      <td>{u.label}</td>
+                      <td className="num">{maxed ? <span className="faint">Maxed</span> : formatMoney(u.cost)}</td>
+                      <td>
+                        <button
+                          className="small"
+                          disabled={busy || maxed || gym.balance < u.cost}
+                          onClick={() => {
+                            const result = mutate((s) => buyGymUpgrade(s, gym.id, u.key));
+                            if (result) showToast(result.message, result.ok ? 'good' : 'bad');
+                          }}
+                        >
+                          {maxed ? 'Maxed' : 'Buy'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             <div className="field mt">
@@ -334,13 +378,13 @@ export function CoachPage() {
             </span>
           </div>
           <DataTable
-            rows={freeAgents.filter((f) => !recruitTarget || f.name.toLowerCase().includes(recruitTarget.toLowerCase()))}
+            rows={freeAgents.filter((f) => nameMatches(f.name, recruitTarget))}
             rowKey={(f) => f.id}
             initialSort="chance"
             maxHeight={520}
             columns={[
               { key: 'name', label: 'Fighter', sort: (f) => f.name, render: (f) => <Link to={`/fighter/${f.id}`}>{f.name}</Link> },
-              { key: 'div', label: 'Division', sort: (f) => f.divisionId, render: (f) => f.divisionId },
+              { key: 'div', label: 'Division', sort: (f) => DIVISION_BY_ID[f.divisionId]?.order ?? 0, render: (f) => divisionLabel(f.divisionId) },
               { key: 'rank', label: 'Rk', numeric: true, sort: (f) => (f.isChampion ? 0 : (f.ranking ?? 99)), render: (f) => (f.isChampion ? 'C' : (f.ranking ?? '-')) },
               { key: 'ovr', label: 'Ovr', numeric: true, sort: (f) => estimateRatings(save, f).ovr, render: (f) => <Rating value={estimateRatings(save, f).ovr} /> },
               { key: 'pot', label: 'Pot', numeric: true, sort: (f) => estimateRatings(save, f).pot, render: (f) => <Rating value={estimateRatings(save, f).pot} /> },
@@ -356,28 +400,23 @@ export function CoachPage() {
               {
                 key: 'pitch',
                 label: '',
-                render: (f) => (
-                  <button
-                    className="small"
-                    disabled={roster.length >= gym.capacity}
-                    onClick={() => {
-                      const chance = recruitmentChance(save, gym, f);
-                      mutate((s) => {
-                        const rng = new Rng(s.rng);
-                        if (rng.chance(chance)) {
-                          moveFighterToGym(s, f.id, gym.id);
-                          s.fighters[f.id].relationships.player = 55;
-                          showToast(`${f.name} has joined ${gym.name}.`, 'good');
-                        } else {
-                          showToast(`${f.name} turned the pitch down.`, 'bad');
-                        }
-                        s.rng = rng.getState();
-                      });
-                    }}
-                  >
-                    Pitch
-                  </button>
-                ),
+                render: (f) => {
+                  // Shown as text, not a tooltip, because a title never appears on a phone.
+                  const refusedOn = pitchCoolingDown(save, gym, f) ? pitchRefusedOn(save, gym, f) : null;
+                  if (refusedOn) return <span className="small faint nowrap">Turned you down on {formatDate(refusedOn)}</span>;
+                  return (
+                    <button
+                      className="small"
+                      disabled={busy || roster.length >= gym.capacity}
+                      onClick={() => {
+                        const result = mutate((s) => pitchFighter(s, gym.id, f.id));
+                        if (result) showToast(result.message, result.joined ? 'good' : 'bad');
+                      }}
+                    >
+                      Pitch
+                    </button>
+                  );
+                },
               },
             ]}
           />
@@ -434,4 +473,9 @@ export function CoachPage() {
       )}
     </div>
   );
+}
+
+/** A division's short name for the wide tables here, falling back to the id for a retired one. */
+function divisionLabel(id: DivisionId): string {
+  return DIVISION_BY_ID[id]?.abbr ?? id;
 }

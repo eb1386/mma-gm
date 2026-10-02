@@ -327,6 +327,34 @@ export const METHOD_LABEL: Record<FinishMethod, string> = {
 };
 
 /**
+ * The method as it reads after "by" in a sentence: "beats X by TKO", "wins by unanimous decision".
+ *
+ * Headlines used to lowercase METHOD_LABEL, which turned the acronyms into "by ko" and
+ * "by tko (ground and pound)". A table of its own keeps KO, TKO and DQ in capitals and puts a
+ * decision the way a broadcaster says it. Every key is required so a new method cannot be missed.
+ */
+export const METHOD_PHRASE: Record<FinishMethod, string> = {
+  ko: 'KO',
+  'tko-strikes': 'TKO',
+  'tko-ground-strikes': 'TKO (ground and pound)',
+  submission: 'submission',
+  'technical-submission': 'technical submission',
+  'doctor-stoppage': 'doctor stoppage',
+  'corner-stoppage': 'corner stoppage',
+  retirement: 'TKO (retirement)',
+  'decision-unanimous': 'unanimous decision',
+  'decision-split': 'split decision',
+  'decision-majority': 'majority decision',
+  'draw-unanimous': 'unanimous draw',
+  'draw-split': 'split draw',
+  'draw-majority': 'majority draw',
+  disqualification: 'DQ',
+  'no-contest': 'no contest',
+  'technical-decision': 'technical decision',
+  'technical-draw': 'technical draw',
+};
+
+/**
  * True for any championship bout, undisputed or interim.
  *
  * `isTitleFight` on its own means the undisputed title, because an interim bout sets it
@@ -422,6 +450,14 @@ export interface FightResult {
   fightQuality: number;
   narrativeSummary: string;
   seed: number;
+  /**
+   * Each side's place in the division's rankings when the bout started: 0 for the champion, the
+   * rank for a ranked fighter, null for an unranked one. Kept on the result because the upset
+   * record needs the gap as it stood that night, and the rankings move straight after. Optional,
+   * because results written before this carry no ranks.
+   */
+  rankA?: number | null;
+  rankB?: number | null;
 }
 
 export type BoutStatus = 'scheduled' | 'completed' | 'canceled' | 'postponed';
@@ -443,6 +479,11 @@ export interface Bout {
    * Optional, because saves written before this carry no such agreement.
    */
   roundsAgreed?: boolean;
+  /**
+   * Accepted while injured, on condition of being medically cleared in time. Enforced when fight
+   * week begins. Optional, because saves written before this carry no such condition.
+   */
+  medicallyContingent?: boolean;
   isTitleFight: boolean;
   isInterimTitleFight: boolean;
   /**
@@ -465,9 +506,51 @@ export interface Bout {
   purseB: { show: number; win: number };
   weighInA: { madeWeight: boolean; weightLb: number; cutQuality: number } | null;
   weighInB: { madeWeight: boolean; weightLb: number; cutQuality: number } | null;
+  /**
+   * Show money each side forfeited by missing weight on the fallback weigh in, already taken off
+   * that side's purse. Kept so the ledger can show the forfeit and the credit as lines of their
+   * own. Optional; absent means nobody forfeited anything on that path.
+   */
+  forfeitA?: number;
+  forfeitB?: number;
   bookingReason: string;
   /** The structured matchmaking category, so the interface can label why this fight exists. */
   bookingKind?: string;
   /** The judges and referee assigned to this bout, resolved against `save.officials`. */
   officials?: { judgeIds: string[]; refereeId: string | null };
+  /**
+   * An amateur bout on the regional circuit. It counts toward the amateur record only, pays no
+   * purse, and never touches the professional record. Optional; absent means professional.
+   */
+  isAmateur?: boolean;
+  /**
+   * A regional championship. Deliberately separate from `isTitleFight`, which means the main
+   * promotion's belt everywhere it is read: rankings, contenders, weigh in limits and the fight
+   * page. A regional belt is settled by the regional circuit alone.
+   */
+  regionalTitle?: boolean;
+  /**
+   * Both corners as they stood the moment before the player's fight was simulated.
+   *
+   * The result is written to the save before playback starts, so the record, ranking, belt and
+   * longevity on the fighters already show the outcome while round one is still being replayed.
+   * The fight page bills the bout from this until the result is revealed, and the aftermath
+   * compares against it. Stored on the bout rather than held in the page so leaving and coming
+   * back mid playback still hides the result. Optional; absent on older saves and on bouts the
+   * player did not fight, where the live values are used.
+   */
+  preFight?: PreFightSnapshot;
+}
+
+export interface PreFightSnapshot {
+  recordA: { wins: number; losses: number; draws: number };
+  recordB: { wins: number; losses: number; draws: number };
+  amateurRecordA?: { wins: number; losses: number; draws: number };
+  amateurRecordB?: { wins: number; losses: number; draws: number };
+  longevityA: number;
+  longevityB: number;
+  rankingA: number | null;
+  rankingB: number | null;
+  championA: boolean;
+  championB: boolean;
 }

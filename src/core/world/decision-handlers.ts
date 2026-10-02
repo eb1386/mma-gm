@@ -5,10 +5,11 @@ import { registerDecisionHandler } from './decisions';
 import { applyCampChoice } from './camp-life';
 import { applyRoomChoice } from './room-decisions';
 import { applyInjuryDecision, type InjuryChoiceKey } from './injury-flow';
-import { acceptSponsor, declineSponsor } from './finance';
+import { acceptSponsor, canSignSponsor, declineSponsor } from './finance';
 import { replyToSocialItem } from './social';
 import { acceptSanction, appealSanction } from './antidoping';
 import { applyCalloutResponse, type CalloutResponse } from './relationships';
+import { applyForcedMoveChoice } from './weightclass';
 
 /**
  * Consequence handlers, one per inbox category.
@@ -71,6 +72,9 @@ registerDecisionHandler('career', (save, message, choiceKey, rng) => {
     return reaction ?? 'Posted.';
   }
   if (message.linkedCalloutId) return calloutChoice(save, message, choiceKey, rng);
+  const me = player(save);
+  const move = me ? applyForcedMoveChoice(save, me, choiceKey, rng) : null;
+  if (move !== null) return move;
   const room = applyRoomChoice(save, message, choiceKey, rng);
   if (room !== null) return room;
   return applyCampChoice(save, message.id, choiceKey, rng);
@@ -87,6 +91,11 @@ registerDecisionHandler('news', (save, message, choiceKey, rng) => {
 function sponsorChoice(save: SaveGame, message: InboxMessage, choiceKey: string): string {
   const id = message.linkedSponsorId!;
   if (choiceKey === 'sponsor-accept') {
+    const offer = save.sponsors?.[id];
+    if (!offer) return 'That offer is no longer on the table.';
+    // The actual reason, so a refusal over the deal cap or exclusivity is not reported as a lapse.
+    const refused = canSignSponsor(save, offer);
+    if (refused) return refused;
     const signed = acceptSponsor(save, id);
     return signed ? `Signed with ${signed.name}.` : 'That offer is no longer on the table.';
   }

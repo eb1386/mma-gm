@@ -27,6 +27,29 @@
   --radius: 3px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  /* Rating bands, the real fighter tag and the play by play highlights. These were literals tuned
+     for the dark background, so in the light theme the top Ovr and Pot numbers were pale green on
+     white and the decisive commentary lines all but vanished. As tokens the light theme can give
+     each one a darker value. */
+  --rating-90: #7ee0a0;
+  --rating-80: #63c88a;
+  --rating-70: #b9cf7a;
+  --rating-50: #cf9a3c;
+  --rating-0: #d05c5c;
+  --tag-real: #7aa9e6;
+  --tag-real-border: #3d6ea8;
+  --pbp-major: #ffd9a0;
+  --pbp-decisive: #ffb4b4;
+  /* Names the later rules were written against. None of them was ever defined, and a var() with
+     no definition and no fallback makes the whole declaration invalid, so the operation panel,
+     the career banner, save cards, the footer and the rivalry bars had no border or background at
+     all. They alias the real tokens, so both themes pick them up. */
+  --line: var(--border);
+  --panel: var(--bg-raised);
+  --panel-2: var(--bg-inset);
+  --panel-alt: var(--bg-inset);
+  --dim: var(--text-dim);
+  --muted: var(--text-faint);
   color-scheme: dark;
 }
 
@@ -42,6 +65,17 @@
   --row-alt: #f9fafb;
   --row-hover: #eef1f6;
   --link: #1b5fbe;
+  --gold: #8a6d00;
+  --warn: #9a5b00;
+  --rating-90: #1f8a4c;
+  --rating-80: #2a7a46;
+  --rating-70: #6b7d1f;
+  --rating-50: #9a5b00;
+  --rating-0: #b42318;
+  --tag-real: #1b5fbe;
+  --tag-real-border: #6f9ad8;
+  --pbp-major: #9a5b00;
+  --pbp-decisive: #b42318;
   color-scheme: light;
 }
 
@@ -111,20 +145,6 @@ p {
   position: sticky;
   top: 0;
   height: 100vh;
-}
-
-.sidebar-brand {
-  padding: 6px 12px 10px;
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.02em;
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.sidebar-brand .mark {
-  color: var(--accent);
 }
 
 .nav-group {
@@ -265,6 +285,28 @@ button.danger {
 button.small {
   padding: 1px 6px;
   font-size: 11px;
+}
+/* Social actions: each button with its description beside it, since a title tooltip never shows on
+   touch. The rows wrap, so the description drops under the button on a narrow screen. */
+.social-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.social-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.social-action > button {
+  flex: 0 0 auto;
+}
+@media (max-width: 860px) {
+  /* Specific enough to win over the phone rule for small buttons later in the file. */
+  .social-action > button.small {
+    min-height: 44px;
+  }
 }
 
 select,
@@ -407,6 +449,21 @@ tbody tr.highlight:hover {
 td.wrap {
   white-space: normal;
 }
+/* The regional readiness breakdown. The label and its detail wrap, and the points column keeps a
+   fixed width, so on a phone the points stay inside the panel instead of past its right edge. */
+.factor-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.factor-table td:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.factor-table td.num {
+  width: 56px;
+  white-space: nowrap;
+  vertical-align: top;
+}
 
 .sort-arrow {
   color: var(--accent);
@@ -439,8 +496,8 @@ td.wrap {
   color: var(--warn);
 }
 .tag.real {
-  border-color: #3d6ea8;
-  color: #7aa9e6;
+  border-color: var(--tag-real-border);
+  color: var(--tag-real);
 }
 .tag.fictional {
   border-color: var(--border-strong);
@@ -511,24 +568,24 @@ td.wrap {
   font-variant-numeric: tabular-nums;
 }
 .rating.r90 {
-  color: #7ee0a0;
+  color: var(--rating-90);
   font-weight: 700;
 }
 .rating.r80 {
-  color: #63c88a;
+  color: var(--rating-80);
   font-weight: 600;
 }
 .rating.r70 {
-  color: #b9cf7a;
+  color: var(--rating-70);
 }
 .rating.r60 {
   color: var(--text);
 }
 .rating.r50 {
-  color: #cf9a3c;
+  color: var(--rating-50);
 }
 .rating.r0 {
-  color: #d05c5c;
+  color: var(--rating-0);
 }
 
 .bar {
@@ -593,6 +650,11 @@ td.wrap {
 .inbox-item.resolved {
   opacity: 0.55;
 }
+/* The open message. A fill and an inset outline, so it reads differently from the unread left edge. */
+.inbox-item.active {
+  background: var(--row-hover);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
 .inbox-item .subject {
   font-weight: 600;
 }
@@ -600,18 +662,10 @@ td.wrap {
   font-size: 11px;
   color: var(--text-faint);
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  column-gap: 8px;
 }
 
-.play-by-play {
-  font-size: 12.5px;
-  max-height: 480px;
-  overflow-y: auto;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 6px 9px;
-}
 .pbp-line {
   display: flex;
   gap: 8px;
@@ -625,10 +679,10 @@ td.wrap {
   flex: 0 0 34px;
 }
 .pbp-line.major {
-  color: #ffd9a0;
+  color: var(--pbp-major);
 }
 .pbp-line.decisive {
-  color: #ffb4b4;
+  color: var(--pbp-decisive);
   font-weight: 600;
 }
 .pbp-round {
@@ -795,71 +849,71 @@ td.wrap {
   overflow-y: auto;
 }
 
+/* Game plan chips are toggle buttons, so they reset what the global button rule gives them and set
+   their own look, rather than inheriting a button's padding on desktop and its 42px height on a
+   phone. */
+.plan-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 .plan-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 2px 7px;
+  min-height: 0;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.3;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
-  font-size: 11px;
   cursor: pointer;
   background: var(--bg-inset);
   color: var(--text-dim);
+  white-space: nowrap;
 }
-.plan-chip.on {
+.plan-chip:hover:not(:disabled) {
+  background: var(--row-hover);
+  color: var(--text);
+}
+.plan-chip.on,
+.plan-chip.on:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--text);
   background: rgba(211, 32, 42, 0.14);
 }
-
-/* The menu button only exists on a narrow screen, where the sidebar is off canvas. */
-.nav-toggle {
-  display: none;
+.plan-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-.nav-scrim {
-  display: none;
+.plan-count {
+  margin: 6px 0 0;
 }
-
-@media (max-width: 860px) {
-  /* The sidebar slides in rather than disappearing. Hiding it outright left a phone with
-     no navigation of any kind. */
-  .sidebar {
-    position: fixed;
-    top: 0;
-    bottom: 0;
+.plan-descriptions {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+/* World creation is one synchronous pass, so the bar shows that work is happening rather than a
+   percentage it cannot know. */
+.bar.indeterminate > span {
+  width: 35%;
+  animation: bar-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes bar-indeterminate {
+  0% {
+    left: -35%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bar.indeterminate > span {
+    animation: none;
     left: 0;
-    z-index: 40;
-    width: 240px;
-    max-width: 82vw;
-    transform: translateX(-100%);
-    transition: transform 160ms ease;
-    overflow-y: auto;
-  }
-  .sidebar.open {
-    transform: translateX(0);
-  }
-  .nav-toggle {
-    display: block;
-    position: fixed;
-    top: 6px;
-    left: 6px;
-    z-index: 50;
-    padding: 6px 10px;
-    font-size: 13px;
-  }
-  .nav-scrim {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 39;
-    background: rgba(0, 0, 0, 0.45);
-  }
-  .topbar {
-    padding-left: 64px;
-  }
-  .page {
-    padding: 8px;
+    width: 100%;
+    opacity: 0.5;
   }
 }
 
@@ -878,6 +932,36 @@ td.wrap {
 .operation-panel.error { border-color: var(--bad); }
 .op-bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .op-bar > div { height: 100%; background: var(--accent); transition: width 120ms linear; }
+
+/* Toasts and the operation panel float in one fixed layer. In the page flow they sat at the top
+   of the document, so on a phone (where the header bar is hidden) and on any scrolled page the
+   reply to a tap lower down was rendered off screen and the player saw nothing happen. On a wide
+   screen the layer sits in the bottom right corner, clear of the header's advance controls at any
+   width. The layer itself never takes a tap; only the notices in it do. */
+.notify-layer {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.notify-layer > * {
+  pointer-events: auto;
+  margin: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.notify-layer > .notice {
+  background: var(--bg-raised);
+}
+.notify-layer > .toast {
+  cursor: pointer;
+}
 
 .advance-bar .blocked-note {
   font-size: 12px;
@@ -978,6 +1062,7 @@ td.wrap {
   color: inherit;
   text-align: left;
   font: inherit;
+  letter-spacing: 0.02em;
 }
 .sidebar-brand:hover { background: var(--panel); }
 .octagon-mark { color: var(--accent); flex: 0 0 auto; }
@@ -991,8 +1076,11 @@ td.wrap {
 .landing-head p { margin: 2px 0 0; }
 .landing-actions { margin-bottom: 16px; flex-wrap: wrap; }
 
-.save-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+/* The track never asks for more than the screen has. A fixed 280px minimum on a phone with 16px
+   gutters made a card wider than its column, and the long value cells ran off the right edge. */
+.save-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
 .save-card {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 5px;
   padding: 10px;
@@ -1004,17 +1092,46 @@ td.wrap {
 .save-card.active { border-color: var(--accent); }
 .save-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .save-card-table { width: 100%; font-size: 12px; }
-.save-card-table td:first-child { color: var(--dim); white-space: nowrap; padding-right: 8px; }
+.save-card-table td:first-child { color: var(--dim); white-space: nowrap; padding-right: 8px; vertical-align: top; }
+/* Table cells do not wrap anywhere else in the game. A situation sentence on a card has to. */
+.save-card-table td:last-child { white-space: normal; overflow-wrap: anywhere; }
 .save-card-actions { flex-wrap: wrap; }
+.save-card-head strong { min-width: 0; overflow-wrap: anywhere; }
+/* 16px stops iOS zooming the page in on focus, and the margin keeps the field clear of the slim
+   phone header when the browser scrolls it into view. */
+.save-card-rename {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  scroll-margin-top: calc(64px + env(safe-area-inset-top, 0px));
+}
+
+/* The save list as cards on a phone. Its table put Load, Export and Delete in a seventh column
+   that started off the right edge of the screen. */
+.saves-cards { display: none; }
+@media (max-width: 860px) {
+  .saves-table { display: none; }
+  .saves-cards { display: grid; margin-bottom: 12px; }
+}
+
+/* Stopping a long advance. A full size tap target, since it is pressed while the game is busy. */
+button.op-cancel { min-height: 44px; min-width: 88px; align-self: flex-start; }
+.save-error-chip a { color: inherit; text-decoration: underline; }
+.storage-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+.storage-notice p { margin: 0; flex: 1 1 240px; }
 
 button.urgent { box-shadow: 0 0 0 1px var(--warn) inset; }
 
-/* Commentary scroll container and the jump control. */
+/* Commentary scroll container and the jump control. One rule: an earlier duplicate held the
+   font size and background while this one held the height and scrolling, which made both easy to
+   break by editing only one of them. */
 .play-by-play {
+  font-size: 12.5px;
   max-height: 420px;
   overflow-y: auto;
   scroll-behavior: smooth;
-  border: 1px solid var(--line);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px;
 }
@@ -1058,6 +1175,9 @@ button.urgent { box-shadow: 0 0 0 1px var(--warn) inset; }
 .rivalry-fill.warn {
   background: var(--warn);
 }
+.rivalry-fill.faint {
+  background: var(--text-faint);
+}
 .rivalry-note {
   margin: 8px 0;
   padding: 8px 10px;
@@ -1085,4 +1205,625 @@ button.urgent { box-shadow: 0 0 0 1px var(--warn) inset; }
 }
 .link-button:hover {
   border-color: var(--accent);
+}
+
+ul.plain {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+ul.plain li {
+  padding: 4px 0;
+}
+
+/* --------------------------------------------------------------- phones and the iPhone app
+
+   Below 860px the game uses a phone layout rather than a squeezed desktop: a slim header, the
+   career's next step docked above the thumb, and a tab bar. The desktop header, footer text and
+   sidebar column are not shown. Safe areas are handled once at the root so the notch, the Dynamic
+   Island and the home indicator never cover anything, on any screen. */
+
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+.btn,
+a,
+input,
+select,
+label {
+  touch-action: manipulation;
+}
+.panel-body {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* A grid cell may shrink below the width of a table inside it, so the table scrolls inside its
+   panel instead of pushing the whole page wider than the screen. */
+.grid > * {
+  min-width: 0;
+}
+/* Bars are spans, and an inline element ignores its height, so outside a flex row every bar in a
+   key and value list rendered at zero height: morale, popularity and leverage looked empty. */
+.bar {
+  display: inline-block;
+  vertical-align: middle;
+  width: 100%;
+  max-width: 160px;
+}
+
+#root {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top, 0px);
+  background: var(--bg-raised);
+  z-index: 70;
+  pointer-events: none;
+}
+.topbar {
+  top: env(safe-area-inset-top, 0px);
+}
+.sidebar {
+  top: env(safe-area-inset-top, 0px);
+  height: calc(100dvh - env(safe-area-inset-top, 0px));
+}
+.landing,
+.splash {
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+}
+
+.m-header,
+.m-tabbar,
+.m-dock,
+.m-only,
+.nav-scrim {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  body {
+    font-size: 15px;
+  }
+  .d-only,
+  .topbar {
+    display: none !important;
+  }
+  .m-only {
+    display: block;
+  }
+  /* iOS zooms any focused field below 16px and does not zoom back out. */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 22px;
+    height: 22px;
+  }
+  input[type='range'] {
+    min-height: 34px;
+  }
+  button,
+  .btn {
+    font-size: 15px;
+    min-height: 42px;
+    padding: 8px 14px;
+  }
+  button.small,
+  .btn.small {
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 14px;
+  }
+  /* After the button rules, so a chip is a comfortable tap target without growing to a full
+     button's height across seventeen of them. */
+  .plan-chip {
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 14px;
+  }
+  .plan-chips {
+    gap: 8px;
+  }
+  table {
+    font-size: 13px;
+  }
+
+  /* The header. */
+  .m-header {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 52px;
+    padding: 0 4px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+  }
+  .m-icon-button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    flex: 0 0 44px;
+    border: none;
+    background: none;
+    color: var(--text);
+    border-radius: 10px;
+  }
+  .m-header-spacer {
+    width: 44px;
+    flex: 0 0 44px;
+  }
+  .m-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.2;
+  }
+  .m-title-name,
+  .m-title-sub {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .m-title-name {
+    font-weight: 650;
+    font-size: 16px;
+  }
+  .m-title-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .m-badge {
+    position: absolute;
+    top: 3px;
+    right: 1px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+  }
+
+  /* The tab bar. */
+  .m-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 35;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    background: var(--bg-raised);
+    border-top: 1px solid var(--border);
+  }
+  .m-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 54px;
+    min-height: 54px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: var(--text-dim);
+    font-size: 11px;
+    text-decoration: none;
+  }
+  .m-tab:hover {
+    text-decoration: none;
+    background: none;
+  }
+  .m-tab.active {
+    color: var(--accent);
+  }
+  .m-tab-icon {
+    position: relative;
+    display: inline-flex;
+  }
+  .m-tab-icon .m-badge {
+    top: -6px;
+    right: -12px;
+  }
+
+  /* The next step, docked above the tab bar. */
+  .m-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(55px + env(safe-area-inset-bottom, 0px));
+    z-index: 34;
+    display: block;
+    padding: 8px max(10px, env(safe-area-inset-right, 0px)) 8px max(10px, env(safe-area-inset-left, 0px));
+    /* Solid, never translucent: content scrolling behind a see through dock read as text drawn
+       over the buttons. */
+    background: var(--bg-raised);
+    box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.25);
+    border-top: 1px solid var(--border);
+  }
+  .m-dock-note {
+    margin: 0 2px 6px;
+    font-size: 12px;
+    color: var(--warn);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m-dock-row {
+    display: flex;
+    gap: 8px;
+  }
+  .m-dock-primary {
+    flex: 1;
+    min-width: 0;
+    min-height: 48px;
+    font-size: 16px;
+    font-weight: 650;
+    border-radius: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m-dock-cancel {
+    min-height: 48px;
+    min-width: 88px;
+    border-radius: 12px;
+    font-weight: 650;
+  }
+  .m-dock-time {
+    background: var(--bg-inset);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    min-height: 48px;
+    padding: 0;
+    border-radius: 12px;
+  }
+  /* Room at the bottom of every page for the dock and the tab bar. */
+  .main {
+    padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Only the tab bar when the dock has stepped aside. A browser without :has keeps the larger room. */
+  .app:not(:has(.m-dock)) .main {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+  .app:not(:has(.m-dock)) .jump-to-live {
+    bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The menu slides over everything, including the dock and the tab bar. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    width: min(86vw, 330px);
+    height: 100dvh;
+    padding-top: calc(8px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-102%);
+    /* Closed, the menu is hidden as well as moved. Moved alone, its shadow showed as a grey strip
+       down the left edge of every page, and its forty links stayed in the Tab and VoiceOver order
+       ahead of the page. The visibility change waits for the slide to finish. */
+    visibility: hidden;
+    transition: transform 180ms ease, visibility 0s linear 180ms;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 180ms ease, visibility 0s;
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.35);
+  }
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .m-menu-search {
+    padding: 4px 12px 8px;
+  }
+  .m-menu-search input {
+    width: 100%;
+  }
+  .nav-link {
+    padding: 11px 16px;
+    font-size: 16px;
+  }
+  .nav-group {
+    font-size: 11px;
+    padding: 10px 16px 4px;
+  }
+
+  /* An action sheet for advancing by a set span. */
+  .m-sheet-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: flex-end;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .m-sheet {
+    width: 100%;
+    overscroll-behavior: contain;
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: var(--bg-raised);
+    border-radius: 16px 16px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .m-sheet-title {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 4px 0;
+  }
+  .m-sheet-option {
+    min-height: 52px;
+    font-size: 17px;
+    border-radius: 12px;
+  }
+  .m-sheet-cancel {
+    margin-top: 4px;
+    font-weight: 650;
+  }
+
+  /* A select in a row of controls takes the room it needs instead of clipping its own label. */
+  .row > select {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Anything that sticks to the bottom of the screen has to sit above the dock and the tab bar. */
+  .jump-to-live {
+    bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The commentary follows its own newest line, so the box has to end above the tab bar. At 420px
+     on a short phone the newest line sat below the fold with the speed controls above it. The
+     260px leaves room for the slim header, the wrapped speed controls and the tab bar. */
+  .play-by-play {
+    max-height: min(420px, calc(100dvh - 260px - env(safe-area-inset-bottom, 0px)));
+  }
+  /* The fight page scrolls the commentary or the result into view when the fight starts. The
+     slim header is sticky, so the target stops below it rather than under it. */
+  .scroll-anchor {
+    scroll-margin-top: calc(60px + env(safe-area-inset-top, 0px));
+  }
+
+  /* Notices sit just above the thumb: above the dock and the tab bar inside a career, above the
+     jump to live control on a fight, and near the bottom edge on the screens outside a career.
+     The tab bar is 55px tall, the dock 65px, and 89px when it carries its blocked note. */
+  .notify-layer {
+    left: max(12px, env(safe-area-inset-left, 0px));
+    right: max(12px, env(safe-area-inset-right, 0px));
+    width: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .app .notify-layer {
+    bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+  }
+  .app:has(.m-dock-note) .notify-layer {
+    bottom: calc(152px + env(safe-area-inset-bottom, 0px));
+  }
+  .app:not(:has(.m-dock)) .notify-layer {
+    bottom: calc(63px + env(safe-area-inset-bottom, 0px));
+  }
+  .app:has(.jump-to-live) .notify-layer {
+    bottom: calc(190px + env(safe-area-inset-bottom, 0px));
+  }
+  .app:not(:has(.m-dock)):has(.jump-to-live) .notify-layer {
+    bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The career banner stacks on a phone. As one row the button kept its full width and squeezed
+     the reason into a 64px column, one word per line, and pushed the page wider than an iPhone SE.
+     The button stays: the dock is absent on the page the next step leads to, and this is then
+     the only control for it. */
+  .career-banner {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .career-banner .why {
+    flex: 1 1 100%;
+    order: 2;
+    min-width: 0;
+  }
+  .career-banner > button {
+    flex: 1 1 100%;
+    order: 3;
+    white-space: normal;
+    min-height: 44px;
+  }
+
+  /* Content. */
+  .page {
+    padding: 12px max(12px, env(safe-area-inset-right, 0px)) 12px max(12px, env(safe-area-inset-left, 0px));
+  }
+  .page-head h1 {
+    font-size: 21px;
+  }
+  .grid.c2,
+  .grid.c3,
+  .grid.c4 {
+    grid-template-columns: 1fr;
+  }
+  .app-footer {
+    padding: 12px 16px;
+  }
+  .splash {
+    max-width: 100%;
+  }
+}
+
+/* ------------------------------------------------------ reading pages */
+
+/* A long DataTable mounts its first rows and offers the rest behind one button. */
+.table-more {
+  padding: 8px;
+  text-align: center;
+}
+/* The fighter links beside a news item stack one name per line instead of widening the column. */
+.news-links-col {
+  max-width: 160px;
+}
+.news-link {
+  display: inline-block;
+  margin-right: 8px;
+}
+.news-links {
+  margin-top: 2px;
+}
+.health-bar {
+  width: 90px;
+}
+.inbox-back {
+  min-height: 44px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 860px) {
+  /* Columns that add detail but never decide anything give their width to the ones that do. */
+  .col-wide {
+    display: none;
+  }
+  .cal-main {
+    white-space: normal;
+    margin-top: 2px;
+  }
+  .health-bar {
+    width: 56px;
+  }
+
+  /* The inbox shows one side at a time: the list, or the open message with a way back. */
+  .inbox-grid.has-selection > :first-child,
+  .inbox-grid:not(.has-selection) > :last-child {
+    display: none;
+  }
+
+  /* Event card: each bout becomes three lines. The division and tags, then the two fighters with
+     their Ovr, then the result and the button. A full width ::before, ordered between the second
+     and third lines, forces the break. */
+  .card-table,
+  .card-table tbody {
+    display: block;
+  }
+  .card-table thead {
+    display: none;
+  }
+  .card-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 6px;
+    row-gap: 3px;
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-table tr::before {
+    content: '';
+    order: 7;
+    flex-basis: 100%;
+    height: 0;
+  }
+  .card-table td {
+    padding: 0;
+    border: 0;
+  }
+  .card-table td:empty {
+    display: none;
+  }
+  .card-table .bt-div {
+    order: 1;
+    flex-basis: 100%;
+  }
+  .card-table .bt-name {
+    white-space: normal;
+    font-weight: 600;
+  }
+  .card-table .bt-a {
+    order: 2;
+  }
+  .card-table .bt-ovr-a {
+    order: 3;
+  }
+  .card-table .bt-vs {
+    order: 4;
+  }
+  .card-table .bt-b {
+    order: 5;
+  }
+  .card-table .bt-ovr-b {
+    order: 6;
+  }
+  .card-table .bt-res {
+    order: 8;
+  }
+  .card-table .bt-rd {
+    order: 9;
+  }
+  .card-table .bt-rd::before {
+    content: 'R';
+  }
+  .card-table .bt-time {
+    order: 10;
+  }
+  .card-table .bt-act {
+    order: 11;
+    margin-left: auto;
+  }
+  /* Booking notes: the reason and any replacement sit under the matchup. */
+  .booking-table td {
+    display: block;
+    white-space: normal;
+    border-bottom: 0;
+  }
+  .booking-table tr {
+    display: block;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
 }

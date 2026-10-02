@@ -205,3 +205,19 @@ export function formatPercent(v: number | null | undefined, digits = 0): string 
   if (v === null || v === undefined || !Number.isFinite(v)) return '-';
   return `${(v * 100).toFixed(digits)}%`;
 }
+
+/**
+ * Joins two pieces of prose as consecutive sentences.
+ *
+ * Booking reasons come from several places, and some are full sentences ending in a period
+ * while others are fragments. Appending with a fixed ". " gave "contender.. Undisputed" in
+ * offers and booking notes, so the trailing period and space of the first part are stripped
+ * and exactly one is put back.
+ */
+export function joinSentence(a: string, b: string): string {
+  const head = a.replace(/[.\s]+$/, '');
+  const tail = b.trim();
+  if (!head) return tail;
+  if (!tail) return `${head}.`;
+  return `${head}. ${tail}`;
+}

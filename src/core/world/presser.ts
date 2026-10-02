@@ -1,12 +1,15 @@
 import { hashString, Rng } from '../rng';
-import { daysBetween, type BoutId, type IsoDate } from '../types/common';
+import { ageOn, daysBetween, type BoutId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { escalateRivalry, findRivalry, hypeStore, addHypeMoment } from './hype';
 import { applyRelationship } from './relationships';
 import { TONE_LABEL, type SocialEffects, type SocialTone } from './social';
-import { record } from './finance';
+import { record, sponsorsFor } from './finance';
 import { addInboxMessage } from './inbox';
+import { fillPronouns, pronouns } from './pronouns';
+import { promotionConfig } from './regional';
+import { PROMOTION_NAME } from '../config/branding';
 
 /**
  * Press conferences and media obligations.
@@ -95,6 +98,11 @@ interface QuestionTemplate {
   weight?: number;
 }
 
+/** The fighter's age today. The snapshot age is only the fallback for a fighter with no birth date. */
+function ageNow(c: PresserContext): number {
+  return ageOn(c.me.birthDate, c.save.date) ?? c.me.ageAtSnapshot ?? 30;
+}
+
 export interface PresserContext {
   save: SaveGame;
   me: Fighter;
@@ -113,24 +121,47 @@ export interface PresserContext {
   daysSinceLastFight: number | null;
   opponentRanked: boolean;
   homeCrowd: boolean;
+  /** The player holds the belt this title fight is for, so the challenger's questions do not fit. */
+  isChampion: boolean;
+  /** A regional circuit card, where nobody is ranked and the main promotion's framing does not fit. */
+  isRegional: boolean;
+  isAmateur: boolean;
+  /** The promotion putting on the card, for text that names it. */
+  promotionName: string;
   rng: Rng;
 }
 
+/**
+ * Fills a template. The pronoun tokens take the opponent's pronouns. Every other fighter an
+ * answer talks about (the champion, whoever has been avoiding the player) is in the same
+ * division, so with no opponent the player's own division gives the same answer.
+ */
 function fill(text: string, c: PresserContext): string {
-  return text
+  const filled = text
     .replace(/\{opp\}/g, c.opponent?.name ?? 'your opponent')
-    .replace(/\{oppLast\}/g, c.opponent?.lastName ?? 'him')
+    .replace(/\{oppLast\}/g, c.opponent?.lastName ?? 'the opponent')
     .replace(/\{me\}/g, c.me.name)
     .replace(/\{event\}/g, c.eventName)
     .replace(/\{date\}/g, c.eventDate);
+  return fillPronouns(filled, pronouns(c.opponent ?? c.me));
 }
 
 const QUESTIONS: QuestionTemplate[] = [
   {
     key: 'q-title-meaning',
     tags: ['title-fight'],
-    applies: (c) => c.isTitle,
+    // Asked of the challenger only. A defending champion was asked what winning the belt would
+    // change, and offered "You are going to see a new champion" as an answer.
+    applies: (c) => c.isTitle && !c.isChampion,
     text: () => 'You have talked about this belt for years. What does it actually change if you win it on Saturday?',
+    tones: ['emotional', 'confident', 'honest', 'promotional'],
+    weight: 3,
+  },
+  {
+    key: 'q-title-defence',
+    tags: ['title-fight'],
+    applies: (c) => c.isTitle && c.isChampion,
+    text: () => 'You already have the belt. What keeps you hungry going into a defence?',
     tones: ['emotional', 'confident', 'honest', 'promotional'],
     weight: 3,
   },
@@ -240,7 +271,7 @@ const QUESTIONS: QuestionTemplate[] = [
   {
     key: 'q-retirement',
     tags: ['retirement-rumor'],
-    applies: (c) => (c.me.longevity ?? 100) < 45 || (c.me.ageAtSnapshot ?? 30) > 37,
+    applies: (c) => (c.me.longevity ?? 100) < 45 || ageNow(c) > 37,
     text: () => 'How many of these do you have left in you?',
     tones: ['honest', 'confident', 'emotional', 'dismissive'],
   },
@@ -274,20 +305,22 @@ const QUESTIONS: QuestionTemplate[] = [
     key: 'q-ranked-opponent',
     tags: ['ranked-opponent'],
     applies: (c) => c.opponentRanked && !c.isTitle,
-    text: (c) => `A win over ${c.opponent?.name ?? 'him'} puts you right in the picture. Are you looking past this one?`,
+    text: (c) => `A win over ${c.opponent?.name ?? 'your opponent'} puts you right in the picture. Are you looking past this one?`,
     tones: ['respectful', 'confident', 'dismissive', 'honest'],
   },
   {
     key: 'q-unranked-opponent',
     tags: ['unranked-opponent'],
-    applies: (c) => !c.opponentRanked && !c.isTitle,
-    text: (c) => `Some people are saying this is a step down for you. Is ${c.opponent?.name ?? 'he'} being underrated?`,
+    // A step down needs somewhere to step down from. On a regional card nobody is ranked, and an
+    // unranked fighter facing another unranked fighter has not stepped anywhere.
+    applies: (c) => !c.opponentRanked && !c.isTitle && !c.isRegional && c.me.ranking !== null,
+    text: (c) => `Some people are saying this is a step down for you. Is ${c.opponent?.name ?? 'your opponent'} being underrated?`,
     tones: ['respectful', 'confident', 'dismissive', 'technical'],
   },
   {
     key: 'q-age',
     tags: ['age-questions'],
-    applies: (c) => (c.me.ageAtSnapshot ?? 30) > 34,
+    applies: (c) => ageNow(c) > 34,
     text: () => 'You have a lot of miles on you. Do you feel any different than you did five years ago?',
     tones: ['honest', 'confident', 'funny', 'emotional'],
   },
@@ -303,7 +336,7 @@ const QUESTIONS: QuestionTemplate[] = [
     key: 'q-game-plan',
     tags: [],
     applies: () => true,
-    text: (c) => `Where do you think this fight is won? Where does ${c.opponent?.name ?? 'he'} break?`,
+    text: (c) => `Where do you think this fight is won? Where does ${c.opponent?.name ?? 'your opponent'} break?`,
     tones: ['technical', 'confident', 'evasive', 'aggressive'],
     weight: 2,
   },
@@ -349,6 +382,12 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
     honest: ['Honestly, it will not fix anything in my life. I still want it more than anything.', 'It is validation. I am not going to pretend it is not.'],
     promotional: ['It gives this division a champion who will actually defend it. Tune in and see.', 'Buy the card. You are going to see a new champion.'],
   },
+  'q-title-defence': {
+    emotional: ['Remembering what it took to get it. I am not giving that back to anybody.', 'My family watched me chase this for years. I am not letting it leave the house.'],
+    confident: ['Everybody in the division wants what I have. That keeps me sharper than anything.', 'The belt does not make me comfortable. It makes me the target, and I like it that way.'],
+    honest: ['It is harder than winning it. The hunger has to come from somewhere new every camp.', 'Some mornings it is difficult. Then I remember how many people want my spot.'],
+    promotional: ['Tune in and watch the champion handle business. That is the show.', 'Buy the card. The belt is staying right where it is.'],
+  },
   'q-interim-legitimacy': {
     confident: ['It is the belt they put in front of me. I will unify it and then it stops being a question.', 'Call it what you like. I am beating whoever they put there next.'],
     aggressive: ['Say that to me when I am wearing it and the champion is still on the shelf.', 'The champion is not fighting. I am. That is the difference between us.'],
@@ -357,7 +396,7 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
   },
   'q-short-notice': {
     honest: ['Three weeks. I was in the gym anyway, but three weeks is three weeks.', 'Not much of one. I stayed ready and that is the only reason I could take it.'],
-    confident: ['Enough. I do not need twelve weeks to beat him.', 'I have been in camp all year. This is just the last stretch.'],
+    confident: ['Enough. I do not need twelve weeks to beat {him}.', 'I have been in camp all year. This is just the last stretch.'],
     funny: ['I got a camp. It was very short. Almost theoretical.', 'My nutritionist has aged five years this month.'],
     dismissive: ['It does not matter. Next question.', 'Short notice is part of the job.'],
   },
@@ -375,17 +414,17 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
     honest: ['Some of them were closer than the record makes them look.', 'I think I am ranked about where I should be. I want more.'],
   },
   'q-rivalry-origin': {
-    aggressive: ['It stopped being just a fight the moment he brought my family into it.', 'He knows exactly when. So do I.'],
+    aggressive: ['It stopped being just a fight the moment {he} brought my family into it.', '{He} knows exactly when. So do I.'],
     honest: ['It got personal and I let it. That is on both of us.', 'There is history there that has nothing to do with fighting.'],
-    dismissive: ['It is not personal for me. He can carry it if he wants.', 'I do not think about him outside of work.'],
+    dismissive: ['It is not personal for me. {He} can carry it if {he} wants.', 'I do not think about {him} outside of work.'],
     emotional: ['Some things you cannot let go of. This is one of them.', 'It has cost me sleep. I will settle it Saturday.'],
-    controversial: ['Ask him why he stopped answering his phone after the first one.', 'Everyone in this room knows what he did and nobody will print it.'],
+    controversial: ['Ask {him} why {he} stopped answering {his} phone after the first one.', 'Everyone in this room knows what {he} did and nobody will print it.'],
   },
   'q-trash-talk-response': {
-    dismissive: ['I have not read any of it.', 'He can say what he likes. It does not change the matchup.'],
-    aggressive: ['He will say it all week and then say nothing for fifteen minutes on Saturday.', 'Every word he says is another reason to hurt him.'],
+    dismissive: ['I have not read any of it.', '{He} can say what {he} likes. It does not change the matchup.'],
+    aggressive: ['{He} will say it all week and then say nothing for fifteen minutes on Saturday.', 'Every word {he} says is another reason to hurt {him}.'],
     funny: ['Some of it was actually funny. Most of it needed an editor.', 'I gave it a six out of ten.'],
-    respectful: ['It is part of selling a fight. I have no problem with him.', 'He is doing his job. I will do mine.'],
+    respectful: ['It is part of selling a fight. I have no problem with {him}.', '{He} is doing {his} job. I will do mine.'],
     silent: ['No comment.'],
   },
   'q-weight': {
@@ -415,8 +454,16 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
   'q-callout': {
     confident: ['The winner of the title fight. That is the only name I am interested in.', 'Whoever is holding the belt when I am done here.'],
     respectful: ['Anyone in the top five. They have all earned it, I am not calling anybody out by name.', 'I will take whoever the matchmaker thinks deserves it.'],
-    aggressive: ['I want the one who has been avoiding me. He knows his name.', 'Give me the champion. If he says no, give me anyone who will actually show up.'],
+    aggressive: ['I want the one who has been avoiding me. {He} knows {his} name.', 'Give me the champion. If {he} says no, give me anyone who will actually show up.'],
     promotional: ['Give the fans the fight they have been asking for. They know the one.', 'The biggest name available. That is what sells.'],
+    evasive: ['One at a time. Ask me on Sunday.', 'I have not thought past Saturday.'],
+  },
+  // The callout answers for a defending champion, who cannot ask for the title fight.
+  'q-callout-champion': {
+    confident: ['Whoever the division puts in front of me next. That is what defending a belt means.', 'The next one in line. I will be champion when I get there.'],
+    respectful: ['The matchmaker decides who has earned it. I will fight whoever that is.', 'There are good fighters coming up. Any of them can have a go.'],
+    aggressive: ['Everybody who has been talking about this belt. Line them up.', 'Whoever thinks they are next can come and find out.'],
+    promotional: ['Give the fans the defence they have been asking for. They know the one.', 'The biggest fight the division can make. That is what a champion owes people.'],
     evasive: ['One at a time. Ask me on Sunday.', 'I have not thought past Saturday.'],
   },
   'q-social-post': {
@@ -445,28 +492,28 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
     technical: ['The numbers say I have two or three more camps at this limit before it stops being sensible.', 'It is a conversation about recovery, not about size.'],
   },
   'q-champion-inactive': {
-    honest: ['It holds everybody up. That is just true.', 'It is frustrating for the whole division, him included probably.'],
-    aggressive: ['Defend it or give it up. Those are the options.', 'He is holding a belt hostage and everyone is being polite about it.'],
-    respectful: ['He has earned the right to take his time. I would still like the fight.', 'I am not going to criticise a champion for looking after himself.'],
-    controversial: ['They will not strip him because he sells. Say the quiet part.', 'There is one set of rules for him and another for the rest of us.'],
+    honest: ['It holds everybody up. That is just true.', 'It is frustrating for the whole division, {him} included probably.'],
+    aggressive: ['Defend it or give it up. Those are the options.', '{He} is holding a belt hostage and everyone is being polite about it.'],
+    respectful: ['{He} has earned the right to take {his} time. I would still like the fight.', 'I am not going to criticise a champion for looking after {himself}.'],
+    controversial: ['They will not strip {him} because {he} sells. Say the quiet part.', 'There is one set of rules for {him} and another for the rest of us.'],
   },
   'q-teammate': {
-    respectful: ['Strange is the word. He is a good man and Saturday does not change that.', 'We have shared too many hard rounds for me to say anything bad about him.'],
+    respectful: ['Strange is the word. {He} is a good friend and Saturday does not change that.', 'We have shared too many hard rounds for me to say anything bad about {him}.'],
     honest: ['It is uncomfortable. We both knew it might happen one day.', 'Neither of us wanted this fight. Here we are.'],
-    emotional: ['He carried me through a camp when I had nothing left. Now I have to fight him.', 'This is the hardest week of my career and the fight has not started.'],
-    technical: ['He knows my habits and I know his. That cancels out and it comes down to the night.', 'Familiarity helps both of us. It is a clean slate once it starts.'],
+    emotional: ['{He} carried me through a camp when I had nothing left. Now I have to fight {him}.', 'This is the hardest week of my career and the fight has not started.'],
+    technical: ['We know each other\'s habits. That cancels out and it comes down to the night.', 'Familiarity helps both of us. It is a clean slate once it starts.'],
   },
   'q-ranked-opponent': {
-    respectful: ['Not for a second. He beats me if I look past him and we both know it.', 'He is ranked there for a reason.'],
+    respectful: ['Not for a second. {He} beats me if I look past {him} and we both know it.', '{He} is ranked there for a reason.'],
     confident: ['I am looking at Saturday. What comes after takes care of itself.', 'I am aware of what a win does. It does not change the plan.'],
-    dismissive: ['I have already seen everything he does.', 'He is a name on a poster.'],
-    honest: ['Of course I know what it does for me. I am still worried about him.', 'You cannot help thinking about it. You just cannot let it in.'],
+    dismissive: ['I have already seen everything {he} does.', '{He} is a name on a poster.'],
+    honest: ['Of course I know what it does for me. I am still worried about {him}.', 'You cannot help thinking about it. You just cannot let it in.'],
   },
   'q-unranked-opponent': {
-    respectful: ['He is dangerous and the ranking does not say that. I have prepared like it is a title fight.', 'Everybody in this promotion can end your night.'],
+    respectful: ['{He} is dangerous and the ranking does not say that. I have prepared like it is a title fight.', 'Everybody in this promotion can end your night.'],
     confident: ['It is the fight in front of me. I take it seriously and I win it.', 'Step down or not, I am fighting on Saturday.'],
     dismissive: ['I do not pick the opponents.', 'That is a question for the matchmaker.'],
-    technical: ['He is better than his ranking on the feet. The record does not tell you that.', 'He has beaten two people he had no business beating. That is enough for me.'],
+    technical: ['{He} is better than {his} ranking on the feet. The record does not tell you that.', '{He} has beaten two people {he} had no business beating. That is enough for me.'],
   },
   'q-age': {
     honest: ['I recover slower. Everything else is better. That is the honest answer.', 'The body knows. You just train around it.'],
@@ -476,15 +523,15 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
   },
   'q-home-crowd': {
     emotional: ['I have wanted this my whole career. Fighting at home is everything.', 'My family will be in that building. It is hard to describe.'],
-    confident: ['It helps. They will be loud and he will hear it.', 'I like the weight of it. It sharpens you.'],
+    confident: ['It helps. They will be loud and {he} will hear it.', 'I like the weight of it. It sharpens you.'],
     honest: ['Both. There is more pressure and there is more behind you.', 'It is not all upside. You feel like you owe people something.'],
     promotional: ['Come out. It is going to be a night this city remembers.', 'Fill the building. I will do the rest.'],
   },
   'q-game-plan': {
-    technical: ['He resets on a straight line every time he is pressured. That is where the fight is won.', 'His hands drop after the first hard body shot. That is the tell and that is the plan.'],
-    confident: ['Wherever it goes I am better. That is the plan.', 'It is won in the second round when he realises the pace is real.'],
-    evasive: ['I am not going to give away the game plan at a table.', 'We have a plan. He will find out about it.'],
-    aggressive: ['It is won by hurting him early and not letting him recover.', 'He breaks. Everyone who has pressured him has found that.'],
+    technical: ['{He} resets on a straight line every time {he} is pressured. That is where the fight is won.', '{His} hands drop after the first hard body shot. That is the tell and that is the plan.'],
+    confident: ['Wherever it goes I am better. That is the plan.', 'It is won in the second round when {he} realises the pace is real.'],
+    evasive: ['I am not going to give away the game plan at a table.', 'We have a plan. {He} will find out about it.'],
+    aggressive: ['It is won by hurting {him} early and not letting {him} recover.', '{He} breaks. Everyone who has pressured {him} has found that.'],
   },
   'q-main-event-pressure': {
     confident: ['It is where I should have been for two years.', 'The lights do not change the fight.'],
@@ -493,10 +540,10 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
     emotional: ['I used to watch main events and wonder if I would ever be in one.', 'This is what all of it was for.'],
   },
   'q-missed-weight-opponent': {
-    technical: ['We prepare for the version of him that rehydrates ten pounds heavier. That is the real opponent.', 'It changes the grappling exchanges more than the striking. We have planned for it.'],
-    dismissive: ['That is his problem, not mine.', 'I make weight. What he does is his business.'],
-    aggressive: ['If he misses again he is stealing from me and I will take it out of him.', 'Miss weight and still lose. That would be the whole story.'],
-    honest: ['It is a concern. You cannot plan properly around someone who might be a division bigger.', 'I would rather he made it. It is a cleaner fight.'],
+    technical: ['We prepare for the version of {him} that rehydrates ten pounds heavier. That is the real opponent.', 'It changes the grappling exchanges more than the striking. We have planned for it.'],
+    dismissive: ['That is {his} problem, not mine.', 'I make weight. What {he} does is {his} business.'],
+    aggressive: ['If {he} misses again {he} is stealing from me and I will take it out of {him}.', 'Miss weight and still lose. That would be the whole story.'],
+    honest: ['It is a concern. You cannot plan properly around someone who might be a division bigger.', 'I would rather {he} made it. It is a cleaner fight.'],
   },
   'q-contract': {
     honest: ['It is the last one, and yes, that is on my mind.', 'I would like to stay. It has to be the right deal.'],
@@ -508,18 +555,18 @@ const QUESTION_ANSWERS: Record<string, Partial<Record<SocialTone, string[]>>> = 
 
 const ANSWER_BANK: Record<SocialTone, string[]> = {
   respectful: [
-    'He has been in there with good people and come through. I am not going to pretend otherwise.',
+    '{He} has been in there with good people and come through. I am not going to pretend otherwise.',
     'I take every one of these seriously. This one especially.',
-    'Credit where it is due. He earned this fight.',
+    'Credit where it is due. {He} earned this fight.',
   ],
   confident: [
     'I have done everything I said I would do in camp. That is the whole answer.',
     'I know what happens when we are both in there. I have known for months.',
-    'There is nothing he does that I have not already seen and fixed.',
+    'There is nothing {he} does that I have not already seen and fixed.',
   ],
   aggressive: [
-    'He is going to feel the difference in the first two minutes.',
-    'Talk is cheap and he has spent all of it. Saturday is the bill.',
+    '{He} is going to feel the difference in the first two minutes.',
+    'Talk is cheap and {he} has spent all of it. Saturday is the bill.',
     'I am not here to trade rounds. I am here to end it.',
   ],
   funny: [
@@ -533,8 +580,8 @@ const ANSWER_BANK: Record<SocialTone, string[]> = {
     'That is a question for people who are not fighting on Saturday.',
   ],
   technical: [
-    'It is the second exchange in every sequence. He resets on a straight line and that is where the shot is.',
-    'His defense holds up for one round. The tell is the level of his hands after the first hard body shot.',
+    'It is the second exchange in every sequence. {He} resets on a straight line and that is where the shot is.',
+    '{His} defense holds up for one round. The tell is the level of {his} hands after the first hard body shot.',
     'Everything runs through the center. Take that and there is nothing left to run.',
   ],
   emotional: [
@@ -568,7 +615,7 @@ const ANSWER_BANK: Record<SocialTone, string[]> = {
 const CROWD_RESPONSE: Record<SocialTone, string[]> = {
   respectful: ['A few nods around the room.', 'The opponent gives a short nod back.'],
   confident: ['A ripple of approval from the crowd.', 'The room takes it seriously.'],
-  aggressive: ['The room gets loud. The opponent leans into his microphone.', 'A few boos, plenty of noise.'],
+  aggressive: ['The room gets loud. The opponent leans into {his} microphone.', 'A few boos, plenty of noise.'],
   funny: ['Genuine laughter from the back of the room.', 'Even the opponent cracks slightly.'],
   dismissive: ['A short silence, then the next question.', 'Somebody at the back mutters something.'],
   technical: ['The analysts start writing.', 'A couple of reporters look up from their phones.'],
@@ -613,6 +660,11 @@ export function buildPresserContext(save: SaveGame, boutId: BoutId, rng: Rng): P
   const opponent = save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] ?? null;
   const event = save.events[bout.eventId];
   const rivalry = opponent ? findRivalry(save, me.id, opponent.id)?.intensity ?? 0 : 0;
+  const table = save.rankings[bout.divisionId];
+  const isChampion =
+    (bout.isTitleFight || bout.isInterimTitleFight) &&
+    Boolean(table) &&
+    (table.championId === me.id || (bout.isInterimTitleFight && table.interimChampionId === me.id));
   return {
     save,
     me,
@@ -631,14 +683,24 @@ export function buildPresserContext(save: SaveGame, boutId: BoutId, rng: Rng): P
     daysSinceLastFight: me.lastFightDate ? daysBetween(me.lastFightDate, save.date) : null,
     opponentRanked: opponent?.ranking !== null && opponent?.ranking !== undefined,
     homeCrowd: Boolean(event && opponent && event.country === me.country),
+    isChampion,
+    isRegional: Boolean(event?.promotionId),
+    isAmateur: Boolean(bout.isAmateur),
+    promotionName: promotionConfig(event?.promotionId)?.name ?? PROMOTION_NAME,
     rng,
   };
 }
 
-function composeAnswer(tone: SocialTone, c: PresserContext, questionKey: string): PresserAnswer {
-  // A question specific answer is always preferred. The generic bank is a fallback only.
-  const specific = QUESTION_ANSWERS[questionKey]?.[tone];
-  const text = fill(c.rng.pick(specific && specific.length > 0 ? specific : ANSWER_BANK[tone]), c);
+function composeAnswer(tone: SocialTone, c: PresserContext, questionKey: string, alreadySaid: Set<string> = new Set()): PresserAnswer {
+  // A question specific answer is always preferred. The generic bank is a fallback only. A
+  // champion has a bank of their own where the challenger's lines would not make sense.
+  const bank = (c.isChampion && QUESTION_ANSWERS[`${questionKey}-champion`]) || QUESTION_ANSWERS[questionKey];
+  const specific = bank?.[tone];
+  const pool = specific && specific.length > 0 ? specific : ANSWER_BANK[tone];
+  // When a question has to come round again in the same fight week, the answer the player gave
+  // the first time is not offered word for word a second time.
+  const unsaid = pool.filter((t) => !alreadySaid.has(fill(t, c)));
+  const text = fill(c.rng.pick(unsaid.length > 0 ? unsaid : pool), c);
   return {
     key: `${questionKey}-${tone}`,
     tone,
@@ -683,8 +745,19 @@ export function createSession(
   });
   // Fresh questions are always used first. The recently asked pool is only drawn on when
   // there are genuinely not enough fresh ones left to fill the session.
-  const fresh = eligible.filter((q) => !recent.has(q.key));
-  const stale = eligible.filter((q) => recent.has(q.key));
+  //
+  // Questions already asked for this bout, at media day or the press conference, are held back
+  // entirely. Recency alone only pushed them to the stale pool, and a title fight's eligible
+  // pool is small enough that the press conference refilled itself with the questions, and
+  // often the exact answers, from the day before.
+  const sameBoutSessions = Object.values(save.pressers).filter((s) => s.boutId === boutId && s.id !== id);
+  const sameBout = new Set(sameBoutSessions.flatMap((s) => s.questions.map((q) => q.id.split('|')[0])));
+  const alreadySaid = new Set(
+    sameBoutSessions.flatMap((s) => s.questions.flatMap((q) => q.answers.map((a) => a.text)))
+  );
+  const fresh = eligible.filter((q) => !recent.has(q.key) && !sameBout.has(q.key));
+  const stale = eligible.filter((q) => recent.has(q.key) && !sameBout.has(q.key));
+  const repeated = eligible.filter((q) => sameBout.has(q.key));
 
   const bout = save.bouts[boutId];
   const headline = Boolean(bout?.isMainEvent || bout?.isTitleFight || bout?.isInterimTitleFight);
@@ -702,6 +775,15 @@ export function createSession(
   };
   drawFrom(fresh);
   if (chosen.length < count) drawFrom(stale);
+  // A short session is better than a repeated one, so a question from earlier in the week is
+  // only asked again to reach the minimum of three.
+  const minimum = Math.min(3, count);
+  const repeats = [...repeated];
+  while (chosen.length < minimum && repeats.length > 0) {
+    const pick = rng.weighted(repeats, (q) => q.weight ?? 1);
+    chosen.push(pick);
+    repeats.splice(repeats.indexOf(pick), 1);
+  }
 
   const session: PresserSession = {
     id,
@@ -713,7 +795,7 @@ export function createSession(
       askedBy: rng.pick(REPORTERS),
       text: fill(q.text(c), c),
       tags: q.tags,
-      answers: q.tones.map((tone) => composeAnswer(tone, c, q.key)),
+      answers: q.tones.map((tone) => composeAnswer(tone, c, q.key, alreadySaid)),
       selectedKey: null,
       reaction: null,
     })),
@@ -734,14 +816,15 @@ export function answerQuestion(save: SaveGame, sessionId: string, questionId: st
   if (!answer) return null;
 
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
-  // Labelled here, so the record says which occasion it came from. The applier no longer assumes
-  // every set of media effects arrived at a press conference.
-  if (me) applyPresserEffects(save, me, session, { ...answer, text: `Press conference: ${answer.text}` }, rng);
+  // Labelled here, from the session's own kind, so the record says which occasion it came from.
+  // A media day answer used to be recorded as a press conference one.
+  const occasion = SESSION_LABEL[session.kind];
+  if (me) applyPresserEffects(save, me, session, { ...answer, text: `${occasion}: ${answer.text}` }, rng, occasion.toLowerCase());
 
   question.selectedKey = answerKey;
-  const crowd = rng.pick(CROWD_RESPONSE[answer.tone]);
   const bout = save.bouts[session.boutId];
   const opponent = bout && me ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
+  const crowd = fillPronouns(rng.pick(CROWD_RESPONSE[answer.tone]), pronouns(opponent ?? me));
   const opponentLine =
     opponent && (answer.tone === 'aggressive' || answer.tone === 'controversial')
       ? ` ${opponent.name} answers straight back.`
@@ -755,6 +838,22 @@ export function answerQuestion(save: SaveGame, sessionId: string, questionId: st
     session.summary = summarize(session);
   }
   return question.reaction;
+}
+
+/** What each kind of session is called in the hype record, fines and sponsor letters. */
+const SESSION_LABEL: Record<PresserSession['kind'], string> = {
+  'media-day': 'Media day',
+  'press-conference': 'Press conference',
+  'post-fight-interview': 'Post fight interview',
+  'post-fight-press': 'Post fight press',
+};
+
+/** Shortens a quote at a word boundary, so a hype moment never ends in half a word. */
+function shortQuote(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 3);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).replace(/[\s.,;:]+$/, '')}...`;
 }
 
 function summarize(session: PresserSession): string {
@@ -806,12 +905,21 @@ export function applyMediaEffects(
   boutId: string,
   effects: SocialEffects,
   source: string,
-  rng: Rng
+  rng: Rng,
+  /** Where it happened, mid sentence: 'faceoff', 'ceremonial weigh in'. Fines and sponsor letters name it. */
+  occasion = 'press conference'
 ): void {
-  applyPresserEffects(save, me, { boutId } as PresserSession, { effects, text: source } as PresserAnswer, rng);
+  applyPresserEffects(save, me, { boutId } as PresserSession, { effects, text: source } as PresserAnswer, rng, occasion);
 }
 
-function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSession, answer: PresserAnswer, rng: Rng): void {
+function applyPresserEffects(
+  save: SaveGame,
+  me: Fighter,
+  session: PresserSession,
+  answer: PresserAnswer,
+  rng: Rng,
+  occasion: string
+): void {
   const e = answer.effects;
   if (me.fame) {
     me.fame.favorability = clampPct(me.fame.favorability + (e.favorability ?? 0));
@@ -837,13 +945,13 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
     // The label comes from the caller, because this applier serves the press conference, the
     // faceoff and the ceremonial weigh in, and hard coding one of them mislabelled the other two
     // in the record the player reads.
-    addHypeMoment(save, session.boutId, answer.text.slice(0, 80), e.hype);
+    addHypeMoment(save, session.boutId, shortQuote(answer.text, 80), e.hype);
   }
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(3000 + rng.range(0, 12000));
     // `record` already reduces cash and the career expense total. Subtracting from career
     // earnings as well counted the same fine twice.
-    record(save, me.id, 'out', 'fine', fine, 'Commission fine for conduct at the press conference');
+    record(save, me.id, 'out', 'fine', fine, `Commission fine for conduct at the ${occasion}`);
   }
 
   // Winding the opponent up makes them train harder for you. This was written onto every
@@ -877,7 +985,7 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
         respect: e.rivalry < 0 ? -e.rivalry : 0,
       },
       e.rivalry > 0 ? 'social-hostile' : 'social-friendly',
-      `${me.name} at the ${answer.text.slice(0, 40)}`
+      `${me.name} at the ${shortQuote(answer.text, 48)}`
     );
     if (e.rivalry > 0) escalateRivalry(save, me.id, opponent.id, 'personal', e.rivalry, 'the build to the fight');
   }
@@ -885,7 +993,7 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
   // Saying something a sponsor cannot stand puts the agreement at risk. Also written everywhere
   // and read nowhere, so the morality clauses in every sponsorship meant nothing.
   if (e.sponsorRisk && e.sponsorRisk > 0) {
-    for (const sponsor of Object.values(save.sponsors ?? {})) {
+    for (const sponsor of sponsorsFor(save, me.id)) {
       if (sponsor.status !== 'active') continue;
       // Only an agreement that actually carries a morality clause can be broken over remarks.
       if (!sponsor.moralityClause) continue;
@@ -893,12 +1001,12 @@ function applyPresserEffects(save: SaveGame, me: Fighter, session: PresserSessio
       const exposure = (e.sponsorRisk / 100) * (1 - sponsor.satisfaction / 100);
       if (!rng.chance(exposure)) continue;
       sponsor.status = 'terminated';
-      sponsor.note = 'Terminated after remarks at a press conference.';
+      sponsor.note = `Terminated after remarks at the ${occasion}.`;
       addInboxMessage(save, {
         sender: 'manager',
         senderName: sponsor.name,
         subject: `${sponsor.name} has ended the agreement`,
-        body: `${sponsor.name} has terminated the sponsorship following your remarks at the press conference. The morality clause was invoked.`,
+        body: `${sponsor.name} has terminated the sponsorship following your remarks at the ${occasion}. The morality clause was invoked.`,
         category: 'career',
         requiresAction: false,
         deadline: null,
@@ -928,20 +1036,22 @@ export interface FaceoffChoice {
   risk: string | null;
 }
 
-export function faceoffChoices(rivalry: number): FaceoffChoice[] {
+export function faceoffChoices(rivalry: number, opponent: Fighter | null = null): FaceoffChoice[] {
+  const p = pronouns(opponent);
+  const them = opponent ? p.him : 'them';
   const base: FaceoffChoice[] = [
     { key: 'stare', label: 'Hold the stare', detail: 'Say nothing and do not blink first.', effects: { hype: 4, confidence: 2 }, risk: null },
     { key: 'handshake', label: 'Offer a handshake', detail: 'End the build on good terms.', effects: { favorability: 5, rivalry: -8, hype: -1 }, risk: null },
     { key: 'smile', label: 'Smile and step back', detail: 'Refuse to give them the moment.', effects: { favorability: 3, hype: -2, opponentFocus: 2 }, risk: null },
-    { key: 'talk', label: 'Say something to him', detail: 'A few words nobody else hears.', effects: { hype: 6, rivalry: 6, opponentFocus: 4 }, risk: 'The other camp will respond.' },
+    { key: 'talk', label: `Say something to ${them}`, detail: 'A few words nobody else hears.', effects: { hype: 6, rivalry: 6, opponentFocus: 4 }, risk: 'The other camp will respond.' },
   ];
   if (rivalry > 45) {
     base.push({
       key: 'shove',
-      label: 'Push him back',
-      detail: 'Put hands on him in front of the cameras.',
+      label: `Push ${them} back`,
+      detail: `Put hands on ${them} in front of the cameras.`,
       effects: { hype: 14, controversy: 12, rivalry: 15, fineRisk: 45, favorability: -4 },
-      risk: 'Near certain fine and possible commission action.',
+      risk: 'Likely fine and possible commission action.',
     });
   }
   return base;

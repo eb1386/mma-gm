@@ -1,4 +1,5 @@
 import { DIFFICULTY } from '../config/calibration';
+import { trainingCostScale } from './circuit';
 import { clamp, Rng } from '../rng';
 import { addDays, daysBetween, type IsoDate } from '../types/common';
 import { RATING_KEYS, type Fighter, type RatingKey } from '../types/fighter';
@@ -8,6 +9,7 @@ import { applyDeltas, developWeek, evenFocus, notePeakOvr, type DevelopmentInput
 import { applyWear, rollTrainingInjury, trainingCapacityOf } from './health';
 import { planCoherence } from '../sim/plan';
 import { record } from './finance';
+import { noteCampStored } from './indexes';
 
 /**
  * Training camps.
@@ -161,10 +163,72 @@ export interface CampSetup {
   focus: CampFocus;
   intensity: number;
   gymId: string | null;
+  /**
+   * The second room of a split camp. Optional so every caller that predates split camps having a
+   * real second gym keeps compiling, and absent for every other camp type.
+   */
+  secondGymId?: string | null;
   campType: TrainingCamp['campType'];
   specialistHired: string | null;
   gamePlan: GamePlanKey[];
   arriveEarlyDays: number;
+}
+
+/** The camp ends a week before the bout, when fight week takes over. */
+export function campEndFor(boutDate: IsoDate): IsoDate {
+  return addDays(boutDate, -7);
+}
+
+/**
+ * The start date of a camp of the chosen length, counted back from the end of camp.
+ *
+ * Computed from the length rather than the other way round, because the camp's week count is the
+ * floor of the days between its dates: deriving the length from a start date picked first could
+ * quietly lose a week.
+ */
+export function campStartFor(boutDate: IsoDate, weeks: number): IsoDate {
+  return addDays(campEndFor(boutDate), -Math.max(0, Math.floor(weeks)) * 7);
+}
+
+/** Whole weeks of camp between two dates, the one definition the quote, the camp and the page share. */
+export function campWeeksBetween(start: IsoDate, end: IsoDate): number {
+  return Math.max(0, Math.floor(daysBetween(start, end) / 7));
+}
+
+/**
+ * The longest camp that still fits before a bout, from today.
+ *
+ * The camp page used its own formula for this and the cost quote another. They agreed, but only
+ * by coincidence of arithmetic, and the page is what offers the lengths the quote then prices.
+ */
+export function campWeeksAvailable(today: IsoDate, boutDate: IsoDate): number {
+  return campWeeksBetween(today, campEndFor(boutDate));
+}
+
+/** The camp length most camps should run: long enough to peak, short enough not to wear down. */
+export const IDEAL_CAMP_WEEKS = 8;
+
+/** Nightly cost of putting a fighter and team up near the venue before fight week, main roster rate. */
+export const ARRIVE_EARLY_DAILY_COST = 450;
+
+/** A specialist coach for one camp, main roster rate. */
+export const SPECIALIST_COST = 12000;
+
+/**
+ * What a specialist costs this fighter.
+ *
+ * It was a flat twelve thousand on every circuit, about two regional purses, while the weekly camp
+ * cost beside it was already scaled to the circuit. A regional fighter either never ticked the box
+ * or went into debt for a small coaching lift. The floor keeps a specialist from being near free
+ * for an amateur, whose cost scale is tiny.
+ */
+export function specialistCostFor(who: Fighter | null | undefined): number {
+  return Math.round(SPECIALIST_COST * Math.max(0.15, trainingCostScale(who ?? null)));
+}
+
+/** What arriving the given number of days early costs this fighter. */
+export function arriveEarlyCostFor(who: Fighter | null | undefined, days: number): number {
+  return Math.round(Math.min(Math.max(0, days), ARRIVE_EARLY_CAP_DAYS) * ARRIVE_EARLY_DAILY_COST * trainingCostScale(who ?? null));
 }
 
 /**
@@ -173,15 +237,29 @@ export interface CampSetup {
  * The interface previously priced a camp by calling `createCamp` during render, which incremented
  * the persisted camp counter on every keystroke and every re-render. This is the same arithmetic
  * with no side effect, so the quoted price and the charged price cannot drift apart.
+ *
+ * `upfront` is the part paid once when the camp is booked: the specialist and the early arrival.
+ * The rest is paid week by week as the camp runs.
  */
-export function estimateCampCost(save: SaveGame, setup: CampSetup): { weeks: number; cost: number } {
-  const weeks = Math.max(0, Math.floor(daysBetween(setup.startDate, setup.endDate) / 7));
+export function estimateCampCost(save: SaveGame, setup: CampSetup, fighter?: Fighter): { weeks: number; cost: number; upfront: number } {
+  const weeks = campWeeksBetween(setup.startDate, setup.endDate);
   const gym = setup.gymId ? save.gyms[setup.gymId] : null;
-  const baseCost = gym ? gym.monthlyCosts * 0.06 : 2000;
+  const second = setup.campType === 'split' && setup.secondGymId ? save.gyms[setup.secondGymId] : null;
+  const who = fighter ?? (save.player.fighterId ? save.fighters[save.player.fighterId] : null);
+  // About a fifth of a gym's monthly running cost per week of camp. It was six percent of the monthly
+  // figure per week, which priced an ordinary fourteen week camp at a mid sized gym above the purse
+  // it was preparing for, so every career that trained properly went into debt and stayed there.
+  // A split camp pays for time in both rooms, so it is priced from the two gyms' average.
+  const monthly = gym ? (second ? (gym.monthlyCosts + second.monthlyCosts) / 2 : gym.monthlyCosts) : null;
+  const baseCost = (monthly !== null ? monthly * 0.02 : 700) * trainingCostScale(who);
   const typeMultiplier =
     setup.campType === 'visiting' ? 2.2 : setup.campType === 'split' ? 2.6 : setup.campType === 'near-event' ? 1.8 : setup.campType === 'solo' ? 0.3 : 1;
-  const specialistCost = setup.specialistHired ? 12000 : 0;
-  return { weeks, cost: Math.round(weeks * baseCost * typeMultiplier + specialistCost) };
+  const specialistCost = setup.specialistHired ? specialistCostFor(who) : 0;
+  // Arriving early is a hotel bill. It was free, so the longest option was a better camp at no
+  // price and the control was not a real choice.
+  const arriveEarlyCost = arriveEarlyCostFor(who, setup.arriveEarlyDays);
+  const upfront = specialistCost + arriveEarlyCost;
+  return { weeks, cost: Math.round(weeks * baseCost * typeMultiplier) + upfront, upfront };
 }
 
 /**
@@ -228,9 +306,7 @@ export const CAMP_FORM_WEIGHT = 0.2;
  * on purpose, because a camp is still where fights are won.
  */
 export function baseBuildingFor(save: SaveGame, fighter: Fighter, startDate: IsoDate): number {
-  const previous = Object.values(save.camps)
-    .filter((c) => c.fighterId === fighter.id && (c.status === 'complete' || c.status === 'abandoned'))
-    .sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
+  const previous = latestClosedCampOf(save, fighter.id);
   const since = previous ? previous.endDate : null;
   const weeksBetween = since ? Math.max(0, Math.floor(daysBetween(since, startDate) / 7)) : BASE_BUILDING_FULL_WEEKS / 2;
   const gym = fighter.gymId ? save.gyms[fighter.gymId] : null;
@@ -238,6 +314,82 @@ export function baseBuildingFor(save: SaveGame, fighter: Fighter, startDate: Iso
   const partnerAvg = RATING_KEYS.reduce((t, k) => t + gym.trainingPartners[k], 0) / RATING_KEYS.length;
   const roomQuality = clamp((partnerAvg + gym.facilities) / 2 / 100, 0, 1);
   return clamp(weeksBetween / BASE_BUILDING_FULL_WEEKS, 0, 1) * roomQuality;
+}
+
+/**
+ * The fighter's most recently ended camp that is finished or abandoned, or null.
+ *
+ * The first stored wins a tie on end date, which is the answer the stable sort this replaced gave.
+ * Pruning keeps this camp for every fighter, so base building reads the same before and after.
+ */
+export function latestClosedCampOf(save: SaveGame, fighterId: string): TrainingCamp | null {
+  let latest: TrainingCamp | null = null;
+  for (const c of Object.values(save.camps)) {
+    if (c.fighterId !== fighterId || (c.status !== 'complete' && c.status !== 'abandoned')) continue;
+    if (!latest || c.endDate > latest.endDate) latest = c;
+  }
+  return latest;
+}
+
+/** Days a closed camp is kept in full after it ends before it may be pruned. */
+export const CLOSED_CAMP_KEEP_DAYS = 60;
+/** Closed camps kept for each fighter the player looks after, which is what the camp history table lists. */
+export const PLAYER_CAMP_HISTORY = 25;
+
+/**
+ * Deletes closed camps nothing will read again. Returns how many were removed.
+ *
+ * Every bout creates a camp and nothing ever removed one, so a save gained more than a thousand
+ * camps a year and every scan over them slowed the weekly pass a little more each season. A
+ * closed camp is still read in a few places, and each is why a rule below keeps it:
+ * - fight night and fight week read the camp built for a bout still on the books, for its
+ *   sharpness, so a camp whose bout is scheduled stays;
+ * - base building reads the last camp each fighter finished, so the newest closed camp per
+ *   fighter stays;
+ * - the camp page lists the latest finished camps of the fighters the player looks after, so
+ *   those stay up to that table's length;
+ * - anything that ended within the last couple of months stays, so a camp closed this week is
+ *   never removed from under a pass that is still looking at it.
+ * A planned or running camp is never touched.
+ */
+export function pruneCamps(save: SaveGame): number {
+  const cutoff = addDays(save.date, -CLOSED_CAMP_KEEP_DAYS);
+  const looked: Set<string> = new Set();
+  if (save.player.fighterId) looked.add(save.player.fighterId);
+  const gym = save.player.gymId ? save.gyms?.[save.player.gymId] : null;
+  for (const id of gym?.fighterIds ?? []) looked.add(id);
+
+  const newestClosed = new Map<string, TrainingCamp>();
+  const lookedHistory = new Map<string, TrainingCamp[]>();
+  for (const c of Object.values(save.camps)) {
+    if (c.status !== 'complete' && c.status !== 'abandoned') continue;
+    const newest = newestClosed.get(c.fighterId);
+    if (!newest || c.endDate > newest.endDate) newestClosed.set(c.fighterId, c);
+    if (looked.has(c.fighterId) && c.status === 'complete') {
+      const list = lookedHistory.get(c.fighterId);
+      if (list) list.push(c);
+      else lookedHistory.set(c.fighterId, [c]);
+    }
+  }
+  const keep = new Set<string>();
+  for (const c of newestClosed.values()) keep.add(c.id);
+  for (const list of lookedHistory.values()) {
+    // The same order the camp history table sorts by.
+    list.sort((a, b) => (a.startDate > b.startDate ? -1 : 1));
+    for (const c of list.slice(0, PLAYER_CAMP_HISTORY)) keep.add(c.id);
+  }
+
+  let removed = 0;
+  for (const [id, c] of Object.entries(save.camps)) {
+    if (c.status !== 'complete' && c.status !== 'abandoned') continue;
+    if (keep.has(id)) continue;
+    if (c.endDate >= cutoff) continue;
+    const bout = c.boutId ? save.bouts?.[c.boutId] : null;
+    if (bout && (bout.status === 'scheduled' || bout.status === 'postponed')) continue;
+    delete save.camps[id];
+    removed++;
+  }
+  return removed;
 }
 
 /** Weeks of ordinary gym time it takes to arrive at a fully built base. */
@@ -248,13 +400,21 @@ export const BASE_BUILDING_TRAINING_LIFT = 0.18;
 export const BASE_BUILDING_SHARPNESS = 0.03;
 
 export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): TrainingCamp {
-  const { weeks, cost } = estimateCampCost(save, setup);
+  const { weeks, cost, upfront } = estimateCampCost(save, setup, fighter);
   // A new camp starts from neutral form, so last camp's run of bad weeks does not follow a fighter
   // into a preparation that has not happened yet.
   fighter.campSharpness = CAMP_FORM_BASELINE;
 
+  const id = `camp-${++save.counters.camp}`;
+  // The specialist and the early arrival are booked, so they are paid when the camp is set. They
+  // used to be folded into the weekly charge, which a camp with no whole weeks never made, so a
+  // short notice camp got its specialist for nothing, and a camp cut short underpaid for one.
+  if (save.player.fighterId === fighter.id && upfront > 0) {
+    record(save, fighter.id, 'out', 'camp-costs', upfront, 'Camp bookings: specialist and travel', setup.boutId ?? undefined);
+  }
+
   return {
-    id: `camp-${++save.counters.camp}`,
+    id,
     fighterId: fighter.id,
     boutId: setup.boutId,
     startDate: setup.startDate,
@@ -263,6 +423,7 @@ export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): 
     intensity: clamp(setup.intensity, 0, 1),
     focus: normalizeFocus(setup.focus),
     gymId: setup.gymId,
+    ...(setup.campType === 'split' && setup.secondGymId ? { secondGymId: setup.secondGymId } : {}),
     campType: setup.campType,
     specialistHired: setup.specialistHired,
     gamePlan: setup.gamePlan,
@@ -275,6 +436,7 @@ export function createCamp(save: SaveGame, fighter: Fighter, setup: CampSetup): 
     resultingGains: null,
     overtrained: false,
     cost,
+    upfrontCost: upfront,
     baseBuilding: baseBuildingFor(save, fighter, setup.startDate),
   };
 }
@@ -287,10 +449,27 @@ function gymQualityFor(save: SaveGame, camp: TrainingCamp): { coaching: number; 
     for (const k of RATING_KEYS) partners[k] = 22;
     return { coaching: 18, partners, safety: 70, hardSparring: 20, gym: null };
   }
-  const headCoach = gym.staffIds.map((id) => save.staff[id]).filter(Boolean);
-  const coachQuality = headCoach.length > 0 ? headCoach.reduce((s, c) => s + c.quality, 0) / headCoach.length : 40;
-  const partners = { ...gym.trainingPartners };
-  for (const spec of gym.specializations) partners[spec] = clamp(partners[spec] + 8, 0, 99);
+  const coachQualityOf = (g: Gym): number => {
+    const staff = g.staffIds.map((id) => save.staff[id]).filter(Boolean);
+    return staff.length > 0 ? staff.reduce((s, c) => s + c.quality, 0) / staff.length : 40;
+  };
+  const partnersOf = (g: Gym): Record<RatingKey, number> => {
+    const out = { ...g.trainingPartners };
+    for (const spec of g.specializations) out[spec] = clamp(out[spec] + 8, 0, 99);
+    return out;
+  };
+  let coachQuality = coachQualityOf(gym);
+  const partners = partnersOf(gym);
+  // A split camp takes each area's work from whichever room does it better, and the better of the
+  // two coaching staffs. It used to train in the home room alone at a familiarity cut, for 2.6
+  // times the price, so it was strictly worse than staying home. The cut below is still the cost
+  // of moving between rooms; the second room is what pays for it when it covers a weakness.
+  const second = camp.campType === 'split' && camp.secondGymId ? save.gyms[camp.secondGymId] : null;
+  if (second && second.id !== gym.id) {
+    const other = partnersOf(second);
+    for (const k of RATING_KEYS) partners[k] = Math.max(partners[k], other[k]);
+    coachQuality = Math.max(coachQuality, coachQualityOf(second));
+  }
 
   // A visiting fighter does not get the full benefit of an unfamiliar room on the first
   // camp there. Familiarity is modelled by how long the fighter has been a member.
@@ -337,8 +516,10 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
 
   // A camp cannot run past its planned length. Without this the weekly pass kept incrementing a
   // camp that was already complete, and the load time repair then silently clamped the overrun,
-  // which made loading a save change it and broke the round trip guarantee.
-  if (camp.weeks > 0 && camp.weeksCompleted >= camp.weeks) {
+  // which made loading a save change it and broke the round trip guarantee. A camp with no whole
+  // weeks still gets the one prep week a short notice fighter has always had, and no more: the old
+  // guard skipped zero week camps entirely, so one could run every week until fight night.
+  if (camp.weeksCompleted >= Math.max(1, camp.weeks)) {
     return { outcomes, ratingDeltas: {}, injured: false };
   }
 
@@ -366,9 +547,13 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
   // A built base makes the same week of camp worth slightly more.
   const baseLift = 1 + (camp.baseBuilding ?? 0) * BASE_BUILDING_TRAINING_LIFT;
   const effectiveIntensity = clamp(camp.intensity * capacity * (overtraining ? 0.6 : 1) * baseLift, 0, 1);
+  // Development takes the work without the injury restriction, because developWeek applies the
+  // capacity itself. Passing the restricted figure as well squared it, so a hand fracture at 45
+  // percent capacity trained at 20 percent. The restricted figure still drives the injury roll.
+  const trainingIntensity = clamp(camp.intensity * (overtraining ? 0.6 : 1) * baseLift, 0, 1);
 
   const input: DevelopmentInput = {
-    trainingQuality: effectiveIntensity,
+    trainingQuality: trainingIntensity,
     focus: camp.focus,
     coaching: quality.coaching + (camp.specialistHired ? 12 : 0),
     partners: quality.partners,
@@ -427,7 +612,13 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
   // Positive and neutral camp events.
   const eventRoll = rng.next();
   if (!injured) {
-    if (eventRoll < 0.06 && quality.partners.striking > 60) {
+    // A breakthrough needs good partners in the area it lands in. The gate used to read the
+    // striking partners whatever the camp worked on, so a grappling room could never produce one
+    // for its grapplers. The area is drawn only inside the roll, so ordinary weeks draw nothing
+    // extra from the shared rng, and a failed gate falls through to the partner insight exactly
+    // as a failed striking check did.
+    const breakKey = eventRoll < 0.06 ? rng.weighted([...RATING_KEYS], (k) => camp.focus[k]) : null;
+    if (breakKey && quality.partners[breakKey] > 60) {
       outcomes.push({
         week,
         key: 'breakthrough',
@@ -435,8 +626,7 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
         detail: 'A technical adjustment in the room has stuck. It should show up on fight night.',
         severity: 'good',
       });
-      const key = rng.weighted([...RATING_KEYS], (k) => camp.focus[k]);
-      deltas[key] = (deltas[key] ?? 0) + rng.range(0.25, 0.7);
+      deltas[breakKey] = (deltas[breakKey] ?? 0) + rng.range(0.25, 0.7);
     } else if (eventRoll < 0.11) {
       outcomes.push({
         week,
@@ -481,10 +671,13 @@ export function runCampWeek(save: SaveGame, camp: TrainingCamp, rng: Rng): CampW
 
   // The camp is paid for. `camp-costs` was a declared ledger category that nothing ever wrote, so
   // a player could run the most expensive camp available at no charge. Charging weekly rather than
-  // up front means a camp cut short is only paid for as far as it got.
-  if (save.player.fighterId === fighter.id && camp.weeks > 0 && camp.cost > 0) {
-    const weekly = Math.round(camp.cost / camp.weeks);
-    if (weekly > 0) record(save, fighter.id, 'out', 'camp-costs', weekly, `Camp week ${week}`, camp.boutId ?? undefined);
+  // up front means a camp cut short is only paid for as far as it got. The bookings were paid when
+  // the camp was set (createCamp), so only the weekly part is spread here, and each week pays its
+  // running share so the weeks add up to the quote exactly rather than to a rounded multiple.
+  const weeklyPart = Math.max(0, camp.cost - (camp.upfrontCost ?? 0));
+  if (save.player.fighterId === fighter.id && camp.weeks > 0 && week <= camp.weeks && weeklyPart > 0) {
+    const due = Math.round((weeklyPart * week) / camp.weeks) - Math.round((weeklyPart * (week - 1)) / camp.weeks);
+    if (due > 0) record(save, fighter.id, 'out', 'camp-costs', due, `Camp week ${week}`, camp.boutId ?? undefined);
   }
   fighter.ratings = applyDeltas(fighter.ratings, deltas);
   notePeakOvr(fighter, save.date);
@@ -502,8 +695,13 @@ export function finalizeCamp(save: SaveGame, camp: TrainingCamp, rng: Rng): { sh
 
   // Sharpness rises with completed weeks and falls off past the useful length.
   const weeks = camp.weeksCompleted;
-  const idealWeeks = 8;
-  const lengthTerm = weeks <= idealWeeks ? weeks / idealWeeks : 1 - (weeks - idealWeeks) * 0.06;
+  const idealWeeks = IDEAL_CAMP_WEEKS;
+  // Even a short camp is worth more than none: the floor is what a few weeks of organised work
+  // buys over turning up from ordinary gym time. Running from zero left anything under six weeks
+  // less sharp than skipping camp entirely, and at a price. Past the ideal length the camp loses a
+  // little and then levels off; the overtraining check is the real penalty for a long, hard camp,
+  // and this term charged it a second time, six points a week, for a camp the page booked by default.
+  const lengthTerm = weeks <= idealWeeks ? 0.4 + (0.6 * weeks) / idealWeeks : Math.max(0.9, 1 - (weeks - idealWeeks) * 0.02);
   const intensityTerm = 0.55 + camp.intensity * 0.6;
   const coachingTerm = 0.55 + (quality.coaching / 100) * 0.6;
   const badWeeks = camp.outcomes.filter((o) => o.severity === 'bad').length;
@@ -572,8 +770,12 @@ export function autoCampFor(save: SaveGame, fighter: Fighter, boutId: string, bo
     return p.key === 'balanced' ? 3 : 1.4;
   });
 
-  const start = save.date;
-  const end = addDays(boutDate, -7);
+  // A computer fighter starts camp the ideal length out, or today on shorter notice. Starting every
+  // camp on the day of the booking ran fourteen week camps into the length and overtraining
+  // penalties. The camp waits as planned until its start date, like the player's.
+  const end = campEndFor(boutDate);
+  const idealStart = campStartFor(boutDate, IDEAL_CAMP_WEEKS);
+  const start = idealStart > save.date ? idealStart : save.date;
   const camp = createCamp(save, fighter, {
     boutId,
     startDate: start,
@@ -587,6 +789,7 @@ export function autoCampFor(save: SaveGame, fighter: Fighter, boutId: string, bo
     arriveEarlyDays: 0,
   });
   save.camps[camp.id] = camp;
+  noteCampStored(save, camp);
   return camp;
 }
 

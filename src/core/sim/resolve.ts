@@ -154,10 +154,11 @@ function knockdownChance(
   power: number
 ): number {
   if (target === 'leg') {
-    // Leg kicks only drop a fighter whose legs are already badly compromised.
+    // Leg kicks only drop a fighter whose legs are already badly compromised. It is a rare
+    // knockdown in real fights; at the old threshold it was most of the knockdowns recorded.
     const legs = totalLegDamage(defender.damage);
-    if (legs < 34) return 0;
-    return clamp((legs - 34) * 0.004, 0, 0.09);
+    if (legs < C.knockdown.legDropThreshold) return 0;
+    return clamp((legs - C.knockdown.legDropThreshold) * C.knockdown.legDropScale, 0, C.knockdown.legDropMax);
   }
   const prof = STRIKE_PROFILE[name];
   const strikeAdv = effective(st, attacker, 'power') - effective(st, defender, 'strike-defense');
@@ -203,9 +204,16 @@ export function resolveStrike(ctx: ResolveCtx, attacker: SideState, dec: Decisio
   const spent = spendStamina(attacker, cost);
 
   // Accuracy contest. Technique difficulty and commitment both reduce the chance to land.
-  const atk = effective(st, attacker, 'strike-offense', { bonus: -prof.difficulty - power * 5 });
+  // From top position, landing depends on pinning the opponent as much as on hand skill, so the
+  // grappling gap feeds ground and pound. Without it a dominant grappler held position and
+  // landed no more than anyone else.
+  const topControl =
+    st.position.zone === 'ground' && st.position.controller === attacker.idx
+      ? (effective(st, attacker, 'ground-offense') - effective(st, defender, 'ground-defense')) * C.grappling.groundStrikeEdgeWeight
+      : 0;
+  const atk = effective(st, attacker, 'strike-offense', { bonus: -prof.difficulty - power * 5 + topControl });
   const def = effective(st, defender, 'strike-defense') * C.striking.defenseWeight;
-  const landChance = clamp(sigmoid((atk - def) / C.actionSpread) * 0.92, 0.03, 0.93);
+  const landChance = clamp(sigmoid((atk - def) / C.actionSpread) * C.striking.landScale, 0.03, 0.93);
 
   const roll = ctx.rng.next();
   let result: FightActionResult;
@@ -234,15 +242,19 @@ export function resolveStrike(ctx: ResolveCtx, attacker: SideState, dec: Decisio
     }
   }
 
-  const landed = result === 'clean-land' || result === 'partial-land' || result === 'blocked';
+  // Two different questions. A blocked shot still connects with the guard and does its small
+  // blocked damage, but stat keepers and judges do not count it as landed: counting it inflated
+  // accuracy to about seventy percent and let a fighter whose punches all hit gloves win rounds.
+  const connects = result === 'clean-land' || result === 'partial-land' || result === 'blocked';
+  const scored = result === 'clean-land' || result === 'partial-land';
   const significant = zone === 'distance' || power >= 0.35;
-  recordStrike(attacker, result === 'clean-land' || result === 'partial-land' || result === 'blocked', significant, prof.strikeCount, target, zone);
-  if (name === 'combination' && (result === 'clean-land' || result === 'partial-land')) bump(attacker, 'combinations');
+  recordStrike(attacker, scored, significant, prof.strikeCount, target, zone);
+  if (name === 'combination' && scored) bump(attacker, 'combinations');
 
   let damage = emptyDelta();
   const finish: ResolveOutcome['finish'] = NO_FINISH;
 
-  if (landed && quality > 0) {
+  if (connects && quality > 0) {
     damage = computeDamage(ctx, attacker, defender, name, target, power, quality);
     addDamage(defender.damage, damage);
     if (damage.cut > 0) tags.push('cut');
@@ -778,6 +790,12 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
     });
   };
 
+  // A failed attempt costs position far less often for the better submission grappler, who
+  // knows how to chain to the next grip rather than give up the top. A flat chance made every
+  // extra attempt by a skilled finisher a gift of position to the opponent.
+  const lossScale = 2 * sigmoid((effective(st, defender, 'submission-offense') - effective(st, attacker, 'submission-offense')) / C.submissionSpread);
+  const positionLoss = C.submission.positionLossOnFail * lossScale;
+
   // Stage 1: entry
   spendStamina(attacker, C.stamina.costs.submissionAttempt);
   timeUsed += C.timeCost.submissionStage * 0.6;
@@ -786,7 +804,7 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   const entryP = clamp(C.submission.entryBase + sigmoid((entryAtk - entryDef) / C.submissionSpread) * 0.42, 0.03, 0.85);
   if (!ctx.rng.chance(entryP)) {
     emit('entry', 'defended', ['entry-failed'], 0.4);
-    if (ctx.rng.chance(C.submission.positionLossOnFail)) {
+    if (ctx.rng.chance(positionLoss)) {
       if (pos.zone === 'ground') {
         pos.ground = 'scramble';
         emitPositionLoss(ctx, attacker, defender);
@@ -807,7 +825,7 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   const securedP = clamp(C.submission.securedBase + sigmoid((securedAtk - securedDef) / C.submissionSpread) * 0.4, 0.03, 0.8);
   if (!ctx.rng.chance(securedP)) {
     emit('defense', 'escaped', ['escaped'], 0.8);
-    if (ctx.rng.chance(C.submission.positionLossOnFail * 1.4)) {
+    if (ctx.rng.chance(positionLoss * 1.4)) {
       if (pos.zone === 'ground') {
         pos.controller = defender.idx;
         pos.ground = ctx.rng.chance(0.5) ? 'half-guard' : 'guard';
@@ -821,7 +839,9 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   // Stage 3: final adjustment. Fatigue and damage on the defender matter most here.
   timeUsed += C.timeCost.submissionStage * 0.8;
   const fatigueTerm = clamp((60 - defender.stamina) / 60, 0, 1) * C.submission.fatigueScale * 12;
-  const finishAtk = effective(st, attacker, 'submission-offense', { bonus: fatigueTerm });
+  // Difficulty applies at the finish as well. Ignoring it here let a secured twister tap a
+  // fighter about as often as a secured rear naked choke.
+  const finishAtk = effective(st, attacker, 'submission-offense', { bonus: fatigueTerm - difficulty * C.submission.finishDifficultyWeight });
   const finishDef = effective(st, defender, 'submission-defense');
   const finishP = clamp(C.submission.finishBase + sigmoid((finishAtk - finishDef) / C.submissionSpread) * 0.27, 0.015, 0.78);
 
@@ -846,7 +866,7 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   if (JOINT_LOCKS.includes(name) && ctx.rng.chance(0.45)) dmg.joint = 4 + ctx.rng.next() * 9;
   addDamage(defender.damage, dmg);
   emit('adjustment', 'escaped', ['survived'], 1.2, dmg);
-  if (ctx.rng.chance(C.submission.positionLossOnFail)) {
+  if (ctx.rng.chance(positionLoss)) {
     if (pos.zone === 'ground') {
       pos.controller = defender.idx;
       pos.ground = 'guard';

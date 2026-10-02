@@ -34,6 +34,7 @@ import {
 } from './resolve';
 import {
   freshStats,
+  GROUND_VALUE,
   isGroundControlPosition,
   publicPosition,
   resetToStanding,
@@ -70,6 +71,11 @@ export interface FightSimOptions {
   judges?: JudgePersona[];
   /** The assigned referee's stoppage tendency. Omitted falls back to a drawn value. */
   refereeTendency?: number;
+  /**
+   * Which fighter the crowd is behind: 1 for A, -1 for B, 0 or omitted for neither. Only used for
+   * judges drawn by the engine; supplied judges carry their own home lean.
+   */
+  homeSide?: -1 | 0 | 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +130,7 @@ function buildSide(
   const reachMe = f.reachIn ?? heightMe + 1.8;
   const reachOpp = opponent.fighter.reachIn ?? heightOpp + 1.8;
 
-  const plan = buildPlanProfile(f.tendencies, setup.gamePlan);
+  const plan = buildPlanProfile(f.tendencies, setup.gamePlan, f.ratings);
 
   return {
     idx,
@@ -154,11 +160,16 @@ function buildSide(
     injuryEffects,
     composure: composureOf(f, date),
     powerFactor: division.powerFactor * build.leverage,
-    fatigueFactor: division.fatigueFactor * build.fatigue * plan.staminaMult,
+    // The plan's stamina multiplier is charged on every strike and takedown it makes the fighter
+    // throw, in resolve. Multiplying the fatigue factor by it as well charged it twice, so its
+    // effect was squared: a high pace plan cost about seventy percent more energy instead of thirty,
+    // and every low output plan won far more fights than it should whatever the fighter's style.
+    fatigueFactor: division.fatigueFactor * build.fatigue,
     plan,
     aggression: plan.pressure,
     paceTarget: plan.pace,
     wantsGround: plan.takedown > 0.5,
+    styleEdge: 0,
     wantsDistance: plan.distance > plan.pressure,
     protectingLead: false,
     desperate: false,
@@ -183,7 +194,11 @@ export function setupFight(opts: FightSimOptions): { state: FightState; rng: Rng
   // judges consumes exactly the same rng as drawing anonymous ones. Skipping it shifted every
   // subsequent draw and changed fight outcomes across the whole world.
   const drawn = drawJudges(rng);
-  const judges = opts.judges && opts.judges.length === 3 ? opts.judges : drawn;
+  // Anonymous local judges feel a home crowd too. They get the typical susceptibility of the
+  // persistent roster, so a regional card is not the one place hometown scoring never happens.
+  const home = (opts.homeSide ?? 0) * C.judging.homeCrowdBias * C.judging.anonymousHometownSusceptibility;
+  const judges =
+    opts.judges && opts.judges.length === 3 ? opts.judges : home !== 0 ? drawn.map((j) => ({ ...j, homeBias: home })) : drawn;
   const state: FightState = {
     a,
     b,
@@ -217,6 +232,22 @@ interface StoppageVerdict {
 }
 
 /**
+ * True while the side is flat on its back under a dominant top position: side control, mount
+ * or the back. From there a referee stops a fight on accumulated unanswered strikes even when no
+ * single shot has hurt the fighter. Without this path, ground and pound from position never
+ * produced a stoppage at all and every ground TKO came from the knockdown window.
+ */
+function pinnedUnder(st: FightState, side: SideState): boolean {
+  const pos = st.position;
+  return (
+    pos.zone === 'ground' &&
+    pos.downedIdx === null &&
+    pos.controller !== side.idx &&
+    GROUND_VALUE[pos.ground] >= C.stoppage.pinnedPositionValue
+  );
+}
+
+/**
  * Referee judgement after a damaging sequence. Considers accumulated damage, unanswered
  * clean strikes, whether the fighter is intelligently defending, position and the
  * referee's own tendency. It is not a single dice roll on a knockdown.
@@ -231,7 +262,11 @@ function checkStoppage(st: FightState, rng: Rng, lastEvent: FightEvent | undefin
       const severity = lastEvent.damage.head;
       const durability = effective(st, side, 'strike-defense', { bonus: side.base.durability - side.base.striking });
       const koChance = clamp(
-        (severity / 34) * 0.085 * st.refereeTendency * (1 + side.damage.head / 150) * clamp(1 - (durability - 65) * 0.012, 0.4, 1.8),
+        (severity / 34) *
+          C.stoppage.knockdownKoBase *
+          st.refereeTendency *
+          (1 + side.damage.head / C.stoppage.knockdownKoHeadScale) *
+          clamp(1 - (durability - 65) * 0.012, 0.4, 1.8),
         0,
         0.7
       );
@@ -244,10 +279,19 @@ function checkStoppage(st: FightState, rng: Rng, lastEvent: FightEvent | undefin
       }
     }
 
-    if (!hurt) continue;
-    if (side.unansweredAgainst < C.stoppage.unansweredThreshold) continue;
+    const pinned = pinnedUnder(st, side);
+    if (!hurt && !pinned) continue;
+    // A fighter who has just been dropped is one short flurry from a stoppage, not five clean
+    // shots. Requiring the full count meant only about a fifth of knockdowns ended fights.
+    const downed = st.position.downedIdx === side.idx;
+    const threshold = downed
+      ? C.stoppage.downedUnansweredThreshold
+      : hurt
+        ? C.stoppage.unansweredThreshold
+        : C.stoppage.pinnedUnansweredThreshold;
+    if (side.unansweredAgainst < threshold) continue;
 
-    const extra = side.unansweredAgainst - C.stoppage.unansweredThreshold;
+    const extra = side.unansweredAgainst - threshold;
     const damageFactor = clamp(side.damage.head / C.damage.headStoppageThreshold, 0, 1.6);
     const defenseFactor = clamp((effective(st, side, 'strike-defense') - 55) / 60, -0.4, 0.5);
     const onGround = st.position.zone === 'ground' && st.position.controller === attacker.idx;
@@ -262,8 +306,11 @@ function checkStoppage(st: FightState, rng: Rng, lastEvent: FightEvent | undefin
     p = clamp(p, 0, 0.95);
 
     if (rng.chance(p)) {
+      // A fighter dropped by a standing shot and finished on the floor seconds later is a TKO
+      // by strikes, as real records call it. Ground and pound is the label for a stoppage from
+      // an established top position, once the knockdown window has closed.
       return {
-        method: onGround ? 'tko-ground-strikes' : 'tko-strikes',
+        method: onGround && !downed ? 'tko-ground-strikes' : 'tko-strikes',
         winnerIdx: attacker.idx,
         finishingStrike: lastEvent && lastEvent.action.kind === 'strike' ? lastEvent.action.name : undefined,
       };
@@ -301,7 +348,8 @@ function checkBetweenRounds(st: FightState, rng: Rng): StoppageVerdict | null {
 type FoulKind = 'eye-poke' | 'groin-strike' | 'illegal-knee' | 'fence-grab' | 'back-of-head';
 
 function maybeFoul(st: FightState, rng: Rng, actor: SideState): { kind: FoulKind; deduct: boolean } | null {
-  const base = 0.0035 * (1 + actor.plan.pace * 0.4);
+  const F = C.fouls;
+  const base = F.baseChance * (1 + actor.plan.pace * F.paceScale);
   if (!rng.chance(base)) return null;
   const kinds: FoulKind[] =
     st.position.zone === 'ground'
@@ -309,7 +357,15 @@ function maybeFoul(st: FightState, rng: Rng, actor: SideState): { kind: FoulKind
       : ['eye-poke', 'groin-strike', 'fence-grab', 'back-of-head'];
   const kind = rng.pick(kinds);
   actor.fouls++;
-  const deduct = actor.fouls >= 2 && rng.chance(0.5);
+  // Referees warn first. A point comes off for a flagrant foul, for a repeated one occasionally
+  // on the second, and always from the third. Deducting half of all second fouls put a point
+  // deduction in about one fight in eight, several times the real rate, and most unanimous
+  // draws came from a deduction rather than from the fighting.
+  const flagrant = rng.chance(F.flagrantChance);
+  const deduct =
+    flagrant ||
+    actor.fouls >= F.certainDeductionFrom ||
+    (actor.fouls === F.certainDeductionFrom - 1 && rng.chance(F.earlyDeductionChance));
   return { kind, deduct };
 }
 
@@ -379,14 +435,23 @@ export class FightSimulator {
     const outcome = this.dispatch(actor, decision);
     this.advanceClock(actor, outcome.timeUsed);
 
+    // The stoppage check reads the action itself. A foul event pushed after it would otherwise
+    // hide a knockdown from the check and cancel that action's knockout roll.
+    const actionEvent = this.events.length > before ? this.events[this.events.length - 1] : undefined;
+
     // Fouls are emitted after the clock advances so the event stream stays in strict
     // descending clock order for the live text view.
     const foul = maybeFoul(st, this.rng, actor);
+    let disqualified = false;
     if (foul) {
       const opponent = actor.idx === 0 ? st.b : st.a;
+      // The stat is the fouls a fighter committed, warnings included. It used to be credited to
+      // the fighter who was fouled, and only on a deduction.
+      actor.roundStats.fouls++;
+      actor.fightStats.fouls++;
       if (foul.deduct) {
-        actor.pointDeductions++;
-        opponent.roundStats.fouls++;
+        if (actor.pointDeductions >= C.fouls.maxDeductions) disqualified = true;
+        else actor.pointDeductions++;
       }
       this.ctx().push({
         round: st.round,
@@ -400,8 +465,8 @@ export class FightSimulator {
         damage: zeroDamage(),
         staminaCost: 0,
         scoreImpact: 0,
-        importance: foul.deduct ? 'major' : 'notable',
-        tags: ['foul', foul.kind],
+        importance: disqualified ? 'decisive' : foul.deduct ? 'major' : 'notable',
+        tags: ['foul', foul.kind, ...(disqualified ? ['disqualification'] : [])],
       });
       st.clock -= C.timeCost.refereeAction;
       st.totalSeconds += C.timeCost.refereeAction;
@@ -415,7 +480,18 @@ export class FightSimulator {
       return this.events.slice(before);
     }
 
-    const stoppage = checkStoppage(st, this.rng, this.events[this.events.length - 1]);
+    // A fighter who has already lost two points and fouls again is disqualified. The fight
+    // ends there and the fouled fighter wins.
+    if (disqualified) {
+      const victim = actor.idx === 0 ? st.b : st.a;
+      const dq: StoppageVerdict = { method: 'disqualification', winnerIdx: victim.idx };
+      this.finish = dq;
+      this.emitFinishEvent(dq);
+      this.endFight();
+      return this.events.slice(before);
+    }
+
+    const stoppage = checkStoppage(st, this.rng, actionEvent);
     if (stoppage) {
       this.finish = stoppage;
       if (stoppage.finishingStrike) this.finishingStrike = stoppage.finishingStrike;
@@ -505,7 +581,8 @@ export class FightSimulator {
       side.damage.balance = Math.max(0, side.damage.balance - used * 0.7);
       // Unanswered strikes only count while the sequence is continuous. A fighter who
       // survives a flurry and gets moving again is no longer one shot from a stoppage.
-      if (side.stunSecondsRemaining <= 0 && side.vulnerableSecondsRemaining <= 0) {
+      // Pinned under a dominant position the count keeps building too: there is nowhere to move.
+      if (side.stunSecondsRemaining <= 0 && side.vulnerableSecondsRemaining <= 0 && !pinnedUnder(st, side)) {
         side.unansweredAgainst = Math.max(0, side.unansweredAgainst - used * 0.6);
       }
     }
@@ -635,18 +712,22 @@ export class FightSimulator {
 
     if (finished) return;
 
-    // Between round recovery and medical checks.
-    const between = checkBetweenRounds(st, this.rng);
-    if (between) {
-      this.finish = between;
-      this.emitFinishEvent(between);
+    // The final horn ends the fight before any medical or corner check. Those checks belong to
+    // the rest between rounds that will actually be fought; running them after the last round
+    // turned decisions into corner stoppages at 5:00 of the final round, sometimes against a
+    // fighter who was ahead on every card.
+    if (st.round >= st.scheduledRounds) {
       st.over = true;
       this.endRound = st.round;
       this.endTimeSeconds = C.round.seconds;
       return;
     }
 
-    if (st.round >= st.scheduledRounds) {
+    // Between round recovery and medical checks.
+    const between = checkBetweenRounds(st, this.rng);
+    if (between) {
+      this.finish = between;
+      this.emitFinishEvent(between);
       st.over = true;
       this.endRound = st.round;
       this.endTimeSeconds = C.round.seconds;

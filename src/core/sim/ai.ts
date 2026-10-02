@@ -97,8 +97,12 @@ export function updateTactics(st: FightState, side: SideState, rng: Rng): void {
     effective(st, side, 'ground-offense') - effective(st, opp, 'ground-defense') + (effective(st, side, 'takedown-offense') - effective(st, opp, 'takedown-defense'));
   const myStandingEdge = effective(st, side, 'strike-offense') - effective(st, opp, 'strike-defense');
 
+  // A fighter takes the fight where they are better relative to this opponent. Judging the
+  // ground edge alone, against a fixed bar, left a much better grappler standing and trading
+  // with an equal striker, so the grappling ratings hardly decided anything.
+  side.styleEdge = myGroundEdge - myStandingEdge;
   let groundDesire = side.plan.takedown * 0.5 + side.plan.ground * 0.5;
-  groundDesire += clamp(myGroundEdge / 40, -0.35, 0.45);
+  groundDesire += clamp(side.styleEdge / C.ai.styleEdgeScale, -0.35, 0.45);
   if (side.plan.avoidStrength && myStandingEdge < myGroundEdge) groundDesire += 0.2;
   if (side.stamina < 40) groundDesire -= 0.25;
   if (hurt) groundDesire += 0.28;
@@ -108,6 +112,9 @@ export function updateTactics(st: FightState, side: SideState, rng: Rng): void {
   if (side.protectingLead) distanceDesire += 0.18;
   if (hurt) distanceDesire += 0.3;
   if (side.desperate) distanceDesire -= 0.24;
+  // A fighter looking for the takedown has to close the distance to shoot. Staying at long
+  // range, where no takedown is available, kept most grapplers striking all night.
+  if (side.wantsGround) distanceDesire -= C.ai.grapplerCloseDistance;
   if (totalLegDamage(side.damage) > C.striking.legDamageMobilityThreshold) distanceDesire -= 0.2;
   side.wantsDistance = distanceDesire > side.plan.pressure;
 }
@@ -241,15 +248,19 @@ function chooseStandingAction(st: FightState, side: SideState, rng: Rng): Decisi
   const wantsCloser = !side.wantsDistance && (pos.range === 'long' || pos.range === 'kick');
   const wantsFurther = side.wantsDistance && (pos.range === 'pocket' || pos.range === 'boxing');
 
+  // The size of the grappling edge decides how hard a fighter chases the takedown, not only
+  // whether they want it at all.
   const takedownDesire =
     side.wantsGround && pos.range !== 'long'
-      ? side.plan.takedown * (1.1 + (side.desperate ? 0.4 : 0)) * clamp(side.stamina / 55, 0.3, 1.2)
+      ? (side.plan.takedown + clamp(side.styleEdge / C.ai.styleEdgeScale, 0, 0.5)) *
+        (1.1 + (side.desperate ? 0.4 : 0)) *
+        clamp(side.stamina / 55, 0.3, 1.2)
       : side.plan.takedown * 0.25;
 
   const clinchDesire = side.plan.clinch * (pos.range === 'pocket' || pos.range === 'boxing' ? 1.2 : 0.4);
 
   const opts: Weighted<Decision>[] = [
-    { item: chooseStandingStrike(st, side, rng), weight: 4.4 * (0.55 + side.paceTarget) * (side.plan.counter > 0.7 ? 0.82 : 1) },
+    { item: chooseStandingStrike(st, side, rng), weight: C.ai.strikeChoiceWeight * (0.55 + side.paceTarget) * (side.plan.counter > 0.7 ? 0.82 : 1) },
     {
       item: { action: { kind: 'movement', name: wantsCloser ? 'press-forward' : 'circle' }, power: 0, rangeIntent: wantsCloser ? -1 : 0 },
       weight: wantsCloser ? 1.15 * side.plan.pressure : 0.42,
@@ -344,6 +355,62 @@ const MOUNT_SUBMISSIONS: SubmissionName[] = ['armbar', 'arm-triangle', 'american
 const LEG_SUBMISSIONS: SubmissionName[] = ['heel-hook', 'kneebar', 'ankle-lock', 'calf-slicer'];
 const TURTLE_SUBMISSIONS: SubmissionName[] = ['rear-naked-choke', 'peruvian-necktie', 'darce-choke', 'anaconda-choke'];
 
+/**
+ * How often each submission is actually attempted relative to the others, from real fight
+ * records. A uniform pick from the back made the twister as common as the rear naked choke,
+ * so one of the rarest finishes in the sport was among the most common in the game.
+ */
+const SUBMISSION_COMMONNESS: Record<SubmissionName, number> = {
+  'rear-naked-choke': 1.0,
+  guillotine: 0.6,
+  'arm-triangle': 0.45,
+  armbar: 0.4,
+  'triangle-choke': 0.35,
+  'darce-choke': 0.3,
+  kimura: 0.25,
+  'anaconda-choke': 0.15,
+  'heel-hook': 0.15,
+  'north-south-choke': 0.1,
+  americana: 0.08,
+  kneebar: 0.06,
+  'ankle-lock': 0.06,
+  'neck-crank': 0.04,
+  omoplata: 0.04,
+  'peruvian-necktie': 0.04,
+  'shoulder-choke': 0.04,
+  'von-flue-choke': 0.03,
+  'calf-slicer': 0.02,
+  twister: 0.024,
+};
+
+/**
+ * From back control the choke dominates far more than the general table implies: about
+ * eighty five percent of attempts are the rear naked choke, the armbar is the main
+ * alternative and the twister is a rarity.
+ */
+const BACK_SUBMISSION_SHARE: Partial<Record<SubmissionName, number>> = {
+  'rear-naked-choke': 0.85,
+  armbar: 0.13,
+  twister: 0.02,
+};
+
+/** Picks the submission to attempt, weighted by how common it is. One draw, like a plain pick. */
+function pickSubmission(rng: Rng, st: FightState, subs: SubmissionName[]): SubmissionName {
+  const fromBack = st.position.zone === 'ground' && st.position.ground === 'back';
+  return rng.weighted(subs, (s) => (fromBack ? BACK_SUBMISSION_SHARE[s] ?? SUBMISSION_COMMONNESS[s] : SUBMISSION_COMMONNESS[s]));
+}
+
+/**
+ * How much more often a fighter goes for a submission when their submission game is better than
+ * the opponent's defense. Without it a better finisher got no more chances than anyone else and a
+ * Submissions edge barely changed results.
+ */
+function submissionAppetite(st: FightState, side: SideState): number {
+  const opp = opponentOf(st, side);
+  const edge = effective(st, side, 'submission-offense') - effective(st, opp, 'submission-defense');
+  return clamp(1 + edge * C.ai.submissionEdgeScale, 0.35, 2.4);
+}
+
 export function submissionsAvailable(st: FightState, side: SideState): SubmissionName[] {
   const pos = st.position;
   if (pos.zone === 'clinch') return ['guillotine', 'darce-choke'];
@@ -382,8 +449,8 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
     opts.push({ item: { action: { kind: 'grapple', name: 'take-back' }, power: 0.7 }, weight: 0.7 * side.base.grappling / 100 });
     if (subs.length > 0) {
       opts.push({
-        item: { action: { kind: 'submission', name: rng.pick(subs), stage: 'entry' }, power: 0.7 },
-        weight: 0.085 * side.plan.submission,
+        item: { action: { kind: 'submission', name: pickSubmission(rng, st, subs), stage: 'entry' }, power: 0.7 },
+        weight: 0.085 * side.plan.submission * submissionAppetite(st, side),
       });
     }
     return pickWeighted(rng, opts);
@@ -393,7 +460,7 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
     const dominant = value >= 0.66;
     opts.push({
       item: { action: { kind: 'strike', name: pos.ground === 'guard' || rng.chance(0.65) ? 'ground-strike' : 'ground-elbow' }, target: 'head', power: clamp(0.4 + side.plan.finishSeeking * 0.5, 0.2, 1) },
-      weight: (dominant ? 1.5 : 0.9) * side.paceTarget * (1 + side.plan.finishSeeking * 0.6),
+      weight: (dominant ? 1.5 : 0.9) * C.ai.groundStrikeWeight * side.paceTarget * (1 + side.plan.finishSeeking * 0.6),
     });
     opts.push({
       item: { action: { kind: 'grapple', name: 'advance-position' }, power: 0.6 },
@@ -405,8 +472,8 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
     });
     if (subs.length > 0) {
       opts.push({
-        item: { action: { kind: 'submission', name: rng.pick(subs), stage: 'entry' }, power: 0.75 },
-        weight: 0.155 * side.plan.submission * (0.5 + side.base.submissions / 110) * (dominant ? 1.4 : 0.8),
+        item: { action: { kind: 'submission', name: pickSubmission(rng, st, subs), stage: 'entry' }, power: 0.75 },
+        weight: 0.155 * side.plan.submission * (0.5 + side.base.submissions / 110) * (dominant ? 1.4 : 0.8) * submissionAppetite(st, side),
       });
     }
     opts.push({
@@ -436,7 +503,7 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
     });
     if (subs.length > 0) {
       opts.push({
-        item: { action: { kind: 'submission', name: rng.pick(subs), stage: 'entry' }, power: 0.7 },
+        item: { action: { kind: 'submission', name: pickSubmission(rng, st, subs), stage: 'entry' }, power: 0.7 },
         weight: 0.145 * side.plan.submission * (0.4 + side.base.submissions / 100) * (trapped ? 0.5 : 1.2),
       });
     }

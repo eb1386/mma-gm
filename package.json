@@ -31,9 +31,20 @@
     "test:browser": "playwright test",
     "activity:bands": "vite-node tools/activity-bands.ts",
     "calibrate:scores": "vite-node tools/score-calibration.ts",
-    "acceptance": "vite-node tools/acceptance.ts"
+    "acceptance": "vite-node tools/acceptance.ts",
+    "ios:sync": "npm run build && cap sync ios",
+    "ios": "npm run ios:sync && cap open ios",
+    "ios:sim": "npm run ios:sync && cap run ios",
+    "icons": "node tools/icons/render-icons.mjs"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/filesystem": "^8.1.3",
+    "@capacitor/ios": "^8.5.2",
+    "@capacitor/share": "^8.0.2",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
     "@vercel/analytics": "^2.0.1",
     "idb-keyval": "^6.2.1",
     "react": "^18.3.1",
@@ -42,6 +53,7 @@
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "@playwright/test": "^1.62.0",
     "@types/node": "^26.1.2",
     "@types/react": "^18.3.11",

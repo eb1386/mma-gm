@@ -6,7 +6,8 @@ import { estimateRatings } from '@core/world/scouting';
 import { titleLineage } from '@core/world/history';
 import { deriveFighterStatus, FIGHTER_STATUS_LABEL, statusTone } from '@core/world/status';
 import { useGame } from '../store';
-import { DataTable, EstimatedRating, Notice, Panel, RATING_COLUMN_HEADS, Rating, RealTag } from '../components';
+import { DataTable, EstimatedRating, formatRecord, Notice, Panel, RATING_COLUMN_HEADS, Rating, RealTag } from '../components';
+import { isMainResult, isRegionalBout } from '@core/world/circuit';
 import { currentContender } from '@core/world/contender';
 
 export function DivisionPage() {
@@ -21,14 +22,20 @@ export function DivisionPage() {
   const interim = table.interimChampionId ? save.fighters[table.interimChampionId] : null;
   const contender = currentContender(save, id);
   const contenderFighter = contender ? save.fighters[contender.fighterId] : null;
-  const fighters = Object.values(save.fighters).filter((f) => f.divisionId === id && !f.retired && f.activityStatus === 'active');
+  const fighters = Object.values(save.fighters).filter((f) => f.divisionId === id && !f.circuit && !f.retired && f.activityStatus === 'active');
+  // One estimate per fighter per render, read by both the sort and the cells. Calling estimateRatings
+  // inline cost about nine full estimates per row plus two per comparison while sorting.
+  const estById = new Map(fighters.map((f) => [f.id, estimateRatings(save, f)]));
+  const estOf = (f: (typeof fighters)[number]) => estById.get(f.id) ?? estimateRatings(save, f);
   const lineage = titleLineage(save, id);
+  const champReign = champ ? lineage.find((r) => r.fighterId === champ.id && r.lostOn === null) : undefined;
+  // The promotion's division page, so regional cards fought at this weight stay off it.
   const recent = Object.values(save.history.results)
-    .filter((r) => r.divisionId === id)
+    .filter((r) => r.divisionId === id && isMainResult(save, r))
     .sort((a, b) => (a.date > b.date ? -1 : 1))
     .slice(0, 20);
   const upcoming = Object.values(save.bouts)
-    .filter((b) => b.divisionId === id && b.status === 'scheduled')
+    .filter((b) => b.divisionId === id && b.status === 'scheduled' && !isRegionalBout(save, b) && !b.isAmateur)
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 
   return (
@@ -51,9 +58,8 @@ export function DivisionPage() {
               <span className="tag champ">Champion</span>
               <br />
               <span className="dim small">
-                {champ.ufcRecord.wins}-{champ.ufcRecord.losses} in the promotion ·{' '}
-                {lineage.find((r) => r.fighterId === champ.id && r.lostOn === null)?.defenses ?? 0} defenses · champion
-                since {lineage.find((r) => r.fighterId === champ.id && r.lostOn === null)?.wonOn ?? 'unknown'}
+                {formatRecord(champ.ufcRecord)} in the promotion ·{' '}
+                {champReign?.defenses ?? 0} defenses · champion since {champReign ? formatDate(champReign.wonOn) : 'unknown'}
               </span>
             </p>
           ) : (
@@ -129,7 +135,7 @@ export function DivisionPage() {
               key: 'record',
               label: 'Promo',
               sort: (f) => f.ufcRecord.wins - f.ufcRecord.losses,
-              render: (f) => `${f.ufcRecord.wins}-${f.ufcRecord.losses}`,
+              render: (f) => formatRecord(f.ufcRecord),
             },
             {
               key: 'streak',
@@ -143,21 +149,21 @@ export function DivisionPage() {
               key: 'ovr',
               label: 'Ovr',
               numeric: true,
-              sort: (f) => estimateRatings(save, f).ovr,
+              sort: (f) => estOf(f).ovr,
               render: (f) => {
-                const e = estimateRatings(save, f);
+                const e = estOf(f);
                 return <EstimatedRating estimate={e.ovr} low={e.exact ? undefined : e.ovrLow} high={e.exact ? undefined : e.ovrHigh} />;
               },
             },
-            { key: 'pot', label: 'Pot', numeric: true, sort: (f) => estimateRatings(save, f).pot, render: (f) => <Rating value={estimateRatings(save, f).pot} /> },
+            { key: 'pot', label: 'Pot', numeric: true, sort: (f) => estOf(f).pot, render: (f) => <Rating value={estOf(f).pot} /> },
             ...RATING_COLUMN_HEADS.map((h) => ({
               key: h.key,
               label: h.label,
               title: h.title,
               numeric: true,
-              sort: (f: (typeof fighters)[number]) => estimateRatings(save, f).ratings[h.key],
+              sort: (f: (typeof fighters)[number]) => estOf(f).ratings[h.key],
               render: (f: (typeof fighters)[number]) => {
-                const e = estimateRatings(save, f);
+                const e = estOf(f);
                 return <EstimatedRating estimate={e.ratings[h.key]} low={e.exact ? undefined : e.low[h.key]} high={e.exact ? undefined : e.high[h.key]} />;
               },
             })),
@@ -206,8 +212,8 @@ export function DivisionPage() {
                   <td>
                     <Link to={`/fighter/${r.fighterId}`}>{r.fighterName}</Link>
                   </td>
-                  <td className="small">{r.wonOn}</td>
-                  <td className="small">{r.lostOn ?? <span className="good">current</span>}</td>
+                  <td className="small nowrap">{formatDate(r.wonOn)}</td>
+                  <td className="small nowrap">{r.lostOn ? formatDate(r.lostOn) : <span className="good">current</span>}</td>
                   <td className="num">{r.days}</td>
                   <td className="num">{r.defenses}</td>
                   <td className="small dim">{r.endReason ?? ''}</td>

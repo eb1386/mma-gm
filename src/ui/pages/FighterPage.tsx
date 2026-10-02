@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import type { Fighter } from '@core/types/fighter';
+import { isAmateurFighter, promotionConfig } from '@core/world/regional';
 import { Link, useParams } from 'react-router-dom';
 import { DIVISION_BY_ID } from '@core/config/divisions';
 import { BUILDS } from '@core/config/builds';
@@ -12,16 +14,70 @@ import { happinessFactors } from '@core/world/gyms';
 import { Rng } from '@core/rng';
 import {
   activityReport,
+  availableSocialActions,
   performSocialAction,
   publicLabelText,
   socialActionAllowance,
-  SOCIAL_ACTIONS,
   SOCIAL_ACTIONS_PER_WEEK,
 } from '@core/world/identity';
 import { totalFollowers } from '@core/types/identity';
 import { computeLeverage } from '@core/world/economy';
+import { displayedPot } from '@core/world/pot';
 import { useGame } from '../store';
 import { Bar, DataTable, EstimatedRating, KeyValues, LineChart, Notice, Panel, Rating, RealTag, Tabs } from '../components';
+
+/**
+ * The real fighter's official career numbers, as published on their athlete profile. They describe
+ * the career before this save and never change inside it, so they sit beside the simulated career
+ * rather than inside it.
+ */
+function OfficialStatsPanel({ stats }: { stats: NonNullable<Fighter['officialStats']> }) {
+  const v = (n: number | null, suffix = '', digits = 2) => (n === null || n === undefined ? 'Not published' : `${Number(n).toFixed(digits)}${suffix}`);
+  const pct = (n: number | null) => (n === null || n === undefined ? 'Not published' : `${Math.round(n)}%`);
+  // Saves made from the first build of this snapshot hold placeholder values the profile renders when
+  // it has no data: 0% takedown accuracy beside landed takedowns, a 00:00 fight time and a 0/0/0
+  // strike diagram. The snapshot no longer writes them, and these guards keep older saves honest.
+  const takedownAccuracy = stats.takedownAccuracyPct === 0 && (stats.takedownAvgPer15 ?? 0) > 0 ? null : stats.takedownAccuracyPct;
+  const fightTime = stats.avgFightTime && !/^0+:00$/.test(stats.avgFightTime) ? stats.avgFightTime : null;
+  const sums = (parts: Record<string, number> | null) => Boolean(parts) && Object.values(parts!).reduce((t, x) => t + x, 0) > 0;
+  const rates: [string, string][] = [
+    ['Significant strikes landed per minute', v(stats.sigStrLandedPerMin)],
+    ['Significant strikes absorbed per minute', v(stats.sigStrAbsorbedPerMin)],
+    ['Striking accuracy', pct(stats.sigStrAccuracyPct)],
+    ['Striking defence', pct(stats.sigStrDefensePct)],
+    ['Takedowns per fifteen minutes', v(stats.takedownAvgPer15)],
+    ['Takedown accuracy', pct(takedownAccuracy)],
+    ['Takedown defence', pct(stats.takedownDefensePct)],
+    ['Submission attempts per fifteen minutes', v(stats.submissionAvgPer15)],
+    ['Knockdowns per fifteen minutes', v(stats.knockdownAvgPer15)],
+  ];
+  // A profile with no rate data at all reads better as one line than as nine identical ones.
+  const rows: [string, string][] = rates.every(([, x]) => x === 'Not published') ? [['Rates and percentages', 'Not published']] : rates;
+  rows.push(['Average fight time', fightTime ?? 'Not published']);
+  if (stats.firstRoundFinishes !== null) rows.push(['First round finishes', String(stats.firstRoundFinishes)]);
+  if (stats.winMethod) rows.push(['Wins by method', `${stats.winMethod.ko} KO or TKO, ${stats.winMethod.sub} submission, ${stats.winMethod.dec} decision`]);
+  if (stats.strikeTarget && sums(stats.strikeTarget)) rows.push(['Where strikes land', `head ${stats.strikeTarget.head}%, body ${stats.strikeTarget.body}%, legs ${stats.strikeTarget.leg}%`]);
+  if (stats.strikePosition && sums(stats.strikePosition)) rows.push(['Where strikes are thrown', `standing ${stats.strikePosition.standing}%, clinch ${stats.strikePosition.clinch}%, ground ${stats.strikePosition.ground}%`]);
+  if (stats.fightingStyle) rows.push(['Fighting style', stats.fightingStyle]);
+  if (stats.trainsAt) rows.push(['Trains at', stats.trainsAt]);
+  if (stats.placeOfBirth) rows.push(['Place of birth', stats.placeOfBirth.replace(/&amp;/g, '&')]);
+  // The source records the card a fighter was found on, which can be one booked after the snapshot.
+  // The save never runs that card, so it is not presented as the last one they fought on.
+  const snapshotDay = stats.fetchedAt.slice(0, 10);
+  const lastCard = stats.lastEventDate && stats.lastEventDate <= snapshotDay ? stats.lastEventDate : null;
+  const bookedCard = stats.nextEventDate ?? (stats.lastEventDate && stats.lastEventDate > snapshotDay ? stats.lastEventDate : null);
+  if (lastCard) rows.push(['Last seen on a card', formatDate(lastCard)]);
+  if (bookedCard) rows.push(['Booked on a card at snapshot time', formatDate(bookedCard)]);
+  return (
+    <Panel title="Official career statistics">
+      <KeyValues rows={rows} />
+      <p className="provenance">
+        Sourced from the official athlete profile, fetched {stats.fetchedAt.slice(0, 10)}. These are the real career before this
+        save began. The six ratings are derived from them, and nothing in the simulation changes them.
+      </p>
+    </Panel>
+  );
+}
 
 export function FighterPage() {
   const save = useGame((s) => s.save)!;
@@ -159,7 +215,16 @@ export function FighterPage() {
             <KeyValues
               rows={[
                 ['Age', age ?? 'Unknown'],
-                ['Date of birth', fighter.birthDate ?? <span className="faint">Unknown</span>],
+                [
+                  'Date of birth',
+                  // A real fighter's birth date is estimated from the published age so they age in the
+                  // save. It is not a fact about the person, so it is never shown as one.
+                  fighter.birthDate && !fighter.birthDateEstimated ? (
+                    formatDate(fighter.birthDate)
+                  ) : (
+                    <span className="faint">Not published</span>
+                  ),
+                ],
                 ['Height', formatHeight(fighter.heightIn)],
                 ['Reach', fighter.reachIn ? `${fighter.reachIn}"` : <span className="faint">Unknown</span>],
                 ['Leg reach', fighter.legReachIn ? `${fighter.legReachIn}"` : <span className="faint">Unknown</span>],
@@ -174,11 +239,18 @@ export function FighterPage() {
             />
           </Panel>
 
+          {fighter.officialStats && <OfficialStatsPanel stats={fighter.officialStats} />}
           <Panel title="Record and standing">
             <KeyValues
               rows={[
                 ['Professional record', `${fighter.record.wins}-${fighter.record.losses}${fighter.record.draws ? `-${fighter.record.draws}` : ''}`],
                 ['Promotional record', `${fighter.ufcRecord.wins}-${fighter.ufcRecord.losses}${fighter.ufcRecord.draws ? `-${fighter.ufcRecord.draws}` : ''}`],
+                ...(fighter.circuit
+                  ? ([['Competes for', `${promotionConfig(fighter.circuit)?.name ?? 'A regional promotion'}${isAmateurFighter(fighter) ? ', amateur' : ''}`]] as [string, string][])
+                  : []),
+                ...(fighter.amateurRecord
+                  ? ([['Amateur record', `${fighter.amateurRecord.wins}-${fighter.amateurRecord.losses}${fighter.amateurRecord.draws ? `-${fighter.amateurRecord.draws}` : ''}`]] as [string, string][])
+                  : []),
                 ['Wins by strikes', fighter.methods.koWins],
                 ['Wins by submission', fighter.methods.subWins],
                 ['Wins by decision', fighter.methods.decWins],
@@ -241,7 +313,7 @@ export function FighterPage() {
                 ['Morale', <Bar key="mo" value={fighter.morale} />],
                 ['Happiness', <Bar key="h" value={fighter.happiness} />],
                 ['Matchmaker relationship', <Bar key="mm" value={fighter.relationships.matchmaker} />],
-                ['Career earnings', formatMoney(fighter.careerEarnings)],
+                ['Career purses', formatMoney(fighter.careerEarnings)],
                 ['Last purse', fighter.lastPurse ? formatMoney(fighter.lastPurse) : '-'],
                 ['Leverage', <Bar key="l" value={computeLeverage(fighter, save).score} />],
               ]}
@@ -367,7 +439,23 @@ export function FighterPage() {
         </Panel>
       )}
 
-      {tab === 'development' && (
+      {tab === 'development' && !est.exact && (
+        // The Overview shows a rival through the scouting fog. The exact Peak Ovr, Pot confidence and
+        // rating log here used to sit one tab away and gave the true numbers straight back, so a fighter
+        // you only see from outside gets the estimate and nothing that would point back to the truth.
+        <Panel title="Development">
+          <KeyValues
+            rows={[
+              ['Current Ovr', <EstimatedRating key="c" estimate={est.ovr} low={est.ovrLow} high={est.ovrHigh} />],
+              ['Pot', <Rating key="pt" value={est.pot} />],
+              ['Peak reached', fighter.peakOvrDate ? formatDate(fighter.peakOvrDate) : '-'],
+            ]}
+          />
+          <p className="dim small">Exact development history is visible only for your own fighters.</p>
+        </Panel>
+      )}
+
+      {tab === 'development' && est.exact && (
         <div className="grid c2">
           <Panel title="Rating history">
             <LineChart
@@ -376,13 +464,14 @@ export function FighterPage() {
                 { points: potPoints, className: 'line-pot', label: 'Pot' },
                 { points: lngPoints, className: 'line-lng', label: 'Longevity' },
               ]}
+              emptyText="Not enough history yet. The chart fills in after each fight."
             />
             <KeyValues
               rows={[
                 ['Peak Ovr', <Rating key="p" value={fighter.peakOvr} />],
                 ['Peak reached', fighter.peakOvrDate ? formatDate(fighter.peakOvrDate) : '-'],
                 ['Current Ovr', <Rating key="c" value={ovrDisplayed(fighter.ratings)} />],
-                ['Pot', <Rating key="pt" value={fighter.pot} />],
+                ['Pot', <Rating key="pt" value={displayedPot(fighter)} />],
                 ['Pot confidence', fighter.potConfidence.replace('-', ' ')],
               ]}
             />
@@ -564,30 +653,34 @@ export function FighterPage() {
                     <p className="small faint">
                       {allowance.remaining} of {SOCIAL_ACTIONS_PER_WEEK} posts left this week.
                     </p>
-                    <div className="row" style={{ gap: 4 }}>
-                      {SOCIAL_ACTIONS.map((a) => (
-                        <button
-                          key={a.key}
-                          className="small"
-                          title={a.description}
-                          // Going quiet is always available; posting is limited, because an
-                          // unlimited button that only ever adds followers is not a decision.
-                          disabled={a.key !== 'go-silent' && allowance.remaining <= 0}
-                          onClick={() => {
-                            const outcome = mutate((s) => {
-                              const rng = new Rng(s.rng);
-                              const r = performSocialAction(s, s.fighters[fighter.id], a.key, rng);
-                              s.rng = rng.getState();
-                              return r;
-                            });
-                            if (outcome) {
-                              setSocialLog((l) => [`${outcome.headline}: ${outcome.detail}`, ...l].slice(0, 8));
-                              showToast(outcome.detail, outcome.succeeded ? 'good' : 'bad');
-                            }
-                          }}
-                        >
-                          {a.label}
-                        </button>
+                    {/* Only the actions that make sense right now, each with its description written out:
+                        a title attribute never shows on a touch screen, so on a phone the buttons
+                        were thirteen labels with no explanation. */}
+                    <div className="social-actions">
+                      {availableSocialActions(save, fighter).map((a) => (
+                        <div className="social-action" key={a.key}>
+                          <button
+                            className="small"
+                            // Going quiet is always available; posting is limited, because an
+                            // unlimited button that only ever adds followers is not a decision.
+                            disabled={a.key !== 'go-silent' && allowance.remaining <= 0}
+                            onClick={() => {
+                              const outcome = mutate((s) => {
+                                const rng = new Rng(s.rng);
+                                const r = performSocialAction(s, s.fighters[fighter.id], a.key, rng);
+                                s.rng = rng.getState();
+                                return r;
+                              });
+                              if (outcome) {
+                                setSocialLog((l) => [`${outcome.headline}: ${outcome.detail}`, ...l].slice(0, 8));
+                                showToast(outcome.detail, outcome.succeeded ? 'good' : 'bad');
+                              }
+                            }}
+                          >
+                            {a.label}
+                          </button>
+                          <span className="small dim">{a.description}</span>
+                        </div>
                       ))}
                     </div>
                     {socialLog.length > 0 && (
@@ -647,7 +740,7 @@ export function FighterPage() {
                     i.actualReturn ? (
                       <span className="dim">cleared {i.actualReturn}</span>
                     ) : (
-                      <span className="bad">out until {i.expectedReturn}</span>
+                      <span className="bad">out until {formatDate(i.expectedReturn)}</span>
                     ),
                 },
               ]}

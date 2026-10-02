@@ -16,6 +16,7 @@ import { determineActivityStatus, normalizeName, resolveDuplicates } from './dat
 import { migrateSave } from './save/migrate';
 import { longevityFromWear, simulateWeightCut } from './world/health';
 import { applyTitleOutcome } from './world/rankings';
+import { newsForResult } from './world/history';
 
 // ---------------------------------------------------------------------------
 // Random number generator
@@ -393,6 +394,30 @@ describe('fight engine', () => {
     }
   });
 
+  it('never stops a fight between rounds after the final round', () => {
+    // The medical and corner checks belong to rests that lead into another round. Run after the
+    // final horn they turned decisions into stoppages at the end of the last round.
+    for (let seed = 0; seed < 300; seed++) {
+      const r = simulateFight(buildBout(seed + 3000, 70, 80, seed % 4 === 0 ? 5 : 3));
+      if (r.method === 'doctor-stoppage' || r.method === 'corner-stoppage' || r.method === 'retirement') {
+        expect(r.endRound).toBeLessThan(r.scheduledRounds);
+      }
+    }
+  });
+
+  it('credits fouls to the fighter who committed them', () => {
+    for (let seed = 0; seed < 150; seed++) {
+      const r = simulateFight(buildBout(seed + 4000));
+      const fouls = r.events.filter((e) => e.tags.includes('foul'));
+      const byA = fouls.filter((e) => e.actorId === r.fighterAId).length;
+      const byB = fouls.filter((e) => e.actorId === r.fighterBId).length;
+      expect(r.totalsA.fouls).toBe(byA);
+      expect(r.totalsB.fouls).toBe(byB);
+      expect(r.pointDeductionsA).toBeLessThanOrEqual(byA);
+      expect(r.pointDeductionsB).toBeLessThanOrEqual(byB);
+    }
+  });
+
   it('keeps landed strikes at or below attempts in every recorded dimension', () => {
     for (let seed = 0; seed < 40; seed++) {
       const r = simulateFight(buildBout(seed));
@@ -677,6 +702,71 @@ describe('title eligibility when a fighter misses weight', () => {
   it('vacates the title when both fighters miss weight', () => {
     const save = outcome('challenger', 'champ', ['champ', 'challenger']);
     expect(save.rankings.lightweight.championId).toBeNull();
+  });
+});
+
+describe('result headlines', () => {
+  function world(): SaveGame {
+    return {
+      date: '2026-05-01',
+      counters: { news: 0 },
+      bouts: {},
+      fighters: {
+        champ: { id: 'champ', name: 'Champ', isChampion: true, isInterimChampion: false, titleReigns: 1, titleDefenses: 0 },
+        challenger: { id: 'challenger', name: 'Challenger', isChampion: false, isInterimChampion: false, titleReigns: 0, titleDefenses: 0 },
+      },
+      rankings: { lightweight: { divisionId: 'lightweight', championId: 'champ', interimChampionId: null, entries: [] } },
+      history: {
+        news: [],
+        reigns: [
+          { id: 'r1', divisionId: 'lightweight', fighterId: 'champ', isInterim: false, wonOn: '2025-01-01', wonBoutId: 'b0', lostOn: null, lostBoutId: null, defenses: 0, endReason: null },
+        ],
+      },
+    } as unknown as SaveGame;
+  }
+  const result = (winner: string, loser: string, title: boolean, method: FinishMethod = 'tko-strikes') =>
+    ({
+      divisionId: 'lightweight',
+      boutId: 'bout-x',
+      date: '2026-05-01',
+      fighterAId: 'champ',
+      fighterBId: 'challenger',
+      winnerId: winner,
+      loserId: loser,
+      method,
+      isTitleFight: title,
+      isInterimTitleFight: false,
+      titleIneligibleFighterIds: [],
+      narrativeSummary: 'Summary.',
+    }) as unknown as FightResult;
+
+  // The order resolveBout runs in: the belts are read, the result moves them, then the headline.
+  function resolve(r: FightResult): SaveGame {
+    const save = world();
+    const before = { championId: save.rankings.lightweight.championId, interimChampionId: save.rankings.lightweight.interimChampionId };
+    applyTitleOutcome(save, r);
+    newsForResult(save, r, 'Test Card', before);
+    return save;
+  }
+
+  it('says a new champion takes the title, not that they defend it', () => {
+    const save = resolve(result('challenger', 'champ', true));
+    expect(save.rankings.lightweight.championId).toBe('challenger');
+    const headlines = save.history.news.map((n) => n.headline);
+    expect(headlines).toContain('Challenger takes the Lightweight title');
+    expect(headlines.some((h) => h.includes('defends'))).toBe(false);
+  });
+
+  it('says a champion who wins defends the title', () => {
+    const save = resolve(result('champ', 'challenger', true));
+    expect(save.history.news.map((n) => n.headline)).toContain('Champ defends the Lightweight title');
+  });
+
+  it('keeps method acronyms in capitals', () => {
+    const save = resolve(result('challenger', 'champ', false, 'tko-ground-strikes'));
+    expect(save.history.news[0].headline).toBe('Challenger beats Champ by TKO (ground and pound)');
+    const ko = resolve(result('challenger', 'champ', false, 'ko'));
+    expect(ko.history.news[0].headline).toBe('Challenger beats Champ by KO');
   });
 });
 

@@ -279,6 +279,32 @@ describe('rankings respond to who you beat', () => {
     expect(headToHeadAdjustment(f.save, pool[0], points).bonus).toBeLessThanOrEqual(22);
   });
 
+  it('does not let a chain of indirect wins carry a fighter over somebody who just beat them', () => {
+    const f = newCareer(8209);
+    const pool = roster(f.save, 'lightweight').filter((x) => x.id !== f.save.rankings.lightweight.championId);
+    const [a, b, c, e, d] = pool.slice(0, 5).map(makeAvailable);
+    // A beat B, B beat C, C beat E, and D beat A most recently.
+    recordWin(f.save, a, b, addDays(f.save.date, -160));
+    recordWin(f.save, b, c, addDays(f.save.date, -120));
+    recordWin(f.save, c, e, addDays(f.save.date, -80));
+    recordWin(f.save, d, a, addDays(f.save.date, -20));
+    for (const x of [a, b, c, d, e]) x.lastFightDate = addDays(f.save.date, -20);
+    const ledger = rankingLedger(f.save, 'lightweight');
+    for (const id of Object.keys(ledger)) ledger[id] = 0;
+    ledger[a.id] = 10;
+    ledger[b.id] = 50;
+    ledger[c.id] = 70;
+    ledger[e.id] = 90;
+    ledger[d.id] = 35;
+
+    recomputeDivision(f.save, 'lightweight', new Map());
+    // Without the total cap A took three stacked lifts, about sixty six points, from the chain of
+    // wins below them and finished above D, who had beaten them three weeks earlier.
+    expect(a.ranking).not.toBeNull();
+    expect(d.ranking).not.toBeNull();
+    expect(a.ranking!).toBeGreaterThan(d.ranking!);
+  });
+
   it('measures strength of schedule from real opponents', () => {
     const f = newCareer(8205);
     const pool = roster(f.save, 'lightweight');

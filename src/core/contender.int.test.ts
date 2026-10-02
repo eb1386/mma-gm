@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { addDays } from './types/common';
 import { DIVISION_BY_ID, DIVISIONS } from './config/divisions';
-import { createEvent, newCareer, runWorld } from './testing/fixtures';
+import { createEvent, newCareer, offeredCareer, runWorld } from './testing/fixtures';
+import { respondToOffer } from './world/offers';
 import {
   applyResultToContenders,
   CONTENDER_INJURY_GRACE_DAYS,
@@ -14,7 +15,9 @@ import {
   reviewContenderClaims,
 } from './world/contender';
 import { rankChallengers, titleShotEligibility } from './world/title-eligibility';
-import { applyReplacement } from './world/matchmaking';
+import { applyReplacement, findReplacement } from './world/matchmaking';
+import { withdrawFromBout } from './world/tick';
+import { Rng } from './rng';
 import { bookBout } from './world/availability';
 import { assessChampionMove, commitMove, explore } from './world/weightclass';
 import { migrateSave } from './save/migrate';
@@ -150,12 +153,34 @@ describe('earning the number one contender position', () => {
     expect(currentContender(f.save, 'lightweight')).toBeNull();
   });
 
-  it('replaces the previous holder and records why', () => {
+  it('keeps a ready holder in place when two other top five fighters meet', () => {
+    const f = newCareer(7105);
+    const pool = roster(f.save, 'lightweight').filter((x) => x.id !== f.save.rankings.lightweight.championId);
+    const holder = makeAvailable(pool[0]);
+    const a = makeAvailable(pool[1]);
+    const b = makeAvailable(pool[2]);
+    grantContenderStatus(f.save, holder, 'lightweight', 'eliminator-win', null);
+
+    const { bout, result } = eliminatorResult(f.save, a, b, a);
+    const notes = applyResultToContenders(f.save, bout, result);
+
+    const record = currentContender(f.save, 'lightweight');
+    expect(record!.fighterId).toBe(holder.id);
+    expect(record!.forfeitedOn).toBeNull();
+    expect(notes.join(' ')).not.toContain(a.name);
+    const refused = grantContenderStatus(f.save, a, 'lightweight', 'eliminator-win', null);
+    expect(refused.granted).toBe(false);
+    expect(refused.message).toContain(holder.name);
+  });
+
+  it('replaces a holder who has been out beyond the grace period and records why', () => {
     const f = newCareer(7104);
     const pool = roster(f.save, 'lightweight').filter((x) => x.id !== f.save.rankings.lightweight.championId);
     const first = makeAvailable(pool[0]);
     const second = makeAvailable(pool[1]);
-    grantContenderStatus(f.save, first, 'lightweight', 'eliminator-win', null);
+    const held = grantContenderStatus(f.save, first, 'lightweight', 'eliminator-win', null);
+    first.medicalSuspension = { until: addDays(f.save.date, 200), reason: 'test' } as unknown as Fighter['medicalSuspension'];
+    held.record!.unavailableSince = addDays(f.save.date, -(CONTENDER_INJURY_GRACE_DAYS + 5));
     const grant = grantContenderStatus(f.save, second, 'lightweight', 'eliminator-win', null);
 
     expect(grant.granted).toBe(true);
@@ -518,5 +543,201 @@ describe('a belt is not on the line without the fighter who holds it', () => {
     applyReplacement(f.save, bout, champion.id, replacement, 'stepping in');
     expect(bout.isTitleFight).toBe(false);
     expect(bout.isInterimTitleFight).toBe(false);
+    // Nothing that described the bout as a championship is left behind.
+    expect(bout.bookingKind).not.toBe('title-fight');
+    expect(bout.bookingReason).toContain('no longer on the line');
+    expect(bout.bookingReason).not.toContain('..');
+  });
+
+  it('calls the bout off and gives the claim back when the challenger withdraws months out', () => {
+    const f = newCareer(9821);
+    const divisionId = DIVISIONS[0].id;
+    const { bout, champion, challenger } = titleBout(f.save, divisionId, 90);
+    makeAvailable(challenger);
+    challenger.nextBoutId = bout.id;
+    grantContenderStatus(f.save, challenger, divisionId, 'eliminator-win', null);
+    fulfilContenderStatus(f.save, divisionId, challenger.id, bout.id);
+    expect(currentContender(f.save, divisionId)).toBeNull();
+
+    withdrawFromBout(f.save, bout, challenger.id, 'a broken hand', new Rng(4), []);
+
+    expect(bout.status).toBe('canceled');
+    // The champion is free for the title pass to rebook, and the claim is the challenger's again.
+    expect(champion.nextBoutId).toBeNull();
+    expect(currentContender(f.save, divisionId)?.fighterId).toBe(challenger.id);
+  });
+
+  it('keeps the belt on the line with an eligible challenger when the withdrawal is late', () => {
+    const f = newCareer(9822);
+    const divisionId = DIVISIONS[0].id;
+    const { bout, champion, challenger } = titleBout(f.save, divisionId, 20);
+    withdrawFromBout(f.save, bout, challenger.id, 'a broken hand', new Rng(4), []);
+    if (bout.status === 'scheduled') {
+      // Whoever stepped in passed the title gate on short notice, so the title stands.
+      expect(bout.isTitleFight).toBe(true);
+      const stepIn = f.save.fighters[bout.fighterAId === champion.id ? bout.fighterBId : bout.fighterAId];
+      expect(stepIn.id).not.toBe(challenger.id);
+      expect(stepIn.ranking).not.toBeNull();
+      expect(stepIn.ranking!).toBeLessThanOrEqual(8);
+    } else {
+      expect(bout.status).toBe('canceled');
+    }
+  });
+
+  it('never pulls the standing contender into somebody else\'s bout as a replacement', () => {
+    const f = newCareer(9823);
+    const divisionId = 'lightweight';
+    const pool = roster(f.save, divisionId).filter((x) => x.id !== f.save.rankings[divisionId].championId);
+    for (const x of pool) makeAvailable(x);
+    const contender = pool[2];
+    grantContenderStatus(f.save, contender, divisionId, 'eliminator-win', null);
+    const a = pool[3];
+    const b = pool[4];
+    const event = createEvent(f.save, addDays(f.save.date, 30));
+    const bout = { ...titleBout(f.save, divisionId, 30).bout, id: 'bout-ordinary', eventId: event.id, fighterAId: a.id, fighterBId: b.id, isTitleFight: false, bookingKind: 'ranked-matchup' };
+    f.save.bouts[bout.id] = bout;
+    for (let seed = 1; seed <= 12; seed++) {
+      const pick = findReplacement(f.save, bout, b.id, new Rng(seed));
+      expect(pick?.fighter.id).not.toBe(contender.id);
+    }
+  });
+});
+
+/** A scheduled title bout between the division's champion and its number one, `daysOut` away. */
+function titleBout(save: SaveGame, divisionId: string, daysOut: number): { bout: Bout; champion: Fighter; challenger: Fighter } {
+  const table = save.rankings[divisionId as keyof typeof save.rankings];
+  const champion = makeAvailable(save.fighters[table.championId!]);
+  const challenger = makeAvailable(
+    Object.values(save.fighters).find((x) => x.divisionId === divisionId && x.ranking === 1 && x.id !== champion.id)!
+  );
+  const event = createEvent(save, addDays(save.date, daysOut));
+  const bout: Bout = {
+    id: `bout-title-${champion.id}-${daysOut}`,
+    eventId: event.id,
+    date: event.date,
+    fighterAId: champion.id,
+    fighterBId: challenger.id,
+    divisionId: divisionId as Bout['divisionId'],
+    contractedWeightLb: DIVISION_BY_ID[divisionId as Bout['divisionId']].limitLb,
+    scheduledRounds: 5,
+    isTitleFight: true,
+    isInterimTitleFight: false,
+    titleIneligibleFighterIds: [],
+    isMainEvent: true,
+    isCoMain: false,
+    cardSegment: 'main',
+    boutOrder: 1,
+    isCatchweight: false,
+    status: 'scheduled',
+    resultId: null,
+    bookedOn: save.date,
+    replacementHistory: [],
+    cancelReason: null,
+    purseA: { show: 1, win: 1 },
+    purseB: { show: 1, win: 1 },
+    weighInA: null,
+    weighInB: null,
+    bookingReason: 'They are the number 1 contender.',
+    bookingKind: 'title-fight',
+  };
+  bookBout(save, bout);
+  return { bout, champion, challenger };
+}
+
+describe('a challenger who has just lost to the champion', () => {
+  function titleLoss(save: SaveGame, divisionId: string, method: FightResult['method'], popularity: number): Fighter {
+    const table = save.rankings[divisionId as keyof typeof save.rankings];
+    const champion = makeAvailable(save.fighters[table.championId!]);
+    const loser = makeAvailable(
+      Object.values(save.fighters).find((x) => x.divisionId === divisionId && x.ranking === 1 && x.id !== champion.id)!
+    );
+    const { bout, result } = eliminatorResult(save, champion, loser, champion);
+    bout.isTitleFight = true;
+    bout.bookingKind = 'title-fight';
+    result.isTitleFight = true;
+    result.method = method;
+    result.endRound = method === 'decision-split' ? 5 : 1;
+    save.history.results[bout.id] = result;
+    champion.boutIds.push(bout.id);
+    loser.boutIds.push(bout.id);
+    champion.lastFightDate = save.date;
+    loser.lastFightDate = save.date;
+    loser.lossStreak = 1;
+    loser.winStreak = 0;
+    loser.popularity = popularity;
+    loser.titleDefenses = 0;
+    return loser;
+  }
+
+  it('does not get the same fight again straight away after a one sided loss', () => {
+    const f = newCareer(9830);
+    const loser = titleLoss(f.save, 'lightweight', 'ko', 50);
+    expect(loser.ranking).toBe(1);
+    const eligibility = titleShotEligibility(f.save, loser, 'lightweight');
+    expect(eligibility.eligible).toBe(false);
+    expect(eligibility.blockers).toContain('coming-off-loss');
+  });
+
+  it('keeps an immediate rematch for a fight close enough to have earned one', () => {
+    const f = newCareer(9831);
+    const loser = titleLoss(f.save, 'lightweight', 'decision-split', 100);
+    const eligibility = titleShotEligibility(f.save, loser, 'lightweight');
+    expect(eligibility.blockers).not.toContain('coming-off-loss');
+    expect(eligibility.reasons[0]).toContain('immediate rematch');
+    expect(eligibility.reasons.join(' ')).not.toMatch(/\bYou\b/);
+  });
+});
+
+
+describe('asking the promotion for a title fight', () => {
+  function readyToAsk(seed: number) {
+    const f = offeredCareer(seed);
+    const me = f.save.fighters[f.playerId];
+    makeAvailable(me);
+    me.ranking = 2;
+    me.winStreak = 3;
+    const champion = makeAvailable(f.save.fighters[f.save.rankings[me.divisionId].championId!]);
+    champion.lastFightDate = addDays(f.save.date, -150);
+    return { ...f, me, champion };
+  }
+
+  it('records a real contender claim before the offer is withdrawn', () => {
+    const f = readyToAsk(9840);
+    let outcome = null as ReturnType<typeof respondToOffer> | null;
+    for (let seed = 1; seed <= 40 && f.save.fightOffers[f.offerId].status === 'open'; seed++) {
+      // Each request uses one of the two the matchmaker allows; reset so only the roll varies.
+      f.save.fightOffers[f.offerId].requestsUsed = 0;
+      outcome = respondToOffer(f.save, f.offerId, { kind: 'request-title-fight' }, new Rng(seed));
+    }
+    expect(f.save.fightOffers[f.offerId].status).toBe('withdrawn');
+    expect(currentContender(f.save, f.me.divisionId)?.fighterId).toBe(f.me.id);
+    expect(currentContender(f.save, f.me.divisionId)?.source).toBe('promotion-decision');
+    expect(outcome!.message).toContain('number one contender');
+  });
+
+  it('keeps the offer open when somebody else already holds the contender spot', () => {
+    const f = readyToAsk(9841);
+    const holder = makeAvailable(
+      roster(f.save, f.me.divisionId).find((x) => x.id !== f.me.id && x.id !== f.champion.id && x.ranking !== null)!
+    );
+    grantContenderStatus(f.save, holder, f.me.divisionId, 'eliminator-win', null);
+    for (let seed = 1; seed <= 10; seed++) {
+      f.save.fightOffers[f.offerId].requestsUsed = 0;
+      const outcome = respondToOffer(f.save, f.offerId, { kind: 'request-title-fight' }, new Rng(seed));
+      expect(outcome.newOffer?.id).toBe(f.offerId);
+    }
+    expect(f.save.fightOffers[f.offerId].status).toBe('open');
+    expect(currentContender(f.save, f.me.divisionId)?.fighterId).toBe(holder.id);
+  });
+
+  it('does not promise a shot while the champion is months from being ready', () => {
+    const f = readyToAsk(9842);
+    f.champion.lastFightDate = f.save.date;
+    for (let seed = 1; seed <= 20; seed++) {
+      f.save.fightOffers[f.offerId].requestsUsed = 0;
+      respondToOffer(f.save, f.offerId, { kind: 'request-title-fight' }, new Rng(seed));
+    }
+    expect(f.save.fightOffers[f.offerId].status).toBe('open');
+    expect(currentContender(f.save, f.me.divisionId)).toBeNull();
   });
 });

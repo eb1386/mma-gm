@@ -274,8 +274,9 @@ test('every navigation section survives a direct load and a refresh', async ({ p
 test('the dashboard action button runs rather than only navigating', async ({ page }) => {
   await startCareer(page);
   await page.goto('/career');
-  // The primary action is a real control: it must be enabled and must not be a dead link.
-  const primary = page.locator('button.primary').first();
+  // The primary action is a real control: it must be enabled and must not be a dead link. On a phone
+  // it lives in the dock and the desktop header copy is hidden, so the visible one is the one tested.
+  const primary = page.locator('button.primary:visible').first();
   await expect(primary).toBeVisible();
   await expect(primary).toBeEnabled();
 });

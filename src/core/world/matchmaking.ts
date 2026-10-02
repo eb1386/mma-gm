@@ -1,19 +1,20 @@
 import { DIFFICULTY } from '../config/calibration';
+import { mainRosterFighters } from './circuit';
 import { MATCHMAKING as M, MATCHUP_PULL } from '../config/matchmaking';
-import { contractedWeight, DIVISIONS, DIVISION_BY_ID, type DivisionId } from '../config/divisions';
+import { contractedWeight, DIVISIONS, DIVISION_BY_ID } from '../config/divisions';
 import { clamp, hashString, Rng } from '../rng';
-import { addDays, ageOn, daysBetween, dayOfWeek, type BoutId, type EventId, type FighterId, type IsoDate } from '../types/common';
-import { isChampionshipBout, isFinish, type Bout } from '../types/fight';
+import { addDays, ageOn, daysBetween, dayOfWeek, joinSentence, type BoutId, type EventId, type FighterId, type IsoDate } from '../types/common';
+import { isChampionshipBout, isFinish, type Bout, type FightResult } from '../types/fight';
 import { ovrRaw } from '../types/fighter';
 import type { Fighter } from '../types/fighter';
 import type { FightCardEvent, EventTier } from '../types/world';
 import type { SaveGame } from '../types/save';
-import { canCompete } from './health';
 import { assessTitleOpportunity, assessTitleRematch, fightCloseness, lastTitleLoss } from './title-logic';
-import { existingTitleBout, interimTitleJustification, titleShotEligibility } from './title-eligibility';
+import { existingTitleBout, interimTitleJustification, rankChallengers, titleShotEligibility } from './title-eligibility';
 import { fulfilInterest, interestReason, matchupPull, type MatchupInterest } from './matchup-interest';
-import { currentContender, restoreContenderStatus } from './contender';
+import { contenderStatusFor, currentContender, restoreContenderStatus } from './contender';
 import { bookBout, inCampFighterIds, offerBlockReason, releaseBooking, replaceSide } from './availability';
+import { meetingsBetween } from './indexes';
 import { resolveMessagesForBout } from './inbox';
 import { clearFightWeek } from './fightweek';
 import { willingToFight } from './identity';
@@ -47,6 +48,10 @@ import { fightNightName, numberedEventName } from '../config/branding';
  * because the gate binds on essentially every reign. At 180 that is 2.03 fights a year, just
  * outside the one to two band the design calls for. At 205 it is 1.78, and title fights per
  * division per year stays inside its own band.
+ *
+ * That 1.78 was measured with every eligible champion free to land on the same card. With the
+ * per card limit in `MATCHMAKING.titleBoutsPerCard` a division sometimes waits a week or two for a
+ * card with room, and two year worlds come out at about 1.5, still well inside the band.
  */
 export const CHAMPION_TURNAROUND_DAYS = 205;
 
@@ -77,10 +82,13 @@ export function regionOfFighter(f: Fighter): string | null {
  * which is what makes the yearly totals come out right instead of drifting.
  */
 export const CALENDAR_TARGETS = {
-  eventsPerYear: 46,
+  // Forty eight cards a year. The real roster is now the ranked fighters plus everybody on recent
+  // official cards, over six hundred people, and forty six cards left most of them fighting fewer
+  // than twice a year. Still inside the forty to fifty two a year acceptance holds.
+  eventsPerYear: 48,
   ppvPerYear: 14,
-  fightNightsPerYear: 32,
-  clearWeekendsPerYear: 6,
+  fightNightsPerYear: 34,
+  clearWeekendsPerYear: 4,
   /** Minimum days between numbered cards. */
   minDaysBetweenPpv: 20,
   /** No card is created closer than this, so every event has time to be booked. */
@@ -97,19 +105,18 @@ interface CardShape {
 }
 
 const PPV_SHAPES: CardShape[] = [
-  { total: 11, main: 5, prelim: 4, early: 2, weight: 0.2 },
-  { total: 12, main: 5, prelim: 4, early: 3, weight: 0.5 },
-  { total: 13, main: 5, prelim: 4, early: 4, weight: 0.24 },
-  { total: 14, main: 5, prelim: 5, early: 4, weight: 0.06 },
+  { total: 12, main: 5, prelim: 4, early: 3, weight: 0.3 },
+  { total: 13, main: 5, prelim: 4, early: 4, weight: 0.45 },
+  { total: 14, main: 5, prelim: 5, early: 4, weight: 0.25 },
 ];
 
 const FIGHT_NIGHT_SHAPES: CardShape[] = [
-  { total: 10, main: 5, prelim: 5, early: 0, weight: 0.08 },
-  { total: 11, main: 5, prelim: 6, early: 0, weight: 0.14 },
-  { total: 12, main: 6, prelim: 6, early: 0, weight: 0.34 },
-  { total: 12, main: 5, prelim: 7, early: 0, weight: 0.16 },
-  { total: 13, main: 6, prelim: 7, early: 0, weight: 0.23 },
-  { total: 14, main: 6, prelim: 8, early: 0, weight: 0.05 },
+  // Weighted toward thirteen bouts, which is a full modern fight night, so a roster of over six
+  // hundred real fighters has enough slots. Every shape is one a real card has had.
+  { total: 11, main: 5, prelim: 6, early: 0, weight: 0.08 },
+  { total: 12, main: 6, prelim: 6, early: 0, weight: 0.24 },
+  { total: 13, main: 6, prelim: 7, early: 0, weight: 0.36 },
+  { total: 14, main: 6, prelim: 8, early: 0, weight: 0.32 },
 ];
 
 export function pickCardShape(tier: EventTier, rng: Rng): CardShape {
@@ -133,7 +140,9 @@ function pickVenue(rng: Rng, tier: EventTier): VenueCity {
  */
 export function scheduleEvents(save: SaveGame, rng: Rng, horizonDays = 190): FightCardEvent[] {
   const created: FightCardEvent[] = [];
-  const existing = Object.values(save.events);
+  // Regional cards share the save but not the calendar. Counting them here let a regional card on
+  // a Saturday take that weekend away from the main promotion.
+  const existing = Object.values(save.events).filter((e) => !e.promotionId);
   const end = addDays(save.date, horizonDays);
 
   const lastScheduled = existing
@@ -242,6 +251,7 @@ export function rollingYearCounts(save: SaveGame, on: IsoDate): { events: number
   let events = 0;
   let ppv = 0;
   for (const e of Object.values(save.events)) {
+    if (e.promotionId) continue;
     const gap = daysBetween(e.date, on);
     if (gap < 0 || gap > 365) continue;
     events++;
@@ -278,6 +288,26 @@ export function openOfferFighterIds(save: SaveGame): Set<FighterId> {
     ids.add(offer.opponentId);
   }
   return ids;
+}
+
+/**
+ * How many more championship bouts this card can take, from `MATCHMAKING.titleBoutsPerCard`.
+ *
+ * A title offer still open with the player for this card counts as well. The title pass takes
+ * that bout off the card while the player decides, and without counting the offer a second
+ * division could be booked into the slot it is holding.
+ */
+export function titleBoutRoom(save: SaveGame, event: FightCardEvent): number {
+  const cap = M.titleBoutsPerCard[event.tier] ?? 1;
+  let used = 0;
+  for (const id of event.boutIds) {
+    const b = save.bouts[id];
+    if (b && b.status === 'scheduled' && isChampionshipBout(b)) used++;
+  }
+  for (const o of Object.values(save.fightOffers)) {
+    if (o.status === 'open' && o.eventId === event.id && (o.isTitleFight || o.isInterimTitleFight)) used++;
+  }
+  return Math.max(0, cap - used);
 }
 
 /**
@@ -326,6 +356,7 @@ export type BookingKind =
   | 'rivalry'
   | 'unification'
   | 'divisional-debut'
+  | 'debut'
   | 'short-notice-replacement';
 
 /**
@@ -351,6 +382,7 @@ export const BOOKING_KIND_LABEL: Record<BookingKind, string> = {
   rivalry: 'Rivalry fight',
   unification: 'Unification fight',
   'divisional-debut': 'Divisional debut',
+  debut: 'Promotional debut',
   'short-notice-replacement': 'Short notice booking',
 };
 
@@ -363,20 +395,28 @@ export interface MatchCandidate {
   interest?: MatchupInterest;
 }
 
-function priorMeetings(save: SaveGame, a: FighterId, b: FighterId): { count: number; lastDate: IsoDate | null; aWins: number; bWins: number } {
+/**
+ * Every earlier meeting between two fighters, with the most recent one.
+ *
+ * This runs once per candidate pairing, so it reads the two fighters' own bout lists rather than
+ * scanning the whole of history, which grows for as long as the career does.
+ */
+function priorMeetings(
+  save: SaveGame,
+  a: FighterId,
+  b: FighterId
+): { count: number; lastDate: IsoDate | null; last: FightResult | null; aWins: number; bWins: number } {
   let count = 0;
-  let lastDate: IsoDate | null = null;
+  let last: FightResult | null = null;
   let aWins = 0;
   let bWins = 0;
-  for (const r of Object.values(save.history.results)) {
-    const pair = (r.fighterAId === a && r.fighterBId === b) || (r.fighterAId === b && r.fighterBId === a);
-    if (!pair) continue;
+  for (const r of meetingsBetween(save, a, b)) {
     count++;
-    if (!lastDate || r.date > lastDate) lastDate = r.date;
+    if (!last || r.date > last.date) last = r;
     if (r.winnerId === a) aWins++;
     if (r.winnerId === b) bWins++;
   }
-  return { count, lastDate, aWins, bWins };
+  return { count, lastDate: last?.date ?? null, last, aWins, bWins };
 }
 
 function styleContrast(a: Fighter, b: Fighter): number {
@@ -463,18 +503,20 @@ export function scoreCandidate(
   const history = priorMeetings(save, fighter.id, opponent.id);
   // A rematch needs a reason. Three meetings is the practical ceiling.
   if (history.count >= M.rematch.maxMeetings) return null;
+  // An eligible matchup interest, a callout that was answered or a feud the promotion has taken up,
+  // is the one thing that can stake a claim past the gates below. evaluateInterest has already held
+  // it to the same standard of being earned. Raw rivalry pull is not a claim: a heated rivalry
+  // alone used to skip every gate here, which is how a debutant was put in with a nine and two
+  // veteran.
+  const pullAB = matchupPull(save, fighter.id, opponent.id);
+  const stakedClaim = pullAB.interest !== null && pullAB.interest.eligibility === 'eligible';
   // A rematch inside a year needs the first fight to have been worth running back. A wide
   // decision or an early finish does not qualify, which is what stops the same pairing being
   // remade over and over.
   if (history.count > 0 && history.lastDate && daysBetween(history.lastDate, event.date) < M.rematch.cooldownDays) {
-    const previous = Object.values(save.history.results).find(
-      (r) =>
-        r.date === history.lastDate &&
-        ((r.fighterAId === fighter.id && r.fighterBId === opponent.id) || (r.fighterAId === opponent.id && r.fighterBId === fighter.id))
-    );
+    const previous = history.last;
     const worthRunningBack = previous ? fightCloseness(previous).value >= M.rematch.closenessRequired : false;
-    const pulled = matchupPull(save, fighter.id, opponent.id).pull;
-    if (!worthRunningBack && pulled < 0.5) return null;
+    if (!worthRunningBack && !(stakedClaim && pullAB.pull >= 0.5)) return null;
   }
 
   // Pairings a matchmaker would not consider at all. Everything below this is a weight, and a
@@ -483,10 +525,40 @@ export function scoreCandidate(
   // scheduled bout in ten was a top five fighter against an unranked opponent, including a
   // number one contender against a fighter at two and two.
   //
-  // A live callout or rivalry is exempt. That is the stated reason a fight nobody would otherwise
-  // make gets made, and refusing it here would have taken away the one thing that lets a player
-  // talk their way into a fight they have not earned on paper.
-  const stakedClaim = matchupPull(save, fighter.id, opponent.id).pull > 0;
+  // The claim staked above is exempt from the ranking gates. That is the stated reason a fight
+  // nobody would otherwise make gets made.
+
+  // A promotional debut is against another newcomer, whatever pull the pairing has. The experience
+  // gate is separate from the ranking gate because a dangerous veteran can sit unranked: a debuting
+  // player was handed a five and one finisher first time out, which no matchmaker books and no
+  // debutant accepts.
+  const fightsOf = (f: Fighter) => f.ufcRecord.wins + f.ufcRecord.losses + f.ufcRecord.draws + f.ufcRecord.noContests;
+  if (!isChampA && !isChampB) {
+    // A ranked fighter is established whatever their promotional count says: a generated
+    // contender can arrive with a seeded ranking and an empty promotional record, and treating
+    // them as a newcomer made them unbookable against the whole division.
+    const isDebutant = (f: Fighter, rank: number | null) => fightsOf(f) === 0 && rank === null;
+    const debutant = isDebutant(fighter, rankA) ? fighter : isDebutant(opponent, rankB) ? opponent : null;
+    if (debutant) {
+      const other = debutant === fighter ? opponent : fighter;
+      const otherRank = other === fighter ? rankA : rankB;
+      if (otherRank !== null) return null;
+      if (fightsOf(other) > M.gate.debutOpponentMaxFights) return null;
+    }
+    // Experience is judged on the whole professional record as well as the promotional one, because
+    // a generated veteran can arrive with a long record and few promotional fights, and on ability,
+    // because a matchmaker knows who is good: a prospect is not fed somebody far better than them.
+    // This also holds for a callout or a feud, which is no reason to feed a prospect to a veteran.
+    const prospectSide = (f: Fighter, rank: number | null) => rank === null && fightsOf(f) <= M.gate.prospectWindowFights;
+    const proFights = (f: Fighter) => f.record.wins + f.record.losses + f.record.draws;
+    const outclasses = (veteran: Fighter, prospect: Fighter) =>
+      fightsOf(veteran) > M.gate.prospectOpponentMaxFights ||
+      proFights(veteran) > proFights(prospect) + 14 ||
+      ovrRaw(veteran.ratings) > ovrRaw(prospect.ratings) + M.gate.prospectMaxOvrGap;
+    if (prospectSide(fighter, rankA) && outclasses(opponent, fighter)) return null;
+    if (prospectSide(opponent, rankB) && outclasses(fighter, opponent)) return null;
+  }
+
   if (!isChampA && !isChampB && !stakedClaim) {
     const rankedSide = rankA !== null && rankB === null ? fighter : rankB !== null && rankA === null ? opponent : null;
     if (rankedSide) {
@@ -499,22 +571,6 @@ export function scoreCandidate(
       // A step up has to be earned. The higher the ranked fighter, the more it takes.
       const needed = rankedAt <= M.gate.contenderRank ? M.gate.prospectStreakForTopFive : M.gate.prospectStreakForRanked;
       if (unranked.winStreak < needed) return null;
-    }
-
-    // A promotional debut is against another newcomer. The experience gate is separate from the
-    // ranking gate because a dangerous veteran can sit unranked: a debuting player was handed a
-    // five and one finisher first time out, which no matchmaker books and no debutant accepts.
-    const fightsOf = (f: Fighter) => f.ufcRecord.wins + f.ufcRecord.losses + f.ufcRecord.draws + f.ufcRecord.noContests;
-    // A ranked fighter is established whatever their promotional count says: a generated
-    // contender can arrive with a seeded ranking and an empty promotional record, and treating
-    // them as a newcomer made them unbookable against the whole division.
-    const isDebutant = (f: Fighter, rank: number | null) => fightsOf(f) === 0 && rank === null;
-    const debutant = isDebutant(fighter, rankA) ? fighter : isDebutant(opponent, rankB) ? opponent : null;
-    if (debutant) {
-      const other = debutant === fighter ? opponent : fighter;
-      const otherRank = other === fighter ? rankA : rankB;
-      if (otherRank !== null) return null;
-      if (fightsOf(other) > M.gate.debutOpponentMaxFights) return null;
     }
 
     // The fighter holding the number one contender position is waiting on a title shot. Putting
@@ -550,10 +606,16 @@ export function scoreCandidate(
     // Ranked fighters meet fighters near them, with a bias toward the fighter ranked
     // above so a win actually means something.
     score += M.base.rankedMatchup - gap * M.base.rankedGapPenalty;
-    if (rankA <= 5 && rankB <= 5) {
+    // Only a fight that can actually decide the next challenger is an eliminator. With a number
+    // one contender already standing, winning it does not take the spot, so two top five fighters
+    // meeting is a ranked matchup and is not given the eliminator weight either.
+    if (rankA <= 5 && rankB <= 5 && !currentContender(save, fighter.divisionId)) {
       score += M.base.eliminatorBonus;
       kind = 'eliminator';
       reason = 'a title eliminator between top five contenders';
+    } else if (rankA <= 5 && rankB <= 5) {
+      kind = 'ranked-matchup';
+      reason = `a top five matchup at ${rankA} against ${rankB} with the number one contender already set`;
     } else {
       kind = 'ranked-matchup';
       reason = `a ranked matchup at ${rankA} against ${rankB}`;
@@ -711,7 +773,7 @@ export function findBestOpponent(
   /** Opponents the caller has already ruled out, for example a champion who cannot defend. */
   excludeIds?: ReadonlySet<FighterId>
 ): MatchCandidate | null {
-  const pool = Object.values(save.fighters).filter(
+  const pool = mainRosterFighters(save).filter(
     (f) =>
       f.divisionId === fighter.divisionId &&
       f.id !== fighter.id &&
@@ -724,6 +786,16 @@ export function findBestOpponent(
   // strong rematch claim should pull a specific opponent up the list.
   const leverage = assessTitleOpportunity(save, fighter, fighter.divisionId);
   const rematchTarget = rematchClaimTarget(save, fighter);
+  // A top contender waits for a fitting opponent rather than taking whoever is free this week. The
+  // gap penalty in scoreCandidate only reorders the candidates, so a thin week still handed a number
+  // two on a long streak a fourteen or an unranked prospect. The wait is bounded, so a thin
+  // division cannot leave them idle for good.
+  const myRank = save.rankings[fighter.divisionId]?.championId === fighter.id ? 0 : fighter.ranking;
+  const idle = fighter.lastFightDate ? daysBetween(fighter.lastFightDate, event.date) : 999;
+  const topContender = myRank !== null && myRank <= M.gate.topContenderRank;
+  const holdOut = topContender && idle < M.gate.topContenderWaitDays;
+  // Who the reason line is written for: the player when they are in the pairing, otherwise nobody.
+  const playerId = save.player.fighterId;
   for (const opp of pool) {
     const c = scoreCandidate(save, fighter, opp, event, rng);
     if (!c) continue;
@@ -731,6 +803,20 @@ export function findBestOpponent(
     // two available fighters in the same division now outweighs anything the ordinary
     // divisional scoring would have produced, which is what makes the callout mean something.
     const { pull, interest } = matchupPull(save, fighter.id, opp.id);
+    const oppRankHere = opp.isChampion ? 0 : opp.ranking;
+    const titlePairing = c.kind === 'title-fight' || c.kind === 'interim-title' || c.kind === 'unification';
+    const claimed = (interest !== null && interest.eligibility === 'eligible') || opp.id === rematchTarget;
+    if (topContender && !titlePairing && !claimed) {
+      const beneath = oppRankHere === null || oppRankHere > myRank! + M.gate.topContenderMaxRankGap;
+      if (holdOut && beneath) continue;
+      if (oppRankHere === null) c.score -= M.gate.topContenderUnrankedPenalty;
+    }
+    // The same wait from the other side: a lower seed does not draw an idle top contender down.
+    if (!titlePairing && !claimed && oppRankHere !== null && oppRankHere <= M.gate.topContenderRank) {
+      const oppIdle = opp.lastFightDate ? daysBetween(opp.lastFightDate, event.date) : 999;
+      const beneathThem = myRank === null || myRank > oppRankHere + M.gate.topContenderMaxRankGap;
+      if (oppIdle < M.gate.topContenderWaitDays && beneathThem) continue;
+    }
     if (pull < 0) {
       // Training partners and close friends are pushed out of contention entirely.
       if (pull <= MATCHUP_PULL.refuseAtOrBelow) continue;
@@ -744,7 +830,7 @@ export function findBestOpponent(
       if (interest && interest.eligibility === 'eligible' && !structural) {
         c.interest = interest;
         c.kind = interest.source === 'callout' ? 'callout' : interest.source === 'rivalry' ? 'rivalry' : c.kind;
-        c.reason = interestReason(save, interest);
+        c.reason = interestReason(save, interest, fighter.id === playerId || opp.id === playerId ? playerId : null);
       } else if (interest && interest.eligibility === 'eligible') {
         c.interest = interest;
       } else if (c.kind === 'divisional-filler' || c.kind === 'ranked-matchup') {
@@ -879,7 +965,7 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
   }
   const rankedQueue: Fighter[] = [];
   for (const tier of byTier) rankedQueue.push(...rng.shuffle(tier));
-  const unrankedQueue = rng.shuffle(Object.values(save.fighters).filter((f) => f.ranking === null && isAvailable(save, f, ctx)));
+  const unrankedQueue = rng.shuffle(mainRosterFighters(save).filter((f) => f.ranking === null && isAvailable(save, f, ctx)));
 
   // Ranked and unranked fighters are interleaved rather than exhausted in order. There
   // are far more ranked fighters than card slots, so taking them first would freeze every
@@ -895,11 +981,33 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
   // A fighter who has earned the next title shot is not filler. Ordinary card seeding could book
   // them into a routine bout before the title pass reached their division, which spent the claim
   // on a fight they never asked for and made winning an eliminator worth nothing again.
+  // The player is not one name in four hundred. A fighter the player controls who has been waiting
+  // goes to the front of the queue, so a career is not left idle for months while the same
+  // matchmaker books everybody else. The usual gates still decide who they fight.
+  const playerId = save.player.fighterId;
+  const playerSeed = playerId ? seeds.findIndex((f) => f.id === playerId) : -1;
+  if (playerSeed > 0) {
+    const me = seeds[playerSeed];
+    const idle = me.lastFightDate ? daysBetween(me.lastFightDate, event.date) : 999;
+    // A player who volunteered for short notice work is first in line for a late slot on a card
+    // close to the date. That is what the volunteer button promises. The player is never assigned
+    // as a withdrawal replacement (every fight they take is an offer), so this is where it counts.
+    const volunteered = Boolean(me.volunteeredShortNoticeUntil && me.volunteeredShortNoticeUntil >= save.date) && daysBetween(save.date, event.date) <= 30;
+    if (idle >= 70 || volunteered) {
+      seeds.splice(playerSeed, 1);
+      seeds.unshift(me);
+    }
+  }
+
   const reservedContenders = new Set<FighterId>();
   for (const d of DIVISIONS) {
     const standing = currentContender(save, d.id);
     if (standing) reservedContenders.add(standing.fighterId);
   }
+
+  // Championship bouts this card can still take. Once it is full no further champion is seeded or
+  // offered as an opponent, the same cap the weekly title pass applies.
+  let titleRoom = titleBoutRoom(save, event);
 
   for (const fighter of seeds) {
     if (bouts.length >= remainingSlots) break;
@@ -908,9 +1016,10 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     // A champion who cannot defend on this card is never a candidate at all. Choosing the best
     // opponent and then discarding the pairing threw the seeded fighter's slot away, wasting card
     // capacity and denying that fighter a fight for no stated reason.
-    if (allChampionIds.has(fighter.id) && !defendableChampionIds.has(fighter.id)) continue;
+    const canDefendHere = (id: FighterId) => defendableChampionIds.has(id) && titleRoom > 0;
+    if (allChampionIds.has(fighter.id) && !canDefendHere(fighter.id)) continue;
     const ineligibleChampions = new Set<FighterId>();
-    for (const id of allChampionIds) if (!defendableChampionIds.has(id)) ineligibleChampions.add(id);
+    for (const id of allChampionIds) if (!canDefendHere(id)) ineligibleChampions.add(id);
     // A reserved contender is not an opponent for filler either.
     for (const id of reservedContenders) ineligibleChampions.add(id);
 
@@ -944,9 +1053,23 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     // An interim belt is never created here without the shared justification.
     if (isInterim && !interimTitleJustification(save, fighter.divisionId).justified) {
       isInterim = false;
-      candidate.kind = 'eliminator';
-      candidate.reason = 'a title eliminator';
+      if (currentContender(save, fighter.divisionId)) {
+        candidate.kind = 'ranked-matchup';
+        candidate.reason = 'a ranked matchup with the number one contender already set';
+      } else {
+        candidate.kind = 'eliminator';
+        candidate.reason = 'a title eliminator';
+      }
     }
+    // The card already carries all the championship bouts it can. The pairing is kept as a ranked
+    // matchup rather than dropped, the same way a duplicate belt is handled above.
+    if ((isTitle || isInterim) && titleRoom <= 0) {
+      isTitle = false;
+      isInterim = false;
+      candidate.kind = 'ranked-matchup';
+      candidate.reason = 'a ranked matchup with the card already carrying its championship bouts';
+    }
+    if (isTitle || isInterim) titleRoom--;
 
     booked.add(fighter.id);
     booked.add(candidate.opponent.id);
@@ -998,13 +1121,28 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     // A matchup interest that produced a fight is closed against that fight, so the player
     // can see that the callout they made is the reason this bout exists.
     if (candidate.interest) fulfilInterest(candidate.interest, null, bout.id);
-    // A matchup interest that produced a fight is closed against it, so the player can see the
-    // callout they made is the reason this bout exists.
-    if (candidate.interest) fulfilInterest(candidate.interest, null, bout.id);
     bouts.push(bout);
     notes.push(`${fighter.name} against ${candidate.opponent.name}: ${candidate.reason}.`);
   }
 
+  orderCard(save, event);
+
+  // Only the bouts created by this pass are returned. Returning the whole card would let
+  // a caller act twice on a bout that was already agreed, which previously cancelled an
+  // accepted bout and re-offered it, and created a duplicate camp every week.
+  return { bouts, notes };
+}
+
+/**
+ * Orders a card so the best fight closes it, and sets the main event, co-main, segments and
+ * round counts to match.
+ *
+ * Shared by card seeding and the weekly title pass. The title pass used to add its bout as a
+ * second main event with a placeholder position and leave the card as it was, so until card
+ * seeding happened to run again a card could show two main events.
+ */
+export function orderCard(save: SaveGame, event: FightCardEvent): void {
+  const size = cardSizeFor(event);
   // Reorder so the best fight closes the card. This must consider every scheduled bout
   // on the event, not only the ones booked in this pass, otherwise earlier bouts would be
   // dropped from the card and left orphaned with their fighters still marked as booked.
@@ -1035,11 +1173,6 @@ export function bookEvent(save: SaveGame, event: FightCardEvent, rng: Rng): Book
     else b.scheduledRounds = 3;
   });
   event.boutIds = ranked.map((b) => b.id);
-
-  // Only the bouts created by this pass are returned. Returning the whole card would let
-  // a caller act twice on a bout that was already agreed, which previously cancelled an
-  // accepted bout and re-offered it, and created a duplicate camp every week.
-  return { bouts, notes };
 }
 
 /**
@@ -1065,26 +1198,47 @@ export function findReplacement(
     }
   }
 
-  const pool = Object.values(save.fighters).filter((f) => {
+  // Built once for the whole roster. Without them every candidate scanned every camp and every
+  // offer in the save, which made a single withdrawal cost the roster times all camps ever run.
+  // Nothing in the filter below changes camps or offers, so one snapshot of each is exact.
+  const inCamp = inCampFighterIds(save);
+  const openOffers = openOfferFighterIds(save);
+  const boutDivision = DIVISION_BY_ID[bout.divisionId];
+
+  const pool = mainRosterFighters(save).filter((f) => {
     if (f.id === remainingId || f.id === withdrawingId) return false;
     // The player is never assigned a bout. Every fight they take arrives as an offer they
     // can accept, negotiate or turn down, including short notice work.
     if (f.id === save.player.fighterId) return false;
-    // Availability is asked of the one authority rather than hand rolled here. The local version
-    // missed commission suspensions, anti-doping suspensions, an exhausted or absent contract and
-    // an open offer, so a suspended or out of contract fighter could be dropped into a bout that
-    // no other path would have allowed.
-    const blocked = offerBlockReason(save, f, { eventDate: bout.date, takenFighterIds: booked, isReplacementSlot: true });
-    if (blocked) return false;
+    // The cheap checks run first, so only a plausible candidate pays for the full availability
+    // question. None of them draws from the rng, so the order changes nothing but the cost.
+    if (f.divisionId !== bout.divisionId) {
+      const own = DIVISION_BY_ID[f.divisionId];
+      const adjacent = Boolean(own && boutDivision) && Math.abs(own.order - boutDivision.order) === 1;
+      if (!adjacent || noticeDays > 21) return false;
+    }
     // A reigning champion is not short notice cover. This path had no turnaround gate at all, so a
     // champion could be booked weeks after defending, which pushed champion activity above band.
     const homeTable = save.rankings[f.divisionId];
     if (homeTable?.championId === f.id || homeTable?.interimChampionId === f.id) return false;
+    // Nor is the number one contender, who is waiting on a title shot. Every other booking path
+    // reserves them, and a loss here forfeited the shot they had earned. The one exception is the
+    // championship of their own division, which is the fight the claim is for.
+    const claim = contenderStatusFor(save, f.id);
+    if (claim && !(isChampionshipBout(bout) && claim.divisionId === bout.divisionId)) return false;
     if (f.lastFightDate && daysBetween(f.lastFightDate, bout.date) < REPLACEMENT_MIN_TURNAROUND_DAYS) return false;
-    if (f.divisionId !== bout.divisionId) {
-      const adjacent = Math.abs(DIVISION_BY_ID[f.divisionId].order - DIVISION_BY_ID[bout.divisionId].order) === 1;
-      if (!adjacent || noticeDays > 21) return false;
-    }
+    // Availability is asked of the one authority rather than hand rolled here. The local version
+    // missed commission suspensions, anti-doping suspensions, an exhausted or absent contract and
+    // an open offer, so a suspended or out of contract fighter could be dropped into a bout that
+    // no other path would have allowed.
+    const blocked = offerBlockReason(save, f, {
+      eventDate: bout.date,
+      takenFighterIds: booked,
+      isReplacementSlot: true,
+      inCampFighterIds: inCamp,
+      openOfferFighterIds: openOffers,
+    });
+    if (blocked) return false;
     return true;
   });
 
@@ -1118,13 +1272,67 @@ export function findReplacement(
   };
 }
 
+/**
+ * How close to the card a challenger's withdrawal has to come before the promotion fills the title
+ * bout instead of calling it off. Further out than this the champion is simply rebooked against a
+ * proper challenger by the weekly title pass, which is what a promotion does with months in hand.
+ */
+export const TITLE_REBOOK_NOTICE_DAYS = 42;
+
+/**
+ * A late replacement challenger for a championship bout.
+ *
+ * Chosen through the same eligibility gate as every other title booking, held to the short notice
+ * bar. The ordinary replacement finder scored by ranking gap alone, so a champion could be handed
+ * an unranked opponent and the bout quietly stopped being for the title. Returns null when nobody
+ * eligible can take it, and the caller cancels the bout.
+ */
+export function findTitleReplacement(save: SaveGame, bout: Bout, withdrawingId: FighterId): { fighter: Fighter; reason: string } | null {
+  const remainingId = bout.fighterAId === withdrawingId ? bout.fighterBId : bout.fighterAId;
+  const noticeDays = daysBetween(save.date, bout.date);
+  const booked = new Set<FighterId>();
+  for (const b of Object.values(save.bouts)) {
+    if (b.status === 'scheduled' && b.id !== bout.id) {
+      booked.add(b.fighterAId);
+      booked.add(b.fighterBId);
+    }
+  }
+  const inCamp = inCampFighterIds(save);
+  const openOffers = openOfferFighterIds(save);
+  const table = save.rankings[bout.divisionId];
+  const ranked = rankChallengers(
+    save,
+    bout.divisionId,
+    (f) => {
+      if (f.id === remainingId || f.id === withdrawingId) return false;
+      // The player is offered fights, never assigned one.
+      if (f.id === save.player.fighterId) return false;
+      if (f.lastFightDate && daysBetween(f.lastFightDate, bout.date) < REPLACEMENT_MIN_TURNAROUND_DAYS) return false;
+      return !offerBlockReason(save, f, {
+        eventDate: bout.date,
+        takenFighterIds: booked,
+        isReplacementSlot: true,
+        inCampFighterIds: inCamp,
+        openOfferFighterIds: openOffers,
+      });
+    },
+    { shortNotice: true, ignoreBoutId: bout.id, vacant: !table?.championId, interim: bout.isInterimTitleFight }
+  );
+  const pick = ranked[0];
+  if (!pick) return null;
+  return {
+    fighter: pick.fighter,
+    reason: `stepping in for the title on ${noticeDays} days notice`,
+  };
+}
+
 /** Applies a replacement to a bout, adjusting weight class and purse. */
 export function applyReplacement(save: SaveGame, bout: Bout, withdrawingId: FighterId, replacement: Fighter, reason: string): boolean {
   // The existing bout is edited in place. Creating a second booking here was how a
   // withdrawn fighter could end up still pointing at a bout that had moved on without them.
   const swapped = replaceSide(save, bout, withdrawingId, replacement, reason);
   if (!swapped.bout) return false;
-  bout.bookingReason = `${bout.bookingReason}. ${replacement.name} is ${reason}.`;
+  const noticeDays = daysBetween(save.date, bout.date);
 
   // A belt is not on the line without the fighter who holds it.
   //
@@ -1145,6 +1353,17 @@ export function applyReplacement(save: SaveGame, bout: Bout, withdrawingId: Figh
     // longer for a belt has to give it back, or the shot they earned is spent on a fight that
     // was not the one they earned.
     restoreContenderStatus(save, bout.divisionId, bout.id);
+    // Everything that described the bout as a championship goes with the belt. The kind and the
+    // reason used to stay behind, so the offer and event pages went on calling it a championship
+    // bout and quoting the old challenger's title claim, and a demoted bout kept five rounds on
+    // the prelims.
+    const remaining = save.fighters[bout.fighterAId === replacement.id ? bout.fighterBId : bout.fighterAId];
+    const bothRanked = remaining?.ranking != null && replacement.ranking !== null;
+    bout.bookingKind = bothRanked ? 'ranked-matchup' : 'short-notice-replacement';
+    bout.bookingReason = `${replacement.name} is ${reason}, so the championship is no longer on the line.`;
+    bout.scheduledRounds = bout.isMainEvent || bout.roundsAgreed ? 5 : 3;
+  } else {
+    bout.bookingReason = joinSentence(bout.bookingReason, `${replacement.name} is ${reason}.`);
   }
   if (replacement.divisionId !== bout.divisionId) {
     bout.isCatchweight = true;
@@ -1157,7 +1376,9 @@ export function applyReplacement(save: SaveGame, bout: Bout, withdrawingId: Figh
   const purse = purseForBout(contract, replacement, save, {
     isMainEvent: bout.isMainEvent,
     isTitleFight: isChampionshipBout(bout),
-    shortNotice: true,
+    // The same short notice line every other path uses. A replacement found months out is an
+    // ordinary booking and was being paid a short notice premium.
+    shortNotice: noticeDays < 24,
   });
   if (bout.fighterAId === replacement.id) bout.purseA = purse;
   else bout.purseB = purse;
@@ -1203,18 +1424,6 @@ export function cancelBout(save: SaveGame, bout: Bout, reason: string): void {
   }
   resolveMessagesForBout(save, bout.id, `The bout was canceled: ${reason}`);
 }
-
-/** Chooses which division should crown an interim champion, if any. */
-export function shouldCreateInterimTitle(save: SaveGame, divisionId: DivisionId): boolean {
-  const table = save.rankings[divisionId];
-  if (!table.championId || table.interimChampionId) return false;
-  const champ = save.fighters[table.championId];
-  if (!champ) return false;
-  const inactive = champ.lastFightDate ? daysBetween(champ.lastFightDate, save.date) : 999;
-  const blocked = !canCompete(champ, save.date).ok;
-  return inactive > 300 || (blocked && inactive > 200);
-}
-
 
 /**
  * The opponent this fighter has a live rematch claim against, if any.

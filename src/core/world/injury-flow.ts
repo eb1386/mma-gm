@@ -1,13 +1,16 @@
 import { clamp, Rng } from '../rng';
-import { addDays, daysBetween, type IsoDate } from '../types/common';
+import { addDays, daysBetween, formatDate, type IsoDate } from '../types/common';
+import { isChampionshipBout } from '../types/fight';
 import type { Fighter, Injury } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { hasLiveBooking, postponeBout, releaseBooking } from './availability';
 import { activeInjuries } from './health';
 import { addInboxMessage, resolveMessagesForBout } from './inbox';
-import { cancelBout, findReplacement, applyReplacement } from './matchmaking';
+import { cancelBout, findReplacement, findTitleReplacement, applyReplacement, TITLE_REBOOK_NOTICE_DAYS } from './matchmaking';
 import { clearFightWeek } from './fightweek';
 import { record } from './finance';
+import { autoCampFor } from './camp';
+import { trainingCostScale } from './circuit';
 
 /**
  * What happens when a fighter with a booked bout gets hurt.
@@ -140,8 +143,14 @@ const ALL_CHOICES: Record<InjuryChoiceKey, Omit<InjuryChoice, 'key'>> = {
   },
 };
 
-/** Which choices are medically sensible for this classification. */
-export function choicesFor(severity: InjurySeverityClass, hasBooking: boolean): InjuryChoice[] {
+/**
+ * Which choices are medically sensible for this classification.
+ *
+ * A medical evaluation answers whether the fighter can be cleared for a date, so it is only
+ * offered when there is a date. Surgery is not offered to somebody who has already had it: the
+ * same decision came back after the operation and charged for a second one.
+ */
+export function choicesFor(severity: InjurySeverityClass, hasBooking: boolean, hadSurgery = false): InjuryChoice[] {
   const keys: InjuryChoiceKey[] = [];
   switch (severity) {
     case 'minor-trainable':
@@ -151,12 +160,13 @@ export function choicesFor(severity: InjurySeverityClass, hasBooking: boolean): 
       keys.push('reduce-intensity', 'train-around', 'rest', 'rehabilitate', 'seek-specialist');
       break;
     case 'requires-medical-review':
-      keys.push('request-evaluation', 'rehabilitate', 'seek-specialist', 'reduce-intensity');
+      if (hasBooking) keys.push('request-evaluation');
+      keys.push('rehabilitate', 'seek-specialist', 'reduce-intensity');
       if (hasBooking) keys.push('request-postponement', 'withdraw');
       break;
     case 'blocks-temporarily':
-      keys.push('rest', 'rehabilitate', 'seek-specialist', 'request-evaluation');
-      if (hasBooking) keys.push('request-postponement', 'withdraw', 'continue-despite-risk');
+      keys.push('rest', 'rehabilitate', 'seek-specialist');
+      if (hasBooking) keys.push('request-evaluation', 'request-postponement', 'withdraw', 'continue-despite-risk');
       break;
     case 'requires-withdrawal':
       if (hasBooking) keys.push('request-postponement', 'withdraw', 'continue-despite-risk');
@@ -171,7 +181,7 @@ export function choicesFor(severity: InjurySeverityClass, hasBooking: boolean): 
       if (hasBooking) keys.push('withdraw');
       break;
   }
-  return keys.map((key) => ({ key, ...ALL_CHOICES[key] }));
+  return keys.filter((key) => !(hadSurgery && key === 'choose-surgery')).map((key) => ({ key, ...ALL_CHOICES[key] }));
 }
 
 /** Stable id so one injury raises exactly one decision. */
@@ -199,17 +209,17 @@ export function raiseInjuryDecision(save: SaveGame, fighter: Fighter, injury: In
 
   const opponent = bout ? save.fighters[bout.fighterAId === fighter.id ? bout.fighterBId : bout.fighterAId] : null;
   const event = bout ? save.events[bout.eventId] : null;
-  const choices = choicesFor(severity, Boolean(bout));
+  const choices = choicesFor(severity, Boolean(bout), injury.treatment === 'surgery');
 
   const bookingLine = bout
-    ? `You are booked against ${opponent?.name ?? 'an opponent'} at ${event?.name ?? 'an event'} on ${bout.date}, ${daysBetween(save.date, bout.date)} days away. That booking stands until this is answered.`
+    ? `You are booked against ${opponent?.name ?? 'an opponent'} at ${event?.name ?? 'an event'} on ${formatDate(bout.date)}, ${daysBetween(save.date, bout.date)} days away. That booking stands until this is answered.`
     : 'You have no fight booked.';
 
   const message = addInboxMessage(save, {
     sender: 'doctor',
     senderName: 'Team doctor',
     subject: `Injury: ${injury.type}`,
-    body: `${injury.type} (${SEVERITY_LABEL[severity]}). Expected return ${injury.expectedReturn}. ${bookingLine} ${injury.note}`,
+    body: `${injury.type} (${SEVERITY_LABEL[severity]}). Expected return ${formatDate(injury.expectedReturn)}. ${bookingLine} ${injury.note}`,
     category: 'injury',
     requiresAction: true,
     deadline: bout ? bout.date : addDays(save.date, 21),
@@ -242,60 +252,73 @@ export function applyInjuryDecision(
   rng: Rng
 ): InjuryDecisionOutcome {
   const bout = hasLiveBooking(save, fighter);
-  // The choice is recorded against the injury so treatment continues automatically and the
-  // same question is not asked again next week.
-  if (!save.injuryTreatments) save.injuryTreatments = {};
-  save.injuryTreatments[injury.id] = {
-    injuryId: injury.id,
-    treatment: choice,
-    startedOn: save.date,
-    expectedReturnAtChoice: injury.expectedReturn,
-    severityAtChoice: classifyInjury(injury, bout?.date ?? null, save.date),
-    lastDevelopmentOn: save.date,
-  };
   const opponent = bout ? save.fighters[bout.fighterAId === fighter.id ? bout.fighterBId : bout.fighterAId] : null;
   let cost = 0;
+  let outcome: InjuryDecisionOutcome;
 
+  // Every case falls through to the treatment record below. The cases used to return directly,
+  // and the record was written before them, holding the prognosis from before the choice. Fight
+  // anyway and surgery both move the return date, so the next weekly check read the player's own
+  // choice as a setback and asked the same question again.
   switch (choice) {
     case 'continue-normal': {
       // Training through it makes it worse. The model is honest about that.
       injury.expectedReturn = addDays(injury.expectedReturn, Math.round(rng.range(7, 21)));
       injury.trainingCapacity = clamp(injury.trainingCapacity - 0.1, 0.05, 1);
-      return { message: 'Camp continues at full intensity. The team is not happy about it.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: 'Camp continues at full intensity. The team is not happy about it.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
     case 'reduce-intensity': {
       const camp = Object.values(save.camps).find((c) => c.fighterId === fighter.id && (c.status === 'planned' || c.status === 'running'));
       if (camp) camp.intensity = clamp(camp.intensity * 0.7, 0.2, 1);
       injury.expectedReturn = addDays(injury.expectedReturn, -Math.round(rng.range(0, 5)));
-      return { message: 'Camp intensity is cut back for the rest of the preparation.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: 'Camp intensity is cut back for the rest of the preparation.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
     case 'train-around': {
       injury.trainingCapacity = clamp(injury.trainingCapacity + 0.1, 0.05, 1);
-      return { message: 'The affected work comes out of camp and everything else continues.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: 'The affected work comes out of camp and everything else continues.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
     case 'rest': {
       injury.expectedReturn = addDays(injury.expectedReturn, -Math.round(rng.range(4, 12)));
       const camp = Object.values(save.camps).find((c) => c.fighterId === fighter.id && (c.status === 'planned' || c.status === 'running'));
       if (camp) camp.intensity = clamp(camp.intensity * 0.4, 0.1, 1);
-      return { message: 'Full rest for now. Camp is effectively paused.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: 'Full rest for now. Camp is effectively paused.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
     case 'rehabilitate': {
-      cost = 4000 + Math.round(rng.range(0, 6000));
+      // Scaled to the circuit like camp costs, with the same floor as a camp specialist. A regional
+      // fighter on two thousand dollar purses was billed main roster rates for the same treatment.
+      cost = Math.round((4000 + Math.round(rng.range(0, 6000))) * Math.max(0.15, trainingCostScale(fighter)));
       record(save, fighter.id, 'out', 'rehabilitation', cost, 'Rehabilitation programme');
       injury.expectedReturn = addDays(injury.expectedReturn, -Math.round(rng.range(10, 25)));
       injury.treatment = 'rehab';
-      return { message: `Rehabilitation begins. Expected return moves to ${injury.expectedReturn}.`, boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: `Rehabilitation begins. Expected return moves to ${formatDate(injury.expectedReturn)}.`, boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
     case 'seek-specialist': {
-      cost = 9000 + Math.round(rng.range(0, 12000));
+      cost = Math.round((9000 + Math.round(rng.range(0, 12000))) * Math.max(0.15, trainingCostScale(fighter)));
       record(save, fighter.id, 'out', 'rehabilitation', cost, 'Specialist consultation');
       injury.expectedReturn = addDays(injury.expectedReturn, -Math.round(rng.range(6, 18)));
       injury.note = `${injury.note} A specialist has reviewed it and given a clear prognosis.`;
-      return { message: `The specialist gives a firm date of ${injury.expectedReturn}.`, boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: `The specialist gives a firm date of ${formatDate(injury.expectedReturn)}.`, boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
     case 'request-evaluation': {
-      const clears = daysBetween(save.date, injury.expectedReturn) < (bout ? daysBetween(save.date, bout.date) : 0);
-      return {
+      // With no bout there is no date to be cleared for, so the doctor gives the prognosis instead.
+      // This still happens when a decision raised with a booking is answered after the bout is gone.
+      if (!bout) {
+        outcome = {
+          message: `The commission doctor expects you to be medically cleared on ${formatDate(injury.expectedReturn)}.`,
+          boutStatus: 'unchanged',
+          newBoutDate: null,
+          cost,
+        };
+        break;
+      }
+      const clears = daysBetween(save.date, injury.expectedReturn) < daysBetween(save.date, bout.date);
+      outcome = {
         message: clears
           ? 'The commission doctor expects to clear you in time, subject to the final check in fight week.'
           : 'The commission doctor will not clear you for this date.',
@@ -303,37 +326,48 @@ export function applyInjuryDecision(
         newBoutDate: null,
         cost,
       };
+      break;
     }
     case 'request-postponement': {
-      if (!bout) return { message: 'There is no bout to postpone.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      if (!bout) {
+        outcome = { message: 'There is no bout to postpone.', boutStatus: 'unchanged', newBoutDate: null, cost };
+        break;
+      }
       // The promotion agrees when the fighter is worth waiting for and the delay is sane.
       const clearBy = addDays(injury.expectedReturn, 21);
+      // The same promotion's cards only: a regional bout is never postponed onto a main card.
+      const fromPromotion = save.events[bout.eventId]?.promotionId;
       const candidates = Object.values(save.events)
-        .filter((e) => e.status === 'announced' && e.date > clearBy)
+        .filter((e) => e.status === 'announced' && e.date > clearBy && e.promotionId === fromPromotion)
         .sort((x, y) => (x.date < y.date ? -1 : 1));
       const relationship = fighter.relationships.matchmaker;
       const worthWaiting = fighter.popularity > 30 || (fighter.ranking ?? 99) <= 10 || bout.isTitleFight;
       const agrees = candidates.length > 0 && worthWaiting && rng.chance(clamp(0.35 + relationship / 200 + (bout.isTitleFight ? 0.25 : 0), 0.1, 0.92));
       if (!agrees) {
-        return {
+        outcome = {
           message: 'The promotion will not move the date. The bout stands or you withdraw.',
           boutStatus: 'unchanged',
           newBoutDate: null,
           cost,
         };
+        break;
       }
       const target = candidates[0];
       // Fight week tasks belong to the old date and are rebuilt for the new one.
       clearFightWeek(save, bout.id);
       postponeBout(save, bout, target.id, `postponed after ${fighter.name} was injured`);
-      resolveMessagesForBout(save, bout.id, `The bout was postponed to ${target.date}.`);
+      resolveMessagesForBout(save, bout.id, `The bout was postponed to ${formatDate(target.date)}.`);
       fighter.relationships.matchmaker = clamp(relationship - 3, 0, 100);
-      return {
-        message: `The promotion agrees to move the bout to ${target.name} on ${target.date}, same opponent.`,
+      // The camp was built to peak a week before the old date. Left running, it ended months
+      // before the new one and the fighter walked into the rescheduled bout with no preparation.
+      const staleCamp = abandonCamps(save, fighter.id);
+      outcome = {
+        message: `The promotion agrees to move the bout to ${target.name} on ${formatDate(target.date)}, same opponent.${staleCamp ? ' Plan a new camp for the new date.' : ''}`,
         boutStatus: 'postponed',
         newBoutDate: target.date,
         cost,
       };
+      break;
     }
     case 'withdraw':
     case 'choose-surgery': {
@@ -344,12 +378,13 @@ export function applyInjuryDecision(
         injury.expectedReturn = addDays(save.date, Math.round(rng.range(120, 260)));
       }
       if (!bout) {
-        return {
-          message: choice === 'choose-surgery' ? `Surgery scheduled. Expected return ${injury.expectedReturn}.` : 'Nothing to withdraw from.',
+        outcome = {
+          message: choice === 'choose-surgery' ? `Surgery scheduled. Expected return ${formatDate(injury.expectedReturn)}.` : 'Nothing to withdraw from.',
           boutStatus: 'unchanged',
           newBoutDate: null,
           cost,
         };
+        break;
       }
       // The opponent stays on the card if a replacement can be found; otherwise the bout
       // is canceled. Either way this fighter's booking is resolved first.
@@ -358,9 +393,21 @@ export function applyInjuryDecision(
       clearFightWeek(save, bout.id);
       let replaced = false;
       if (opponentId) {
-        const replacement = findReplacement(save, bout, fighter.id, rng);
+        // A title challenger is replaced the way the weekly withdrawal path does it: with time in
+        // hand the bout is called off and the title rebooked, and close to the card only somebody
+        // who passes the title gate may step in, so the champion is never left in a non-title bout.
+        const table = save.rankings[bout.divisionId];
+        const challengerOut = isChampionshipBout(bout) && table?.championId !== fighter.id && table?.interimChampionId !== fighter.id;
+        const replacement = !challengerOut
+          ? findReplacement(save, bout, fighter.id, rng)
+          : daysBetween(save.date, bout.date) > TITLE_REBOOK_NOTICE_DAYS
+            ? null
+            : findTitleReplacement(save, bout, fighter.id);
         if (replacement) {
           replaced = applyReplacement(save, bout, fighter.id, replacement.fighter, replacement.reason);
+          // The same as any other withdrawal: whoever steps in gets a camp for the date, or they
+          // arrive at the fight having done no preparation at all.
+          if (replaced) autoCampFor(save, replacement.fighter, bout.id, bout.date, rng);
         }
       }
       if (!replaced) {
@@ -368,11 +415,8 @@ export function applyInjuryDecision(
       }
       resolveMessagesForBout(save, bout.id, `${fighter.name} withdrew from the bout.`);
       fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker - 8, 0, 100);
-      for (const camp of Object.values(save.camps)) {
-        if (camp.fighterId !== fighter.id) continue;
-        if (camp.status === 'planned' || camp.status === 'running') camp.status = 'abandoned';
-      }
-      return {
+      abandonCamps(save, fighter.id);
+      outcome = {
         message: replaced
           ? `You are out. ${opponent?.name ?? 'The opponent'} stays on the card against a replacement.`
           : `You are out and the bout has been canceled.`,
@@ -380,19 +424,53 @@ export function applyInjuryDecision(
         newBoutDate: null,
         cost,
       };
+      break;
     }
     case 'continue-despite-risk': {
       injury.note = `${injury.note} Fighting through it against medical advice.`;
       // Taking a fight hurt is recorded so the fight engine and the wear model both see it.
       fighter.wear.recovery = clamp(fighter.wear.recovery + 6, 0, 100);
       injury.expectedReturn = addDays(injury.expectedReturn, Math.round(rng.range(14, 45)));
-      return { message: 'You are taking the fight hurt. The corner has been told.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      outcome = { message: 'You are taking the fight hurt. The corner has been told.', boutStatus: 'unchanged', newBoutDate: null, cost };
+      break;
     }
   }
+
+  // The choice is recorded against the injury so treatment continues automatically and the
+  // same question is not asked again next week. It holds the prognosis and the booking as they
+  // stand after the choice: a withdrawal released the bout, a postponement moved it, and surgery
+  // reset the return date, and a record of the state before any of that read as a development.
+  const after = hasLiveBooking(save, fighter);
+  if (!save.injuryTreatments) save.injuryTreatments = {};
+  save.injuryTreatments[injury.id] = {
+    injuryId: injury.id,
+    treatment: choice,
+    startedOn: save.date,
+    expectedReturnAtChoice: injury.expectedReturn,
+    severityAtChoice: classifyInjury(injury, after?.date ?? null, save.date),
+    lastDevelopmentOn: save.date,
+    boutIdAtChoice: after?.id ?? null,
+    boutDateAtChoice: after?.date ?? null,
+  };
+  return outcome;
+}
+
+/** Abandons the fighter's live camp, if any. Returns true when one was running or planned. */
+function abandonCamps(save: SaveGame, fighterId: string): boolean {
+  let any = false;
+  for (const camp of Object.values(save.camps)) {
+    if (camp.fighterId !== fighterId) continue;
+    if (camp.status === 'planned' || camp.status === 'running') {
+      camp.status = 'abandoned';
+      any = true;
+    }
+  }
+  return any;
 }
 
 /**
- * Called from the weekly pass. Raises a decision for any new player injury that matters.
+ * Called from the weekly pass, and straight after anything that can change the player's booking
+ * or treatment. Raises a decision for any new player injury that matters.
  * Returns the number of decisions raised, which is always zero or one per injury.
  */
 export function checkPlayerInjuries(save: SaveGame): number {
@@ -413,7 +491,17 @@ export function checkPlayerInjuries(save: SaveGame): number {
       if (raiseInjuryDecision(save, fighter, injury, development)) raised++;
       continue;
     }
-    if (raiseInjuryDecision(save, fighter, injury)) raised++;
+    if (raiseInjuryDecision(save, fighter, injury)) {
+      raised++;
+      continue;
+    }
+    // An untreated injury whose first decision lapsed without an answer, typically one raised
+    // with no fight booked, has nothing left to ask. If a booking it cannot clear in time has
+    // appeared since, that booking is a new question and it gets one.
+    const bout = hasLiveBooking(save, fighter);
+    if (bout && classifyInjury(injury, bout.date, save.date) === 'requires-withdrawal') {
+      if (raiseInjuryDecision(save, fighter, injury, `conflicts-with-${bout.id}-${bout.date}`)) raised++;
+    }
   }
   return raised;
 }
@@ -430,9 +518,16 @@ function detectDevelopment(save: SaveGame, fighter: Fighter, injury: Injury, tre
     const slipDays = daysBetween(treated.expectedReturnAtChoice, injury.expectedReturn);
     if (slipDays >= 21) return `setback-${injury.expectedReturn}`;
   }
-  // A booked fight has come inside the recovery window since the choice was made.
-  if (bout && severity === 'requires-withdrawal' && treated.severityAtChoice !== 'requires-withdrawal') {
-    return `conflicts-with-${bout.id}`;
+  // A booked fight the injury cannot clear in time, which the choice was not made against. That
+  // covers a fight that came inside the recovery window since, and also a booking that did not
+  // exist or has moved since: the old test only compared severities, so a treatment chosen with
+  // no fight booked, or against the old date, never asked about the fight that replaced it.
+  if (bout && severity === 'requires-withdrawal') {
+    const sameBooking =
+      treated.boutIdAtChoice === undefined
+        ? treated.severityAtChoice === 'requires-withdrawal'
+        : treated.boutIdAtChoice === bout.id && treated.boutDateAtChoice === bout.date && treated.severityAtChoice === 'requires-withdrawal';
+    if (!sameBooking) return `conflicts-with-${bout.id}-${bout.date}`;
   }
   // Surgery has become the recommendation when it was not before.
   if (severity === 'requires-surgery' && treated.severityAtChoice !== 'requires-surgery') {
@@ -450,4 +545,10 @@ export interface InjuryTreatment {
   expectedReturnAtChoice: IsoDate;
   severityAtChoice: InjurySeverityClass;
   lastDevelopmentOn: IsoDate;
+  /**
+   * The booking the choice was made against, after the choice took effect. Optional because
+   * records written before it existed carry none; those fall back to comparing severities.
+   */
+  boutIdAtChoice?: string | null;
+  boutDateAtChoice?: IsoDate | null;
 }

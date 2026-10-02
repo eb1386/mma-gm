@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { RATING_LONG_LABEL } from '@core/types/fighter';
 import { formatMoney } from '@core/types/common';
-import { STAFF_ROLE_LABEL, switchGym, GYM_MOVE_REPUTATION_MARGIN, GYM_MOVE_UNHAPPY_BELOW, GYM_MOVE_COLD_COACH_BELOW } from '@core/world/gyms';
+import { gymLocation, STAFF_ROLE_LABEL, switchGym, GYM_MOVE_REPUTATION_MARGIN, GYM_MOVE_UNHAPPY_BELOW, GYM_MOVE_COLD_COACH_BELOW } from '@core/world/gyms';
 import { estimateRatings } from '@core/world/scouting';
 import { useGame } from '../store';
-import { Bar, DataTable, KeyValues, Notice, Panel, Rating } from '../components';
+import { Bar, DataTable, EstimatedRating, KeyValues, Notice, Panel, Rating } from '../components';
+import { DIVISION_BY_ID } from '@core/config/divisions';
 
 export function GymsPage() {
   const save = useGame((s) => s.save)!;
@@ -26,7 +27,7 @@ export function GymsPage() {
           rowClass={(g) => (g.isPlayerControlled ? 'highlight' : undefined)}
           columns={[
             { key: 'name', label: 'Gym', sort: (g) => g.name, render: (g) => <Link to={`/gym/${g.id}`}>{g.name}</Link> },
-            { key: 'loc', label: 'Location', sort: (g) => g.country, render: (g) => `${g.city}, ${g.country}` },
+            { key: 'loc', label: 'Location', sort: (g) => gymLocation(g), render: (g) => gymLocation(g) || <span className="faint">Not published</span> },
             { key: 'reputation', label: 'Rep', numeric: true, sort: (g) => g.reputation, render: (g) => <Rating value={g.reputation} /> },
             { key: 'facilities', label: 'Facilities', numeric: true, sort: (g) => g.facilities, render: (g) => <Rating value={g.facilities} /> },
             { key: 'culture', label: 'Culture', numeric: true, sort: (g) => g.culture, render: (g) => <Rating value={g.culture} /> },
@@ -63,6 +64,9 @@ export function GymPage() {
   if (!gym) return <div className="page"><Notice kind="bad">Unknown gym.</Notice></div>;
 
   const roster = gym.fighterIds.map((id) => save.fighters[id]).filter(Boolean);
+  // One scouting estimate per fighter, shared by the sort and the cells, rather than one per cell.
+  const estimates = new Map(roster.map((f) => [f.id, estimateRatings(save, f)]));
+  const est = (id: string) => estimates.get(id)!;
   const staff = gym.staffIds.map((id) => save.staff[id]).filter(Boolean);
   const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
   // Whether leaving the current room for this one would be understood, stated before the click
@@ -79,7 +83,7 @@ export function GymPage() {
       <div className="page-head">
         <h1>{gym.name}</h1>
         <span className="sub">
-          {gym.city}, {gym.country} · founded {gym.founded}
+          {gymLocation(gym) ? `${gymLocation(gym)} · ` : ''}founded {gym.founded}
         </span>
         {gym.isPlayerControlled && <span className="tag player">your gym</span>}
       </div>
@@ -179,10 +183,19 @@ export function GymPage() {
           initialSort="ovr"
           columns={[
             { key: 'name', label: 'Fighter', sort: (f) => f.name, render: (f) => <Link to={`/fighter/${f.id}`}>{f.name}</Link> },
-            { key: 'div', label: 'Division', sort: (f) => f.divisionId, render: (f) => f.divisionId },
+            { key: 'div', label: 'Div', sort: (f) => f.divisionId, render: (f) => <Link to={`/division/${f.divisionId}`}>{DIVISION_BY_ID[f.divisionId]?.abbr ?? f.divisionId}</Link> },
             { key: 'rank', label: 'Rk', numeric: true, sort: (f) => (f.isChampion ? 0 : (f.ranking ?? 99)), render: (f) => (f.isChampion ? 'C' : (f.ranking ?? '-')) },
-            { key: 'ovr', label: 'Ovr', numeric: true, sort: (f) => estimateRatings(save, f).ovr, render: (f) => <Rating value={estimateRatings(save, f).ovr} /> },
-            { key: 'pot', label: 'Pot', numeric: true, sort: (f) => estimateRatings(save, f).pot, render: (f) => <Rating value={estimateRatings(save, f).pot} /> },
+            {
+              key: 'ovr',
+              label: 'Ovr',
+              numeric: true,
+              sort: (f) => est(f.id).ovr,
+              render: (f) => {
+                const e = est(f.id);
+                return <EstimatedRating estimate={e.ovr} low={e.exact ? undefined : e.ovrLow} high={e.exact ? undefined : e.ovrHigh} />;
+              },
+            },
+            { key: 'pot', label: 'Pot', numeric: true, sort: (f) => est(f.id).pot, render: (f) => <Rating value={est(f.id).pot} /> },
             { key: 'happy', label: 'Happiness', numeric: true, sort: (f) => f.happiness, render: (f) => <Bar value={f.happiness} /> },
           ]}
           empty="No fighters currently train here."

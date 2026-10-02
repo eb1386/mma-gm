@@ -1,6 +1,6 @@
-import { addDays, daysBetween, type BoutId, type FighterId, type IsoDate } from '../types/common';
+import { addDays, daysBetween, formatDate, type BoutId, type FighterId, type IsoDate } from '../types/common';
 import type { SaveGame } from '../types/save';
-import { advance, type AdvanceReport } from './tick';
+import { advance, STOPPED_AT_REQUEST, type AdvanceReport } from './tick';
 import { actionRoute, careerStatus } from './career';
 import { hasLiveBooking } from './availability';
 import { FIGHT_WEEK_DAYS } from './availability';
@@ -57,7 +57,7 @@ export function targetLabel(target: AdvanceTarget): string {
     case 'duration':
       return target.days === 1 ? 'Advance a Day' : target.days === 7 ? 'Advance a Week' : 'Advance a Month';
     case 'date':
-      return `Advance to ${target.date}`;
+      return `Advance to ${formatDate(target.date)}`;
   }
 }
 
@@ -212,6 +212,21 @@ export interface AdvanceUntilOptions {
  * on the day it is scheduled for.
  */
 export function advanceUntil(save: SaveGame, target: AdvanceTarget, opts: AdvanceUntilOptions = {}): AdvanceUntilResult {
+  const steps = advanceUntilSteps(save, target, opts);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/**
+ * The same loop as `advanceUntil`, yielding the date after each simulated day.
+ *
+ * Recovery and contract targets can run nine hundred days, several seconds even on a desktop, and
+ * run in one piece the progress panel never painted and nothing could be tapped until it ended.
+ * The interface drives this and gives the browser the thread between days; `advanceUntil` drains
+ * it, so tests and headless tools see exactly what they always did.
+ */
+export function* advanceUntilSteps(save: SaveGame, target: AdvanceTarget, opts: AdvanceUntilOptions = {}): Generator<IsoDate, AdvanceUntilResult, void> {
   const before = snapshot(save);
   const startDate = save.date;
   const ceiling = maxDaysFor(target);
@@ -265,11 +280,23 @@ export function advanceUntil(save: SaveGame, target: AdvanceTarget, opts: Advanc
     if (targetReached(save, target, startDate)) break;
     // A bout that stops existing invalidates a bout scoped target.
     if ('boutId' in target && save.bouts[target.boutId]?.status !== 'scheduled') break;
+    // A fight week stage that came due on the way is a stop, optional or not. Only mandatory
+    // stages block, so Advance to Fight Night ran past media day and the press conference and
+    // left them queued in front of the weigh in. Stages already due when the advance began are
+    // not counted, or a stage the player chose to leave would turn every press into a no-op.
+    if ('boutId' in target && pendingStages(save, target.boutId).some((t) => t.dueOn > startDate)) break;
+    // Recovery is advanced to fight week at the latest. Fight week has its own steps, and walking
+    // through them while waiting for an injury to clear would skip them.
+    if (target.kind === 'recovery-clearance' && me) {
+      const booked = hasLiveBooking(save, me);
+      if (booked && daysBetween(save.date, booked.date) <= FIGHT_WEEK_DAYS) break;
+    }
+    yield save.date;
   }
 
   opts.onProgress?.('complete', 'Done', 1);
   const reached = targetReached(save, target, startDate);
-  return buildResult(save, target, before, reports, campEvents, injuries, startDate, reached, canceled ? 'Stopped at your request.' : null);
+  return buildResult(save, target, before, reports, campEvents, injuries, startDate, reached, canceled ? STOPPED_AT_REQUEST : null);
 }
 
 function alreadyThereReason(save: SaveGame, target: AdvanceTarget): string {

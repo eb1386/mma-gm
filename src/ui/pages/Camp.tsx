@@ -1,16 +1,43 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
-import { addDays, daysBetween, formatDate, formatMoney } from '@core/types/common';
+import { GAME_PLAN_LABEL } from '@core/sim/plan';
+import { formatDate, formatMoney } from '@core/types/common';
 import { RATING_KEYS, RATING_LONG_LABEL, type RatingKey } from '@core/types/fighter';
 import type { CampFocus, GamePlanKey, TrainingCamp } from '@core/types/world';
-import { CAMP_PRESETS, campLengthLabel, createCamp, estimateCampCost, normalizeFocus, setFocusShare, baseBuildingFor } from '@core/world/camp';
+import {
+  ARRIVE_EARLY_CAP_DAYS,
+  arriveEarlyCostFor,
+  baseBuildingFor,
+  CAMP_PRESETS,
+  campEndFor,
+  campLengthLabel,
+  campStartFor,
+  campWeeksAvailable,
+  createCamp,
+  estimateCampCost,
+  IDEAL_CAMP_WEEKS,
+  normalizeFocus,
+  setFocusShare,
+  specialistCostFor,
+  type CampSetup,
+} from '@core/world/camp';
 import { activeInjuries, trainingCapacityOf } from '@core/world/health';
+import { gymLocation } from '@core/world/gyms';
 import { useGame } from '../store';
 import { planSourceLabel, recallPlan, rememberPlan } from '@core/world/gameplan-memory';
 import { Bar, KeyValues, Notice, Panel } from '../components';
+import { GamePlanPicker } from '../GamePlanPicker';
 
-const ALL_PLANS = Object.keys(GAME_PLAN_LABEL) as GamePlanKey[];
+/** Past this many weeks a camp is warned about: the overtraining check starts to bite. */
+const LONG_CAMP_WEEKS = 10;
+
+const CAMP_TYPE_LABEL: Record<TrainingCamp['campType'], string> = {
+  home: 'Home gym',
+  visiting: 'Visiting another gym',
+  split: 'Split between two gyms',
+  'near-event': 'Near the event',
+  solo: 'Alone',
+};
 
 export function CampPage() {
   const save = useGame((s) => s.save)!;
@@ -42,8 +69,11 @@ export function CampPage() {
   };
   const [campType, setCampType] = useState<TrainingCamp['campType']>('home');
   const [visitGymId, setVisitGymId] = useState<string>('');
+  const [secondGymId, setSecondGymId] = useState<string>('');
   const [specialist, setSpecialist] = useState(false);
   const [arriveEarly, setArriveEarly] = useState(0);
+  // Null until the player picks a length, so the default follows the notice available.
+  const [chosenWeeks, setChosenWeeks] = useState<number | null>(null);
 
   const bout = fighter?.nextBoutId ? save.bouts[fighter.nextBoutId] : null;
   const existing = useMemo(
@@ -59,7 +89,33 @@ export function CampPage() {
     );
   }
 
-  const weeksAvailable = bout ? Math.max(0, Math.floor((daysBetween(save.date, bout.date) - 7) / 7)) : 0;
+  const weeksAvailable = bout ? campWeeksAvailable(save.date, bout.date) : 0;
+  // The camp no longer runs from today to the bout whatever the notice. Its length is chosen, and
+  // it is counted back from the end of camp, so on long notice the camp waits until it is due.
+  // Booking every week available ran a fight booked four months out into a sixteen week camp,
+  // which the length and overtraining penalties made far worse than eight weeks.
+  const campWeeks = weeksAvailable > 0 ? Math.min(weeksAvailable, Math.max(1, chosenWeeks ?? Math.min(IDEAL_CAMP_WEEKS, weeksAvailable))) : 0;
+  const campStart = bout ? campStartFor(bout.date, campWeeks) : save.date;
+  // A visiting or split camp needs its other gym named. Both used to fall back to the home gym when
+  // none was picked, which billed two to three times a home camp for a worse camp in the same room.
+  const campGymId = campType === 'solo' ? null : campType === 'visiting' ? visitGymId || null : fighter.gymId;
+  const gymMissing = (campType === 'visiting' && !visitGymId) || (campType === 'split' && !secondGymId);
+  const setupFor = (boutId: string, boutDate: string): CampSetup => ({
+    boutId,
+    startDate: campStartFor(boutDate, campWeeks),
+    endDate: campEndFor(boutDate),
+    focus: normalizeFocus(focus),
+    intensity,
+    // The gym that will actually be charged. The quote used to name the home gym whatever the
+    // player picked, and cost is derived from the gym's own running costs, so a visiting camp could
+    // be billed several times what it quoted.
+    gymId: campGymId,
+    secondGymId: campType === 'split' ? secondGymId || null : null,
+    campType,
+    specialistHired: specialist ? 'Specialist coach' : null,
+    gamePlan: plans,
+    arriveEarlyDays: arriveEarly,
+  });
   const capacity = trainingCapacityOf(fighter, save.date);
   const injuries = activeInjuries(fighter, save.date);
 
@@ -112,32 +168,29 @@ export function CampPage() {
         toDate: save.date,
         daysAdvanced: 0,
         eventsResolved: [],
-        headlines: [`Camp set: ${created.weeks} weeks at ${Math.round(created.intensity * 100)} percent intensity.`],
+        headlines: [
+          `Camp set: ${campLengthLabel(created.weeks).toLowerCase()} at ${Math.round(created.intensity * 100)} percent intensity, ${
+            created.startDate > save.date ? `starting ${formatDate(created.startDate)}` : 'starting now'
+          }.`,
+        ],
         stoppedBecause: null,
         navigateTo: null,
         summary: '',
       };
     });
-    if (result.noOpReason) showToast(result.noOpReason, 'bad');
-    else showToast(result.headlines[0] ?? 'Camp set.', 'good');
+    // A no-op reason is already shown by the operation panel. Toasting it as well put the same
+    // sentence on screen twice. A failure is shown by the panel too, and is not a camp being set.
+    if (result.ok && !result.noOpReason) showToast(result.headlines[0] ?? 'Camp set.', 'good');
   };
 
   const buildCamp = (s: typeof save) => {
     {
       if (!bout) throw new Error('There is no booked bout to build a camp for.');
+      // The page hides the form in these cases; this keeps a stale click from getting past it.
+      if (campWeeksAvailable(s.date, bout.date) === 0) throw new Error('Too close to the fight for a camp. Set the game plan in fight week.');
+      if (gymMissing) throw new Error(campType === 'split' ? 'Choose the second gym for the split camp.' : 'Choose the gym to visit.');
       const f = s.fighters[s.player.fighterId!];
-      const camp = createCamp(s, f, {
-        boutId: bout.id,
-        startDate: s.date,
-        endDate: addDays(bout.date, -7),
-        focus: normalizeFocus(focus),
-        intensity,
-        gymId: campType === 'solo' ? null : campType === 'visiting' ? visitGymId || f.gymId : f.gymId,
-        campType,
-        specialistHired: specialist ? 'Specialist coach' : null,
-        gamePlan: plans,
-        arriveEarlyDays: arriveEarly,
-      });
+      const camp = createCamp(s, f, setupFor(bout.id, bout.date));
       s.camps[camp.id] = camp;
       // The camp is paid for weekly through the ledger as it runs, in `runCampWeek`. Deducting the
       // whole cost here as well charged it twice, against two different money stores, and the
@@ -175,9 +228,12 @@ export function CampPage() {
         <Panel title="Camp in progress">
           <KeyValues
             rows={[
+              ...(existing.status === 'planned' && existing.startDate > save.date
+                ? ([['Starts', formatDate(existing.startDate)]] as [string, string][])
+                : []),
               ['Weeks completed', `${existing.weeksCompleted} of ${existing.weeks}`],
               ['Intensity', <Bar key="i" value={existing.intensity * 100} />],
-              ['Location', existing.campType],
+              ['Location', CAMP_TYPE_LABEL[existing.campType] ?? existing.campType],
               ['Game plan', existing.gamePlan.map((p) => GAME_PLAN_LABEL[p]).join(', ') || 'None set'],
               ['Cost', formatMoney(existing.cost)],
               ['Overtrained', existing.overtrained ? <span key="o" className="bad">yes</span> : 'no'],
@@ -207,7 +263,11 @@ export function CampPage() {
         </Panel>
       )}
 
-      {!existing && bout && (
+      {!existing && bout && weeksAvailable === 0 && (
+        <Notice>Too close to the fight for a camp. Set the game plan in fight week.</Notice>
+      )}
+
+      {!existing && bout && weeksAvailable > 0 && (
         <div className="grid c2">
           <Panel title="Camp plan">
             <div className="field">
@@ -279,10 +339,28 @@ export function CampPage() {
                     : campType === 'near-event'
                       ? 'Travel and time zone adjustment handled early, at extra cost.'
                       : campType === 'split'
-                        ? 'Two rooms, two skill sets, more travel and more disruption.'
+                        ? 'Each area is worked in whichever room does it better, under the better coaching staff, at the cost of travel and disruption. Worth it when the second gym covers a weakness of the home room.'
                         : 'Familiar coaches and partners at the usual cost.'}
               </span>
             </div>
+
+            {campType === 'split' && (
+              <div className="field">
+                <label>Second gym</label>
+                <select value={secondGymId} onChange={(e) => setSecondGymId(e.target.value)}>
+                  <option value="">Choose a gym</option>
+                  {Object.values(save.gyms)
+                    .filter((g) => g.id !== fighter.gymId)
+                    .sort((a, b) => b.reputation - a.reputation)
+                    .slice(0, 40)
+                    .map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name} ({gymLocation(g) ? `${gymLocation(g)}, ` : ''}reputation {g.reputation})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
 
             {campType === 'visiting' && (
               <div className="field">
@@ -295,7 +373,7 @@ export function CampPage() {
                     .slice(0, 40)
                     .map((g) => (
                       <option key={g.id} value={g.id}>
-                        {g.name} ({g.city}, reputation {g.reputation})
+                        {g.name} ({gymLocation(g) ? `${gymLocation(g)}, ` : ''}reputation {g.reputation})
                       </option>
                     ))}
                 </select>
@@ -304,16 +382,22 @@ export function CampPage() {
 
             <label className="row tight mb">
               <input type="checkbox" checked={specialist} onChange={(e) => setSpecialist(e.target.checked)} />
-              <span className="small">Hire a specialist coach for this camp</span>
+              <span className="small">Hire a specialist coach for this camp ({formatMoney(specialistCostFor(fighter))})</span>
             </label>
 
             <div className="field">
               <label>Arrive early at the venue</label>
               <select value={arriveEarly} onChange={(e) => setArriveEarly(Number(e.target.value))}>
                 <option value={0}>Standard fight week arrival</option>
-                <option value={4}>Four days early</option>
-                <option value={7}>One week early</option>
-                <option value={12}>Twelve days early</option>
+                {[
+                  [4, 'Four days early'],
+                  [7, 'One week early'],
+                  [ARRIVE_EARLY_CAP_DAYS, 'Twelve days early'],
+                ].map(([days, label]) => (
+                  <option key={days} value={days}>
+                    {label} (about {formatMoney(arriveEarlyCostFor(fighter, Number(days)))})
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -327,42 +411,40 @@ export function CampPage() {
                 <span className="tag">{planLabel}</span> Preselected for you. Change them freely.
               </p>
             )}
-            <div className="row" style={{ gap: 4 }}>
-              {ALL_PLANS.map((p) => (
-                <span
-                  key={p}
-                  className={`plan-chip${plans.includes(p) ? ' on' : ''}`}
-                  title={GAME_PLAN_DESCRIPTION[p]}
-                  onClick={() => setPlans((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : cur.length >= 3 ? cur : [...cur, p]))}
-                >
-                  {GAME_PLAN_LABEL[p]}
+            <GamePlanPicker plans={plans} onChange={(next) => setPlans(next)} />
+
+            <div className="field mt">
+              <label>Camp length</label>
+              <select value={campWeeks} onChange={(e) => setChosenWeeks(Number(e.target.value))}>
+                {Array.from({ length: weeksAvailable }, (_, i) => i + 1).map((w) => (
+                  <option key={w} value={w}>
+                    {w === 1 ? 'One week' : `${w} weeks`}
+                    {w === IDEAL_CAMP_WEEKS ? ' (ideal)' : ''}
+                  </option>
+                ))}
+              </select>
+              <span className="small dim">
+                Eight weeks is ideal; longer camps start to wear the fighter down.{' '}
+                {campStart > save.date ? `This camp starts ${formatDate(campStart)}.` : 'This camp starts now.'}
+              </span>
+              {campWeeks > LONG_CAMP_WEEKS && (
+                <span className="small warn">
+                  A camp this long risks overtraining, which costs sharpness and raises injury risk. A shorter camp
+                  started later is usually sharper on the night.
                 </span>
-              ))}
+              )}
             </div>
 
             <div className="row mt">
               <span className="dim small">
-                Camp length: {campLengthLabel(weeksAvailable)}. Estimated cost{' '}
-                {formatMoney(
-                  estimateCampCost(save, {
-                    boutId: bout.id,
-                    startDate: save.date,
-                    endDate: addDays(bout.date, -7),
-                    focus,
-                    intensity,
-                    // The gym that will actually be charged. The quote used to name the home gym
-                    // whatever the player picked, and cost is derived from the gym's own running
-                    // costs, so a visiting camp could be billed several times what it quoted.
-                    gymId: campType === 'solo' ? null : campType === 'visiting' ? visitGymId || fighter.gymId : fighter.gymId,
-                    campType,
-                    specialistHired: specialist ? 'Specialist coach' : null,
-                    gamePlan: plans,
-                    arriveEarlyDays: arriveEarly,
-                  }).cost
-                )}
+                {gymMissing
+                  ? campType === 'split'
+                    ? 'Choose the second gym for the split camp.'
+                    : 'Choose the gym to visit.'
+                  : `Camp length: ${campLengthLabel(campWeeks)}. Estimated cost ${formatMoney(estimateCampCost(save, setupFor(bout.id, bout.date)).cost)}`}
               </span>
             </div>
-            <button className="primary mt" disabled={busy} onClick={() => void startCamp()}>
+            <button className="primary mt" disabled={busy || gymMissing} onClick={() => void startCamp()}>
               Set this camp
             </button>
           </Panel>
@@ -391,7 +473,7 @@ export function CampPage() {
                 <tr key={c.id}>
                   <td>{formatDate(c.startDate)}</td>
                   <td className="num">{c.weeksCompleted}</td>
-                  <td className="small">{c.campType}</td>
+                  <td className="small">{CAMP_TYPE_LABEL[c.campType] ?? c.campType}</td>
                   <td className="num">{c.resultingSharpness !== null ? Math.round(c.resultingSharpness * 100) : '-'}</td>
                   <td className="num">{c.resultingTacticalFamiliarity !== null ? Math.round(c.resultingTacticalFamiliarity * 100) : '-'}</td>
                   <td className="small dim">{c.gamePlan.map((p) => GAME_PLAN_LABEL[p]).join(', ')}</td>

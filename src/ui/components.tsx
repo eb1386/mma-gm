@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { DIVISION_BY_ID, type DivisionId } from '@core/config/divisions';
 import { formatMoney, formatNumber } from '@core/types/common';
@@ -61,12 +61,12 @@ export function DivisionLink({ id }: { id: DivisionId }) {
 }
 
 export function RecordText({ f }: { f: Fighter }) {
-  return (
-    <span className="mono">
-      {f.record.wins}-{f.record.losses}
-      {f.record.draws > 0 ? `-${f.record.draws}` : ''}
-    </span>
-  );
+  return <span className="mono">{formatRecord(f.record)}</span>;
+}
+
+/** A record as wins-losses, with draws added only when there are any, the way RecordText shows it. */
+export function formatRecord(r: { wins: number; losses: number; draws: number }): string {
+  return `${r.wins}-${r.losses}${r.draws > 0 ? `-${r.draws}` : ''}`;
 }
 
 export function Panel({
@@ -121,6 +121,9 @@ export interface Column<T> {
   width?: number;
 }
 
+/** Rows a DataTable mounts before it offers a Show all button. */
+const ROW_CAP = 150;
+
 export function DataTable<T>({
   rows,
   columns,
@@ -142,6 +145,7 @@ export function DataTable<T>({
 }) {
   const [sortKey, setSortKey] = useState<string | undefined>(initialSort);
   const [dir, setDir] = useState<'asc' | 'desc'>(initialDir);
+  const [showAll, setShowAll] = useState(false);
 
   const sorted = useMemo(() => {
     if (!sortKey) return rows;
@@ -161,6 +165,12 @@ export function DataTable<T>({
   }, [rows, columns, sortKey, dir]);
 
   if (rows.length === 0) return <p className="dim small" style={{ padding: 8 }}>{empty}</p>;
+
+  // Mounting every row of a long table is the slow part on a phone: the full roster is about seven
+  // hundred rows of twenty cells. The sort still runs over every row, so the first rows shown are the
+  // true top of the list, and the rest are one tap away.
+  const capped = !showAll && sorted.length > ROW_CAP;
+  const shown = capped ? sorted.slice(0, ROW_CAP) : sorted;
 
   return (
     <div className="table-wrap" style={maxHeight ? { maxHeight, overflowY: 'auto' } : undefined}>
@@ -189,7 +199,7 @@ export function DataTable<T>({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((row, i) => (
+          {shown.map((row, i) => (
             <tr key={rowKey(row, i)} className={rowClass?.(row)}>
               {columns.map((c) => (
                 <td key={c.key} className={c.numeric ? 'num' : ''}>
@@ -200,6 +210,13 @@ export function DataTable<T>({
           ))}
         </tbody>
       </table>
+      {capped && (
+        <div className="table-more">
+          <button className="small" onClick={() => setShowAll(true)}>
+            Show all {sorted.length} rows
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -248,16 +265,21 @@ export function LineChart({
   height = 120,
   yMin = 0,
   yMax = 100,
+  emptyText = 'Not enough history yet.',
 }: {
   series: { points: SeriesPoint[]; className: string; label: string }[];
   height?: number;
   yMin?: number;
   yMax?: number;
+  /** Shown in place of the chart until some series has two points to join. */
+  emptyText?: string;
 }) {
   const width = 600;
   const pad = 4;
   const all = series.flatMap((s) => s.points);
-  if (all.length === 0) return <p className="dim small">Not enough history yet.</p>;
+  // A single point draws a path of one move and no line, which left an empty box with a legend.
+  // Every fighter starts with exactly one history entry, so that was every chart at career start.
+  if (series.every((s) => s.points.length < 2)) return <p className="dim small">{emptyText}</p>;
   const xMin = Math.min(...all.map((p) => p.x));
   const xMax = Math.max(...all.map((p) => p.x));
   const sx = (x: number) => (xMax === xMin ? pad : pad + ((x - xMin) / (xMax - xMin)) * (width - pad * 2));
@@ -373,4 +395,36 @@ export function OctagonMark({ size = 22 }: { size?: number }) {
       <polygon points={points} fill="currentColor" opacity="0.12" />
     </svg>
   );
+}
+
+/**
+ * Catches an exception thrown while rendering, so one broken page does not take the game with it.
+ *
+ * Without one, React unmounts the whole tree on any render error: the menu, the tab bar and every
+ * route went blank together, and the iPhone app has no address bar or reload control to recover
+ * from that. A save that threw on the dashboard blanked the app on every launch. The fallback is
+ * supplied by the caller, because the boundary around the pages can offer navigation and the one
+ * around the whole app cannot rely on the router or the store working.
+ */
+export class ErrorBoundary extends Component<
+  { fallback: (error: Error, reset: () => void) => ReactNode; children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: unknown): { error: Error } {
+    return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    // Kept in the console so a player can copy it into a bug report.
+    console.error('A page failed to render.', error, info.componentStack);
+  }
+
+  reset = (): void => this.setState({ error: null });
+
+  render(): ReactNode {
+    if (this.state.error) return this.props.fallback(this.state.error, this.reset);
+    return this.props.children;
+  }
 }

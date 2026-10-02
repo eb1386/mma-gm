@@ -97,6 +97,13 @@ export function RivalriesPage() {
       if (other.divisionId !== me.divisionId) {
         blockers.push(`They compete at ${DIVISION_BY_ID[other.divisionId]?.name ?? other.divisionId}.`);
       }
+      // No booking crosses circuits: the main promotion matches only its own roster and a regional
+      // card only its own promotion's. A called up player keeps the rivals made on the way up, and
+      // those rows read 'Yes' for a fight that could never be made. The match is exact, so an
+      // amateur and a professional of the same promotion are apart too.
+      if ((other.circuit ?? null) !== (me.circuit ?? null)) {
+        blockers.push(other.circuit ? 'They compete on a regional circuit.' : 'They fight for the main promotion.');
+      }
 
       // A rivalry is resolved once it has cooled and they have already settled it in the cage.
       const decided = entry.relationship.fights.length > 0 && intensity < 25;
@@ -263,7 +270,7 @@ export function RivalriesPage() {
             {row.interest && (
               <div className="rivalry-note">
                 <strong>{MATCHUP_SOURCE_LABEL[row.interest.source]}</strong>
-                <div className="small">{interestStatusLine(save, row.interest)}</div>
+                <div className="small">{interestStatusLine(save, row.interest, playerId)}</div>
                 {row.interest.promotionResponse && <div className="faint small">{row.interest.promotionResponse}</div>}
               </div>
             )}
@@ -303,9 +310,11 @@ export function RivalriesPage() {
               <Link className="link-button" to={`/fighter/${row.otherId}`}>
                 Fighter profile
               </Link>
-              <Link className="link-button" to="/career">
-                Call them out
-              </Link>
+              {row.matchupPossible && (
+                <Link className="link-button" to="/career">
+                  Call them out
+                </Link>
+              )}
             </div>
           </Panel>
         );

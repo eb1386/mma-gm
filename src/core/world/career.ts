@@ -1,16 +1,19 @@
-import { addDays, daysBetween, type BoutId, type IsoDate } from '../types/common';
+import { addDays, daysBetween, formatDate, type BoutId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { activeCampFor, hasLiveBooking, openOffersFor } from './availability';
 import { activeInjuries, canCompete } from './health';
 import { actionableMessages } from './inbox';
 import { FIGHT_WEEK_DAYS } from './availability';
-import { pendingStages, stageLabel, type FightWeekStage } from './fightweek';
+import { pendingStages, stageLabel, tasksForBout, type FightWeekStage } from './fightweek';
 import type { AdvanceTarget } from './advance-target';
 import { DIVISION_BY_ID } from '../config/divisions';
 import { isFinish } from '../types/fight';
+import { isMainResult } from './circuit';
 import { forfeitContenderStatus } from './contender';
 import { pushNews, retirementNews } from './history';
+import { isAmateurFighter, promotionOfFighter } from './regional';
+import { PROMOTION_ABBREVIATION } from '../config/branding';
 
 /**
  * The player career state machine.
@@ -33,6 +36,7 @@ export type CareerState =
   | 'camp-active'
   | 'injured-while-booked'
   | 'awaiting-medical-decision'
+  | 'compliance-decision'
   | 'awaiting-promotion-response'
   | 'fight-week'
   | 'fight-ready'
@@ -55,6 +59,7 @@ export const CAREER_STATE_LABEL: Record<CareerState, string> = {
   'camp-active': 'In camp',
   'injured-while-booked': 'Injured with a fight booked',
   'awaiting-medical-decision': 'Awaiting a medical decision',
+  'compliance-decision': 'Anti-doping decision',
   'awaiting-promotion-response': 'Awaiting the promotion',
   'fight-week': 'Fight week',
   'fight-ready': 'Ready to fight',
@@ -69,11 +74,17 @@ export const CAREER_STATE_LABEL: Record<CareerState, string> = {
   'not-a-fighter': 'Not managing a fighter',
 };
 
-/** Which states forbid the calendar from moving at all until the player acts. */
+/**
+ * Which states forbid the calendar from moving at all until the player acts.
+ *
+ * Injured with a fight booked is not one of them. It blocks while the injury decision is open,
+ * through that action, and must not block once the decision is answered: the injury can only
+ * heal while time passes, so a state that held the clock until it healed could never end.
+ */
 const BLOCKING_STATES = new Set<CareerState>([
   'offer-pending',
-  'injured-while-booked',
   'awaiting-medical-decision',
+  'compliance-decision',
   'fight-ready',
   'fight-in-progress',
   'awaiting-result',
@@ -207,6 +218,25 @@ export function careerStatus(save: SaveGame): CareerStatus {
   // A fight that has already happened but has no stored result should never happen; if it
   // does, surface it rather than letting the calendar walk past it.
   if (bout && daysToFight !== null && daysToFight <= 0) {
+    // Unless the official weigh in never happened. Only that stage is checked here: on fight day
+    // final clearance and the fight itself are always due, and they are completed through the
+    // fight page, so routing on any pending mandatory stage would hide Enter Fight for good.
+    const weighIn = tasksForBout(save, bout.id).find((t) => t.stage === 'official-weigh-in' && t.status !== 'complete' && t.status !== 'skipped');
+    if (weighIn) {
+      return finish(
+        'fight-week',
+        `${stageLabel(weighIn.stage)} has not happened. It comes before facing ${opponent?.name ?? 'the opponent'}.`,
+        {
+          kind: 'navigate',
+          label: weighIn.actionLabel,
+          route: `/fightweek/${bout.id}`,
+          detail: weighIn.detail,
+          blocking: true,
+          key: `stage-${bout.id}-${weighIn.stage}`,
+        },
+        { fightWeekStage: weighIn.stage }
+      );
+    }
     return finish('fight-ready', `Fight day. ${me.name} faces ${opponent?.name ?? 'the opponent'} at ${event?.name ?? 'the event'}.`, {
       kind: 'navigate',
       label: 'Enter Fight',
@@ -218,13 +248,15 @@ export function careerStatus(save: SaveGame): CareerStatus {
   }
 
   // An open decision that is specifically about an injury outranks everything except fight
-  // day, because the booked fight cannot be planned around until it is answered.
-  const injuryDecision = decisions.find((m) => m.category === 'injury' || m.category === 'medical');
+  // day, because the booked fight cannot be planned around until it is answered. Only a real
+  // injury decision counts. Matching the whole medical category told a healthy fighter he was
+  // hurt whenever a supplement question or an anti-doping sanction arrived.
+  const injuryDecision = decisions.find((m) => m.category === 'injury' || Boolean(m.linkedInjuryId));
   if (injuryDecision) {
     return finish(
       bout ? 'injured-while-booked' : 'awaiting-medical-decision',
       bout
-        ? `${me.name} is hurt with ${opponent?.name ?? 'a fight'} booked for ${bout.date}. The promotion needs an answer.`
+        ? `${me.name} is hurt with ${opponent?.name ?? 'a fight'} booked for ${formatDate(bout.date)}. The promotion needs an answer.`
         : `${me.name} has a medical decision to make.`,
       {
         kind: 'navigate',
@@ -235,6 +267,20 @@ export function careerStatus(save: SaveGame): CareerStatus {
         key: `injury-${injuryDecision.id}`,
       }
     );
+  }
+
+  // An anti-doping sanction is answered to the commission. It blocks like an injury decision,
+  // but it is not one, and the wording says what it actually is.
+  const sanction = decisions.find((m) => m.category === 'medical' && m.choices.some((c) => c.key.startsWith('doping-')));
+  if (sanction) {
+    return finish('compliance-decision', 'The commission needs an answer on a sanction.', {
+      kind: 'navigate',
+      label: 'Answer the Commission',
+      route: `/inbox/${sanction.id}`,
+      detail: sanction.subject,
+      blocking: true,
+      key: `sanction-${sanction.id}`,
+    });
   }
 
   const contractDecision = decisions.find((m) => m.category === 'contract');
@@ -302,25 +348,40 @@ export function careerStatus(save: SaveGame): CareerStatus {
         label: 'Advance to Fight Night',
         target: { kind: 'fight-day', boutId: bout.id },
         route: `/fight/${bout.id}`,
-        detail: `${event?.name ?? 'The event'} on ${bout.date}.`,
+        detail: `${event?.name ?? 'The event'} on ${formatDate(bout.date)}.`,
         blocking: false,
         key: `fightweek-${bout.id}`,
       });
     }
 
+    // Hurt, booked, and nothing open to answer. Every open injury decision was handled above,
+    // so what is left is an injury the player has already treated, a medically contingent
+    // booking, or one expected to clear before the date. None of those is a question, and the
+    // only thing that resolves them is time: this used to hold the clock and point at the camp
+    // page, which has no injury control, so the injury could never heal and the career froze.
+    // A booking the injury can no longer make is raised as a new decision by the weekly check.
     if (blocking.length > 0) {
-      return finish('injured-while-booked', `${me.name} cannot compete: ${blocking[0].type}. The booked fight is unresolved.`, {
-        kind: 'navigate',
-        label: 'Review Injury',
-        route: '/camp',
-        detail: `${blocking[0].type}, expected back ${blocking[0].expectedReturn}.`,
-        blocking: true,
-        key: `injury-block-${blocking[0].id}`,
-      });
+      const back = blocking.map((i) => i.expectedReturn).sort().pop()!;
+      const clearsInTime = back < bout.date;
+      return finish(
+        'injured-while-booked',
+        clearsInTime
+          ? `${me.name} is recovering from ${blocking[0].type}, expected back ${formatDate(back)}, before the fight on ${formatDate(bout.date)}.`
+          : `${me.name} is not expected back from ${blocking[0].type} until ${formatDate(back)}, after the fight on ${formatDate(bout.date)}.`,
+        {
+          kind: 'advance-target',
+          label: 'Advance Until Recovered',
+          // Recovery stops at fight week at the latest. advanceUntil caps the target there.
+          target: { kind: 'recovery-clearance', fighterId: me.id },
+          detail: `${blocking[0].type}, expected back ${formatDate(back)}. ${daysToFight} days until the bout.`,
+          blocking: false,
+          key: `injury-recovery-${blocking[0].id}`,
+        }
+      );
     }
 
     if (!camp) {
-      return finish('camp-planning', `No camp is planned for ${opponent?.name ?? 'the fight'} on ${bout.date}.`, {
+      return finish('camp-planning', `No camp is planned for ${opponent?.name ?? 'the fight'} on ${formatDate(bout.date)}.`, {
         kind: 'navigate',
         label: 'Plan Fight Camp',
         route: '/camp',
@@ -332,7 +393,12 @@ export function careerStatus(save: SaveGame): CareerStatus {
 
     // The camp action advances time to fight week. It used to be a navigate action
     // pointing at /camp, which did nothing at all once the player was already on /camp.
-    return finish('camp-active', `In camp for ${opponent?.name ?? 'the fight'} on ${bout.date}.`, {
+    // A camp now waits until it is due, so one set on long notice has not started yet.
+    const campWaits = campRecord !== null && campRecord.status === 'planned' && campRecord.startDate > save.date;
+    const campLine = campWaits
+      ? `Camp for ${opponent?.name ?? 'the fight'} on ${formatDate(bout.date)} starts ${formatDate(campRecord.startDate)}.`
+      : `In camp for ${opponent?.name ?? 'the fight'} on ${formatDate(bout.date)}.`;
+    return finish('camp-active', campLine, {
       kind: 'advance-target',
       label: 'Advance to Fight Week',
       target: { kind: 'fight-week', boutId: bout.id },
@@ -344,7 +410,7 @@ export function careerStatus(save: SaveGame): CareerStatus {
   }
 
   if (me.medicalSuspension && me.medicalSuspension.until > save.date) {
-    return finish('medical-suspension', `Medically suspended until ${me.medicalSuspension.until}: ${me.medicalSuspension.reason}.`, {
+    return finish('medical-suspension', `Medically suspended until ${formatDate(me.medicalSuspension.until)}: ${me.medicalSuspension.reason}.`, {
       kind: 'advance-target',
       label: 'Advance Until Recovered',
       target: { kind: 'recovery-clearance', fighterId: me.id },
@@ -356,7 +422,7 @@ export function careerStatus(save: SaveGame): CareerStatus {
 
   if (blocking.length > 0) {
     const back = blocking.map((i) => i.expectedReturn).sort().pop()!;
-    return finish('recovery', `Recovering from ${blocking[0].type}. Expected back ${back}.`, {
+    return finish('recovery', `Recovering from ${blocking[0].type}. Expected back ${formatDate(back)}.`, {
       kind: 'advance-target',
       label: 'Advance Until Recovered',
       target: { kind: 'recovery-clearance', fighterId: me.id },
@@ -451,25 +517,46 @@ export function recordAchievements(save: SaveGame): string[] {
 
   // Only bouts this save simulated. Anything else belongs to a career the player did not manage.
   const mine = me.boutIds.map((id) => save.history.results[id]).filter(Boolean);
-  const wins = mine.filter((r) => r.winnerId === me.id);
-  const finishes = wins.filter((r) => isFinish(r.method));
-  const reigns = save.history.reigns.filter((r) => r.fighterId === me.id && !r.isInterim);
-  const defenses = reigns.reduce((t, r) => t + r.defenses, 0);
+  // The "in the promotion" milestones count the promotion's fights only. A regional or amateur
+  // bout used to claim the first fight and first win, and since each is awarded once, the real
+  // debut later earned nothing.
+  const promoResults = mine.filter((r) => isMainResult(save, r));
+  const promoWins = promoResults.filter((r) => r.winnerId === me.id);
+  // A finish counts on any professional card, regional included, but not as an amateur.
+  const finishes = mine.filter((r) => r.winnerId === me.id && isFinish(r.method) && !save.bouts[r.boutId]?.isAmateur);
+  // An imported reign is the title the fighter already held when the save began, not one won here.
+  const reigns = save.history.reigns.filter(
+    (r) => r.fighterId === me.id && !r.isInterim && r.wonBoutId !== null && !r.id.startsWith('reign-import-')
+  );
+  const defenses = save.history.reigns
+    .filter((r) => r.fighterId === me.id && !r.isInterim)
+    .reduce((t, r) => t + r.defenses, 0);
   const divisionsHeld = new Set(reigns.map((r) => r.divisionId));
   const division = DIVISION_BY_ID[me.divisionId];
+  // The ranking milestones are measured from where the career started. Undefined is a save from
+  // before the start was recorded, which keeps the old rule rather than guessing.
+  const start = save.player.startRanking;
+  const startedUnranked = start === undefined || start === null;
 
-  claim('first-fight', 'First fight in the promotion', mine.length >= 1);
-  claim('first-win', 'First win in the promotion', wins.length >= 1);
+  // A save played before the split may hold a first fight or first win claimed by a regional or
+  // amateur bout. Results are never pruned, so with no promotional result yet the claim cannot be
+  // real; it is withdrawn here so the actual debut can earn it.
+  if (promoResults.length === 0 && save.player.achievements?.some((a) => a.key === 'first-fight' || a.key === 'first-win')) {
+    save.player.achievements = save.player.achievements.filter((a) => a.key !== 'first-fight' && a.key !== 'first-win');
+  }
+
+  claim('first-fight', 'First fight in the promotion', promoResults.length >= 1);
+  claim('first-win', 'First win in the promotion', promoWins.length >= 1);
   claim('first-finish', 'First finish', finishes.length >= 1);
-  claim('ranked', 'Broke into the rankings', me.ranking !== null);
-  claim('top-five', 'Reached the top five', me.ranking !== null && me.ranking <= 5);
-  claim('number-one', 'Reached number one contender', me.ranking === 1);
+  claim('ranked', 'Broke into the rankings', me.ranking !== null && startedUnranked);
+  claim('top-five', 'Reached the top five', me.ranking !== null && me.ranking <= 5 && (startedUnranked || start! > 5));
+  claim('number-one', 'Reached number one contender', me.ranking === 1 && start !== 1);
   claim('champion', `Won the ${division?.name ?? 'divisional'} championship`, reigns.length >= 1);
   claim('defended', 'Defended the championship', defenses >= 1);
   claim('dynasty', 'Defended the championship five times', defenses >= 5);
   claim('two-division', 'Held a title in two divisions', divisionsHeld.size >= 2);
-  claim('ten-wins', 'Ten wins in the promotion', wins.length >= 10);
-  claim('twenty-fights', 'Twenty fights in the promotion', mine.length >= 20);
+  claim('ten-wins', 'Ten wins in the promotion', promoWins.length >= 10);
+  claim('twenty-fights', 'Twenty fights in the promotion', promoResults.length >= 20);
   claim('millionaire', 'Career earnings past one million', (save.finance?.careerEarnings ?? 0) >= 1_000_000);
   claim('hall-of-fame', 'Inducted into the Hall of Fame', me.hallOfFameYear !== null);
   return won;
@@ -521,13 +608,41 @@ export function retireFighter(save: SaveGame, fighter: Fighter, reason: string):
       importance: 5,
     });
   }
+  // A retired fighter leaves the rankings the day they retire. The weekly recompute used to be the
+  // only thing that removed them, and it runs before the retirement pass, so a fighter who retired
+  // stayed ranked for up to a week, and a table read in that window listed somebody who had quit.
+  if (table) {
+    const before = table.entries.length;
+    table.entries = table.entries.filter((e) => e.fighterId !== fighter.id);
+    if (table.entries.length !== before) table.entries.forEach((e, i) => (e.rank = i + 1));
+  }
+  const pfpBefore = save.pfp.entries.length;
+  save.pfp.entries = save.pfp.entries.filter((e) => e.fighterId !== fighter.id);
+  if (save.pfp.entries.length !== pfpBefore) save.pfp.entries.forEach((e, i) => (e.rank = i + 1));
+  fighter.ranking = null;
+  fighter.pfpRanking = null;
+
   // Whatever was on the table is off it.
   for (const offer of Object.values(save.fightOffers)) {
     if (offer.fighterId !== fighter.id && offer.opponentId !== fighter.id) continue;
     if (offer.status === 'open') offer.status = 'withdrawn';
   }
   retirementNews(save, fighter, reason, save.date);
-  return { ok: true, message: `${fighter.name} has retired. The record stands at ${fighter.ufcRecord.wins} and ${fighter.ufcRecord.losses} in the promotion.` };
+  return { ok: true, message: `${fighter.name} has retired. The record stands at ${retirementRecordLine(fighter)}.` };
+}
+
+/**
+ * The record a retirement is remembered by. It used to be the promotional record whoever retired,
+ * so an amateur or a regional professional read '0 and 0 in the promotion' after a real career.
+ */
+function retirementRecordLine(f: Fighter): string {
+  const fmt = (r: { wins: number; losses: number; draws: number }) => `${r.wins}-${r.losses}${r.draws ? `-${r.draws}` : ''}`;
+  if (isAmateurFighter(f)) return `${fmt(f.amateurRecord ?? { wins: 0, losses: 0, draws: 0 })} as an amateur`;
+  if (f.circuit) {
+    const promotion = promotionOfFighter(f);
+    return `${fmt(f.record)} as a professional${promotion ? `, fighting for ${promotion.name}` : ''}`;
+  }
+  return `${fmt(f.ufcRecord)} in ${PROMOTION_ABBREVIATION}`;
 }
 
 /** Writes the derived state into the save so it persists and can be shown in a save list. */
@@ -544,16 +659,17 @@ export function syncCareerState(save: SaveGame): CareerStatus {
 
 /** Valid transitions. Used by tests to prove the machine never jumps somewhere absurd. */
 export const CAREER_TRANSITIONS: Record<CareerState, CareerState[]> = {
-  available: ['offer-pending', 'negotiating', 'recovery', 'medical-suspension', 'contract-decision', 'free-agent', 'retired', 'available', 'booked'],
+  available: ['offer-pending', 'negotiating', 'recovery', 'medical-suspension', 'contract-decision', 'free-agent', 'retired', 'available', 'booked', 'awaiting-medical-decision', 'compliance-decision'],
   'offer-pending': ['negotiating', 'booked', 'available', 'camp-planning', 'offer-pending', 'retired'],
   negotiating: ['offer-pending', 'booked', 'available', 'negotiating'],
-  booked: ['camp-planning', 'camp-active', 'injured-while-booked', 'fight-week', 'available', 'booked', 'awaiting-promotion-response'],
-  'camp-planning': ['camp-active', 'injured-while-booked', 'fight-week', 'available', 'camp-planning', 'booked'],
-  'camp-active': ['camp-active', 'injured-while-booked', 'fight-week', 'available', 'camp-planning', 'booked'],
+  booked: ['camp-planning', 'camp-active', 'injured-while-booked', 'fight-week', 'available', 'booked', 'awaiting-promotion-response', 'compliance-decision'],
+  'camp-planning': ['camp-active', 'injured-while-booked', 'fight-week', 'available', 'camp-planning', 'booked', 'compliance-decision'],
+  'camp-active': ['camp-active', 'injured-while-booked', 'fight-week', 'available', 'camp-planning', 'booked', 'compliance-decision'],
   'injured-while-booked': ['awaiting-medical-decision', 'awaiting-promotion-response', 'camp-active', 'camp-planning', 'recovery', 'available', 'injured-while-booked', 'fight-week', 'booked'],
   'awaiting-medical-decision': ['injured-while-booked', 'recovery', 'camp-active', 'camp-planning', 'available', 'awaiting-medical-decision', 'booked', 'awaiting-promotion-response'],
+  'compliance-decision': ['compliance-decision', 'available', 'free-agent', 'contract-decision', 'recovery', 'medical-suspension', 'retired'],
   'awaiting-promotion-response': ['booked', 'camp-planning', 'camp-active', 'recovery', 'available', 'awaiting-promotion-response', 'injured-while-booked'],
-  'fight-week': ['fight-week', 'fight-ready', 'injured-while-booked', 'available', 'camp-active'],
+  'fight-week': ['fight-week', 'fight-ready', 'injured-while-booked', 'available', 'camp-active', 'compliance-decision'],
   'fight-ready': ['fight-in-progress', 'awaiting-result', 'post-fight', 'fight-ready', 'available', 'fight-week'],
   'fight-in-progress': ['awaiting-result', 'post-fight', 'fight-in-progress'],
   'awaiting-result': ['post-fight', 'awaiting-result'],

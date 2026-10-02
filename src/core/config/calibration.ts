@@ -110,6 +110,12 @@ export interface Calibration {
     fatiguedMultiplier: number;
     /** Seconds of vulnerability after a knockdown. */
     vulnerabilitySeconds: number;
+    /** Leg damage below which a clean leg kick cannot drop a fighter. */
+    legDropThreshold: number;
+    /** Leg drop chance per point of leg damage above the threshold. */
+    legDropScale: number;
+    /** Ceiling on the leg drop chance from one kick. */
+    legDropMax: number;
   };
 
   stun: {
@@ -121,6 +127,16 @@ export interface Calibration {
   stoppage: {
     /** Unanswered clean strikes on a hurt fighter before a stoppage check begins. */
     unansweredThreshold: number;
+    /** The same count while the fighter is still down from a knockdown. */
+    downedUnansweredThreshold: number;
+    /** Lowest position value, for the fighter on top, that counts as pinning the one below. */
+    pinnedPositionValue: number;
+    /** Unanswered clean strikes from such a position before a stoppage check begins. */
+    pinnedUnansweredThreshold: number;
+    /** Chance scale that a knockdown is an outright knockout, per unit of shot severity. */
+    knockdownKoBase: number;
+    /** Head damage that doubles the knockout chance on a knockdown. */
+    knockdownKoHeadScale: number;
     /** Per check probability at the threshold. */
     baseCheck: number;
     /** Growth per additional unanswered strike. */
@@ -135,6 +151,21 @@ export interface Calibration {
     retirementBase: number;
   };
 
+  fouls: {
+    /** Per action chance of a foul at zero pace. */
+    baseChance: number;
+    /** Extra foul chance per unit of the plan's pace. */
+    paceScale: number;
+    /** The foul number from which every foul costs a point. */
+    certainDeductionFrom: number;
+    /** Chance the foul just before that one already costs a point. */
+    earlyDeductionChance: number;
+    /** Chance any single foul is flagrant enough to cost a point on its own. */
+    flagrantChance: number;
+    /** Points a fighter can lose before the next deduction becomes a disqualification. */
+    maxDeductions: number;
+  };
+
   striking: {
     /** Reach advantage in inches converted to effective ability at long range. */
     reachAdvantagePerInch: number;
@@ -144,6 +175,11 @@ export interface Calibration {
     openStanceBonus: number;
     /** Accuracy loss per point of the defender's striking advantage. */
     defenseWeight: number;
+    /**
+     * Ceiling on the land chance at parity and above. Sets displayed accuracy; volume is set by
+     * the time costs instead, so the two can be tuned separately.
+     */
+    landScale: number;
     /** Chance a miss is punished by a counter. */
     counterBase: number;
     /** Multiplier on counter chance for counter tendency. */
@@ -174,6 +210,12 @@ export interface Calibration {
     standUpBase: number;
     /** Referee stand up after this many seconds of no meaningful action. */
     inactivityStandUpSeconds: number;
+    /** Share of the ground offense over ground defense gap added to strike accuracy from top. */
+    groundStrikeEdgeWeight: number;
+    /** Striking accuracy edge of the top fighter in any ground position, before position value. */
+    topStrikeBase: number;
+    /** Extra top striking edge per unit of position value. */
+    topStrikeScale: number;
   };
 
   submission: {
@@ -189,6 +231,15 @@ export interface Calibration {
     positionLossOnFail: number;
     /** Chance a technical submission occurs instead of a tap. */
     technicalChance: number;
+    /** Share of a submission's difficulty that still applies at the final finishing stage. */
+    finishDifficultyWeight: number;
+    /**
+     * Submission offense edge per unit of position value from the back or mount, and from
+     * anywhere else. Too large and every attempt from a good position saturates the checks, so
+     * the submission rating itself stops deciding anything.
+     */
+    dominantPositionEdge: number;
+    positionEdge: number;
   };
 
   judging: {
@@ -219,8 +270,23 @@ export interface Calibration {
     overwhelmingMargin: number;
     /** Per judge perception noise standard deviation. */
     judgeNoiseSd: number;
+    /** Extra perception noise per square root unit of round activity (strikes, takedowns, control). */
+    judgeNoisePerActivity: number;
     /** Individual judge bias sd, drawn once per fight per judge. */
     judgeBiasSd: number;
+    /**
+     * Pull of a partisan crowd on a fully susceptible judge, on the round score scale. Real
+     * susceptibility runs from 0 to 0.3, so the largest pull is about a third of one judge's
+     * perception noise in a typical round: it decides close rounds and never a clear one.
+     */
+    homeCrowdBias: number;
+    /** Susceptibility given to anonymous judges, the typical value of the persistent roster. */
+    anonymousHometownSusceptibility: number;
+    /**
+     * Spread of a persistent judge's lean on one particular night, drawn per bout. A fixed lean
+     * toward slot A would follow the player, who is usually slot A, through a whole career.
+     */
+    judgeBoutBiasSd: number;
     /**
      * How far a judge's willingness moves the 10-8 threshold, in impact units.
      *
@@ -241,6 +307,19 @@ export interface Calibration {
     fiveRoundPacing: number;
     /** Chance per exchange the AI re evaluates its primary approach. */
     reevaluateChance: number;
+    /** Weight of throwing a strike against moving, feinting or shooting while standing. */
+    strikeChoiceWeight: number;
+    /** Change in submission attempt frequency per point of submission offense over defense. */
+    submissionEdgeScale: number;
+    /** Effective points of grappling over striking edge that add one unit of ground desire. */
+    styleEdgeScale: number;
+    /**
+     * Weight of ground strikes against holding or advancing for the fighter on top. Top control
+     * has to produce offense, or a takedown wins nothing on the cards.
+     */
+    groundStrikeWeight: number;
+    /** How much less distance a fighter who wants the takedown keeps. */
+    grapplerCloseDistance: number;
   };
 
   fight: {
@@ -263,6 +342,34 @@ export interface Calibration {
     experienceHalfLife: number;
     /** Age at which the in fight composure bonus peaks. */
     composurePeakAge: number;
+  };
+
+  /**
+   * Post fight injury and suspension thresholds, on the engine's own damage scale. Head damage
+   * is not a 0 to 100 figure: it accumulates without a cap and only partly recovers between
+   * rounds, so a typical decision ends near 50, a hard one near 150 and a beating near 250. The
+   * old thresholds of 60 and 70 put half of all fighters on a head trauma suspension and made a
+   * broken orbital the most common fight injury in the game.
+   */
+  fightHealth: {
+    /** Head damage above which a broken orbital becomes possible. */
+    orbitalHead: number;
+    /** Chance of the orbital once above that. */
+    orbitalChance: number;
+    /** Head damage that earns a head trauma suspension without a knockout loss. */
+    headTraumaHead: number;
+    /** Head damage above which a return needs medical clearance, as a knockout loss always does. */
+    clearanceHead: number;
+    /** Cut damage above which a deep laceration injury is possible. */
+    lacerationCut: number;
+    /** The laceration chance is the cut damage divided by this. */
+    lacerationCutDivisor: number;
+    /** Cut damage that earns a laceration suspension. */
+    cutSuspensionCut: number;
+    /** Total strikes thrown above which a hand fracture becomes possible. */
+    handFractureStrikes: number;
+    /** Chance of the hand fracture once above that. */
+    handFractureChance: number;
   };
 
   longevity: {
@@ -290,16 +397,16 @@ export interface Calibration {
 export const CALIBRATION: Calibration = {
   actionSpread: 11.5,
   grappleSpread: 10.0,
-  submissionSpread: 9.0,
+  submissionSpread: 8.5,
 
   round: { seconds: 300, restSeconds: 60 },
 
   timeCost: {
-    strikeSingle: 1.95,
-    strikeCombination: 3.5,
-    kick: 2.4,
-    movement: 3.4,
-    feint: 2.4,
+    strikeSingle: 1.1,
+    strikeCombination: 2.1,
+    kick: 1.5,
+    movement: 2.6,
+    feint: 1.8,
     clinchWork: 4.6,
     takedownAttempt: 5.0,
     scramble: 4.4,
@@ -318,13 +425,16 @@ export const CALIBRATION: Calibration = {
     passiveRecoveryPerSecond: 0.22,
     betweenRoundRecovery: 0.34,
     bodyDamageRecoveryPenalty: 0.006,
+    // Strike costs are per strike. They were cut by about a third when strike time costs were,
+    // so a fighter's output per minute costs what it did before; otherwise the faster pace
+    // drained everyone and the low output plans won whatever the fighter's style.
     costs: {
-      punch: 0.55,
-      powerPunch: 1.15,
-      kick: 1.05,
-      spinning: 1.9,
-      knee: 1.1,
-      elbow: 0.8,
+      punch: 0.36,
+      powerPunch: 0.75,
+      kick: 0.68,
+      spinning: 1.24,
+      knee: 0.72,
+      elbow: 0.52,
       clinchWork: 1.5,
       takedownAttempt: 3.4,
       takedownDefense: 2.6,
@@ -342,10 +452,10 @@ export const CALIBRATION: Calibration = {
 
   damage: {
     headStoppageThreshold: 100,
-    headPenaltyPerPoint: 0.15,
+    headPenaltyPerPoint: 0.1,
     bodyPenaltyPerPoint: 0.08,
     legPenaltyPerPoint: 0.1,
-    recovery: { head: 0.2, body: 0.14, leg: 0.05, balance: 0.85 },
+    recovery: { head: 0.55, body: 0.14, leg: 0.05, balance: 0.85 },
     baseCleanHead: 6.6,
     baseCleanBody: 5.0,
     baseCleanLeg: 5.6,
@@ -358,20 +468,28 @@ export const CALIBRATION: Calibration = {
   },
 
   knockdown: {
-    base: 0.0098,
+    base: 0.012,
     strikingScale: 0.019,
     durabilityScale: 0.021,
-    accumulationScale: 0.011,
+    accumulationScale: 0.003,
     stunnedMultiplier: 2.7,
-    fatiguedMultiplier: 1.7,
+    fatiguedMultiplier: 1.2,
     vulnerabilitySeconds: 12,
+    legDropThreshold: 60,
+    legDropScale: 0.0015,
+    legDropMax: 0.03,
   },
 
   stun: { base: 0.042, durationSeconds: 10, abilityPenalty: 13 },
 
   stoppage: {
     unansweredThreshold: 5,
-    baseCheck: 0.185,
+    downedUnansweredThreshold: 4,
+    pinnedPositionValue: 0.8,
+    pinnedUnansweredThreshold: 12,
+    knockdownKoBase: 0.5,
+    knockdownKoHeadScale: 400,
+    baseCheck: 0.14,
     perExtraStrike: 0.135,
     refereeTendencySd: 0.13,
     doctorBase: 0.034,
@@ -379,11 +497,21 @@ export const CALIBRATION: Calibration = {
     retirementBase: 0.012,
   },
 
+  fouls: {
+    baseChance: 0.00068,
+    paceScale: 0.4,
+    certainDeductionFrom: 3,
+    earlyDeductionChance: 0.25,
+    flagrantChance: 0.05,
+    maxDeductions: 2,
+  },
+
   striking: {
     reachAdvantagePerInch: 0.62,
     heightAdvantagePerInch: 0.24,
     openStanceBonus: 1.2,
     defenseWeight: 0.92,
+    landScale: 0.82,
     counterBase: 0.1,
     counterTendencyScale: 0.16,
     legDamageMobilityThreshold: 26,
@@ -402,15 +530,21 @@ export const CALIBRATION: Calibration = {
     sweepBase: 0.16,
     standUpBase: 0.26,
     inactivityStandUpSeconds: 48,
+    groundStrikeEdgeWeight: 0.6,
+    topStrikeBase: 3,
+    topStrikeScale: 10,
   },
 
   submission: {
-    entryBase: 0.3,
-    securedBase: 0.26,
-    finishBase: 0.072,
+    entryBase: 0.32,
+    securedBase: 0.28,
+    finishBase: 0.035,
     fatigueScale: 0.5,
     positionLossOnFail: 0.27,
     technicalChance: 0.11,
+    finishDifficultyWeight: 0.3,
+    dominantPositionEdge: 14,
+    positionEdge: 8,
   },
 
   judging: {
@@ -441,7 +575,11 @@ export const CALIBRATION: Calibration = {
     tenSevenImpact: 0.97,
     impactNoiseSd: 0.05,
     judgeNoiseSd: 2.5,
+    judgeNoisePerActivity: 1.0,
     judgeBiasSd: 1.6,
+    homeCrowdBias: 8,
+    anonymousHometownSusceptibility: 0.1,
+    judgeBoutBiasSd: 0.8,
   },
 
   ai: {
@@ -450,6 +588,11 @@ export const CALIBRATION: Calibration = {
     exploitWeight: 0.8,
     fiveRoundPacing: 0.82,
     reevaluateChance: 0.3,
+    strikeChoiceWeight: 5.2,
+    submissionEdgeScale: 0.1,
+    styleEdgeScale: 18,
+    groundStrikeWeight: 1.5,
+    grapplerCloseDistance: 0.2,
   },
 
   fight: {
@@ -464,6 +607,18 @@ export const CALIBRATION: Calibration = {
     experienceMax: 4.0,
     experienceHalfLife: 8,
     composurePeakAge: 31,
+  },
+
+  fightHealth: {
+    orbitalHead: 200,
+    orbitalChance: 0.2,
+    headTraumaHead: 160,
+    clearanceHead: 220,
+    lacerationCut: 18,
+    lacerationCutDivisor: 80,
+    cutSuspensionCut: 15,
+    handFractureStrikes: 130,
+    handFractureChance: 0.07,
   },
 
   longevity: {

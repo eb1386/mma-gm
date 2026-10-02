@@ -1,10 +1,10 @@
 import { DIVISION_BY_ID, type DivisionId } from '../config/divisions';
 import { daysBetween, type BoutId, type FighterId } from '../types/common';
-import { isChampionshipBout, type Bout } from '../types/fight';
+import { isChampionshipBout, type Bout, type FightResult } from '../types/fight';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { canCompete } from './health';
-import { assessTitleOpportunity, unbeatenRun } from './title-logic';
+import { assessTitleOpportunity, assessTitleRematch, unbeatenRun } from './title-logic';
 import { CONTENDER_SOURCE_TEXT, currentContender, mayBypassContender } from './contender';
 
 /**
@@ -89,6 +89,15 @@ export function existingTitleOffer(save: SaveGame, divisionId: DivisionId): { id
     if (o.divisionId !== divisionId) continue;
     if (!o.isTitleFight && !o.isInterimTitleFight) continue;
     return { id: o.id, fighterId: o.fighterId };
+  }
+  return null;
+}
+
+/** The fighter's latest completed result, newest bout first. */
+function mostRecentResult(save: SaveGame, fighter: Fighter): FightResult | null {
+  for (let i = fighter.boutIds.length - 1; i >= 0; i--) {
+    const r = save.history.results[fighter.boutIds[i]];
+    if (r) return r;
   }
   return null;
 }
@@ -235,12 +244,32 @@ export function titleShotEligibility(
 
   if (!hasClaim) blockers.push('unranked-without-claim');
 
-  // Coming off a loss. A loss in a title fight that produced a live rematch claim is handled
-  // by the former champion route above, so anything reaching here is an ordinary defeat.
+  // Coming off a loss. One loss at the very top of the division is excused, unless that loss was
+  // a championship bout against the titleholder they would now be challenging. Losing to the
+  // champion costs only a couple of ranking points, so the loser stayed number one or two and was
+  // handed the same fight again with nothing in between. That rematch is allowed only when the
+  // first fight or the reign behind it earned one outright, which is what assessTitleRematch says.
   if (challenger.lossStreak > 0 && !isInterimChampion) {
-    const excused = rank !== null && rank <= 2 && challenger.lossStreak === 1 && (contested === null);
-    if (!excused) blockers.push('coming-off-loss');
-    else reasons.push('A single loss at the very top of the division is not enough to lose the position.');
+    const lastResult = mostRecentResult(save, challenger);
+    const titleLossToHolder =
+      lastResult !== null &&
+      lastResult.loserId === challenger.id &&
+      (lastResult.isTitleFight || lastResult.isInterimTitleFight) &&
+      lastResult.divisionId === divisionId &&
+      lastResult.winnerId !== null &&
+      (lastResult.winnerId === table?.championId || lastResult.winnerId === table?.interimChampionId);
+    if (titleLossToHolder && challenger.lossStreak === 1) {
+      const rematch = assessTitleRematch(save, challenger, lastResult);
+      if (!rematch.granted) blockers.push('coming-off-loss');
+      else {
+        const winner = save.fighters[lastResult.winnerId!];
+        reasons.unshift(`They earned an immediate rematch with ${winner?.name ?? 'the champion'}: the first fight and their record at the top justify running it back.`);
+      }
+    } else {
+      const excused = rank !== null && rank <= 2 && challenger.lossStreak === 1 && (contested === null);
+      if (!excused) blockers.push('coming-off-loss');
+      else reasons.push('A single loss at the very top of the division is not enough to lose the position.');
+    }
   }
 
   if (opts.shortNotice && (rank === null || rank > 8) && !isInterimChampion) {

@@ -1,4 +1,5 @@
 import { DIVISIONS, type DivisionId } from '../config/divisions';
+import { mainRosterFighters } from './circuit';
 import { clamp } from '../rng';
 import { daysBetween, type FighterId, type IsoDate } from '../types/common';
 import { isChampionshipBout, isFinish, type FightResult } from '../types/fight';
@@ -25,6 +26,11 @@ export interface RankingPointsInput {
   isTitleFight: boolean;
   shortNotice: boolean;
   ownRank: number | null;
+  /**
+   * The fighter's losing streak including this result. Optional so a caller that only scores a
+   * single fight in isolation reads it as one.
+   */
+  lossStreak?: number;
 }
 
 /**
@@ -54,8 +60,25 @@ export function rankingPointsFor(input: RankingPointsInput): number {
   let penalty = -clamp(20 - oppQuality, 3, 18) * 0.62;
   if (isFinish(input.method)) penalty *= 1.16;
   if (input.shortNotice) penalty *= 0.7;
+  // A run of losses costs more with each one. A single loss to a contender was worth about two
+  // points against wins worth twelve to twenty, so a fighter who had banked a few wins could lose
+  // three or four in a row and stay in the top five.
+  const streak = input.lossStreak ?? 1;
+  if (streak >= 2) penalty *= Math.min(LOSS_STREAK_PENALTY_CAP, 1 + 0.5 * (streak - 1));
   return penalty;
 }
+
+/** The most a losing streak multiplies the cost of a loss. Reached on the fourth straight loss. */
+export const LOSS_STREAK_PENALTY_CAP = 2.5;
+
+/**
+ * Points taken off the sort key per loss in the current streak beyond the first, up to three.
+ *
+ * Applied to the ordering only, not the ledger, so it lifts the moment the fighter wins again. It
+ * is what moves a contender on a three fight skid out of the title picture without erasing the
+ * results that put them there.
+ */
+export const FORM_PENALTY_PER_LOSS = 4;
 
 /** Percentage of the fight the winner dominated, used to scale ranking movement. */
 export function dominanceOf(result: FightResult, winnerIsA: boolean): number {
@@ -177,12 +200,29 @@ export const HEAD_TO_HEAD_WINDOW_DAYS = 730;
 /** Bounded convergence passes, so the correction always terminates. */
 export const HEAD_TO_HEAD_PASSES = 3;
 
+/**
+ * The opponents who beat this fighter inside the head to head window and have not been beaten by
+ * them since.
+ */
+function recentUnansweredLosses(save: SaveGame, fighter: Fighter): FighterId[] {
+  const out: FighterId[] = [];
+  const results = fighter.boutIds.map((id) => save.history.results[id]).filter((r): r is FightResult => Boolean(r));
+  for (const r of results) {
+    if (!r.winnerId || r.winnerId === fighter.id) continue;
+    if (daysBetween(r.date, save.date) > HEAD_TO_HEAD_WINDOW_DAYS) continue;
+    const winnerId = r.winnerId;
+    const answered = results.some((later) => later.date > r.date && later.winnerId === fighter.id && (later.fighterAId === winnerId || later.fighterBId === winnerId));
+    if (!answered && !out.includes(winnerId)) out.push(winnerId);
+  }
+  return out;
+}
+
 export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reasonBySlot: Map<FighterId, string>): RankingUpdate {
   const table = save.rankings[divisionId];
   const previous = new Map(table.entries.map((e) => [e.fighterId, e.rank]));
   const ledger = rankingLedger(save, divisionId);
 
-  const eligible = Object.values(save.fighters).filter(
+  const eligible = mainRosterFighters(save).filter(
     (f) =>
       f.divisionId === divisionId &&
       !f.retired &&
@@ -205,18 +245,61 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
   // of times. Computing every bonus from the unadjusted table meant that once everybody had moved,
   // the ordering could still contradict a head to head result, which is the one thing this exists
   // to prevent. The pass count is fixed, so it always terminates and never depends on input order.
+  //
+  // The cap is on a fighter's total lift across every pass, not on each pass. Capping each pass
+  // let a chain of indirect wins stack three lifts, so a fighter with a third of a rival's points
+  // could climb over that rival days after losing to them.
   const adjusted = new Map<FighterId, number>(eligible.map((f) => [f.id, pointsOf.get(f.id) ?? 0]));
+  const lifted = new Map<FighterId, number>();
   for (let pass = 0; pass < HEAD_TO_HEAD_PASSES; pass++) {
     let moved = false;
     const next = new Map(adjusted);
     for (const f of eligible) {
       const { bonus } = headToHeadAdjustment(save, f, adjusted);
-      if (bonus <= 0) continue;
-      next.set(f.id, (adjusted.get(f.id) ?? 0) + bonus);
+      const used = lifted.get(f.id) ?? 0;
+      const add = Math.min(bonus, HEAD_TO_HEAD_MAX_BONUS - used);
+      if (add <= 0) continue;
+      next.set(f.id, (adjusted.get(f.id) ?? 0) + add);
+      lifted.set(f.id, used + add);
       moved = true;
     }
     for (const [k, v] of next) adjusted.set(k, v);
     if (!moved) break;
+  }
+
+  // A direct result outranks a lift borrowed from somebody else's. Whatever head to head lift a
+  // fighter picked up is given back as far as it would carry them over anyone who beat them inside
+  // the window and whom they have not beaten since. Only the lift is removed, never earned points,
+  // so an upset loss to a low ranked fighter is still priced by the points and not by a rule.
+  // Each round reads a snapshot and the rounds are bounded, so the result does not depend on the
+  // order of the list and a cycle of wins cannot run forever.
+  const beatenBy = new Map<FighterId, FighterId[]>();
+  for (const f of eligible) {
+    const winners = recentUnansweredLosses(save, f).filter((id) => adjusted.has(id));
+    if (winners.length > 0) beatenBy.set(f.id, winners);
+  }
+  for (let round = 0; round < HEAD_TO_HEAD_PASSES && beatenBy.size > 0; round++) {
+    let changed = false;
+    const snapshot = new Map(adjusted);
+    for (const [id, winners] of beatenBy) {
+      const raw = pointsOf.get(id) ?? 0;
+      const current = snapshot.get(id) ?? raw;
+      if (current <= raw) continue;
+      let ceiling = current;
+      for (const w of winners) ceiling = Math.min(ceiling, (snapshot.get(w) ?? 0) - HEAD_TO_HEAD_MARGIN);
+      const value = Math.max(raw, ceiling);
+      if (value < current - 0.001) {
+        adjusted.set(id, value);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  // Current form, after head to head so a lift cannot cancel it.
+  for (const f of eligible) {
+    const form = clamp(f.lossStreak - 1, 0, 3) * FORM_PENALTY_PER_LOSS;
+    if (form > 0) adjusted.set(f.id, (adjusted.get(f.id) ?? 0) - form);
   }
 
   const ordered = eligible
@@ -268,7 +351,7 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
   table.fromOfficialSnapshot = false;
 
   // Mirror onto the fighter records so pages can read a single place.
-  for (const f of Object.values(save.fighters)) {
+  for (const f of mainRosterFighters(save)) {
     if (f.divisionId !== divisionId) continue;
     const e = entries.find((x) => x.fighterId === f.id);
     f.previousRanking = f.ranking;
@@ -298,7 +381,7 @@ export function recomputeDivision(save: SaveGame, divisionId: DivisionId, reason
 export function recomputePfp(save: SaveGame): PfpRankings {
   const scored: { fighterId: FighterId; score: number }[] = [];
 
-  for (const f of Object.values(save.fighters)) {
+  for (const f of mainRosterFighters(save)) {
     if (f.retired || f.activityStatus !== 'active') continue;
     const table = save.rankings[f.divisionId];
     let score = 0;
@@ -332,7 +415,7 @@ export function recomputePfp(save: SaveGame): PfpRankings {
     movementReason: null,
   }));
 
-  for (const f of Object.values(save.fighters)) {
+  for (const f of mainRosterFighters(save)) {
     const e = entries.find((x) => x.fighterId === f.id);
     f.pfpRanking = e ? e.rank : null;
   }
@@ -371,6 +454,8 @@ export function applyResultToRankings(save: SaveGame, result: FightResult, short
       isTitleFight: isChampionshipBout(result),
       shortNotice,
       ownRank: rankOf(self),
+      // applyResult has already counted this fight into the streak.
+      lossStreak: self.lossStreak,
     });
 
     // Points go to the ledger, which every fighter has, ranked or not. The entry is only the
@@ -425,7 +510,7 @@ export const DEPOSED_CHAMPION_MARGIN = 0.5;
 
 export function seedDeposedChampion(save: SaveGame, divisionId: DivisionId, fighterId: FighterId): void {
   const ledger = rankingLedger(save, divisionId);
-  const rivals = Object.values(save.fighters)
+  const rivals = mainRosterFighters(save)
     .filter(
       (f) =>
         f.divisionId === divisionId &&

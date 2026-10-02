@@ -5,12 +5,14 @@ import { DIVISION_BY_ID } from '@core/config/divisions';
 import { formatDate, formatMoney } from '@core/types/common';
 import {
   acceptSponsor,
+  canSignSponsor,
   conflictsOfInterest,
   declineSponsor,
   fireManager,
-  generateManager,
   hireManager,
   managerFor,
+  nextManagerSearchOn,
+  searchForManager,
   SPONSOR_CATEGORY_LABEL,
   sponsorAppealOf,
   sponsorsFor,
@@ -59,32 +61,48 @@ import { interestStatusLine, matchupInterestsFor, MATCHUP_SOURCE_LABEL } from '@
 const POSTURES: CompliancePosture[] = ['strict', 'standard', 'loose', 'questionable'];
 const TONES: CalloutTone[] = ['respectful', 'confident', 'aggressive', 'personal', 'promotional'];
 
-/** Shared helper so every button on these pages routes through the operation controller. */
+/** What a page action reports: a plain message is a success, an object can say it was refused. */
+type ActOutcome = string | { ok: boolean; message: string };
+
+/**
+ * Shared helper so every button on these pages routes through the operation controller.
+ *
+ * Every result used to be reported as a success, so a refused retirement, a manager with no room
+ * or a sponsor deal that could not be signed all came back as a green toast. A refusal is now a
+ * no op with its reason, the way the advance controls report one, and it is shown in red.
+ */
 function useAct() {
   const runOperation = useGame((s) => s.runOperation);
   const showToast = useGame((s) => s.showToast);
+  const clearResult = useGame((s) => s.clearResult);
   const busy = useGame((s) => s.busy);
   const save = useGame((s) => s.save)!;
-  const act = async (label: string, work: () => string) => {
+  const act = async (label: string, work: () => ActOutcome) => {
     const result = await runOperation('other', label, (report) => {
       report('updating-world', label);
-      const message = work();
+      const outcome = work();
+      const { ok, message } = typeof outcome === 'string' ? { ok: true, message: outcome } : outcome;
       return {
+        // A refusal changes nothing, so it is a no op rather than a failure: a failed operation
+        // leaves an error panel on screen until it is dismissed, and nothing went wrong here.
         ok: true,
-        noOpReason: null,
+        noOpReason: ok ? null : message,
         error: null,
         fromDate: save.date,
         toDate: save.date,
         daysAdvanced: 0,
         eventsResolved: [],
-        headlines: [message],
+        headlines: ok ? [message] : [],
         stoppedBecause: null,
         navigateTo: null,
         summary: message,
       };
     });
-    showToast(result.headlines[0] ?? result.error ?? 'Done.', result.ok ? 'good' : 'bad');
-    return result;
+    const refused = !result.ok || Boolean(result.noOpReason);
+    // The toast already says why, so the no op notice would only repeat it.
+    if (result.ok && result.noOpReason) clearResult();
+    showToast(result.headlines[0] ?? result.error ?? result.noOpReason ?? 'Done.', refused ? 'bad' : 'good');
+    return { ...result, ok: !refused };
   };
   return { act, busy };
 }
@@ -119,8 +137,16 @@ export function SponsorsPage() {
 
       <Panel title={`Offers on the table${offered.length > 0 ? ` (${offered.length})` : ''}`}>
         <p className="small dim">Your current sponsor appeal is {Math.round(sponsorAppealOf(me))} out of 100.</p>
-        {offered.length === 0 && <p className="dim">Nothing on the table right now.</p>}
-        {offered.map((s) => (
+        {offered.length === 0 &&
+          (me.circuit?.endsWith(':am') ? (
+            <p className="dim">Amateurs cannot take sponsorship. Offers start once you turn professional.</p>
+          ) : (
+            <p className="dim">Nothing on the table right now.</p>
+          ))}
+        {offered.map((s) => {
+          // Known before the tap, so Sign is disabled with the reason rather than refused after it.
+          const blocked = canSignSponsor(save, s);
+          return (
           <div key={s.id} className="social-item">
             <div className="src">{SPONSOR_CATEGORY_LABEL[s.category]}</div>
             <p>
@@ -132,21 +158,29 @@ export function SponsorsPage() {
                 ['Monthly retainer', s.monthly > 0 ? formatMoney(s.monthly) : 'None'],
                 ['Win bonus', formatMoney(s.winBonus)],
                 ['Champion bonus', formatMoney(s.championBonus)],
-                ['Posts owed', `${s.postsPerMonth} per month`],
                 ['Appearances', `${s.appearancesPerYear} per year`],
                 ['Category exclusive', s.exclusiveCategory ? 'Yes, blocks other deals in this category' : 'No'],
                 ['Morality clause', s.moralityClause ? 'Yes, they can walk over controversy' : 'No'],
                 ['Runs until', formatDate(s.endsOn)],
               ]}
             />
+            {blocked && <p className="small warn">{blocked}</p>}
             <div className="row">
               <button
                 className="primary"
-                disabled={busy}
+                disabled={busy || Boolean(blocked)}
                 onClick={() =>
                   void act('Signing the sponsor', () => {
-                    const signed = mutate((st) => acceptSponsor(st, s.id));
-                    return signed ? `Signed with ${signed.name}.` : 'That offer is no longer available.';
+                    const outcome = mutate((st) => {
+                      const offer = st.sponsors?.[s.id];
+                      const reason = offer ? canSignSponsor(st, offer) : 'That offer is no longer available.';
+                      if (reason) return { ok: false, message: reason };
+                      const signed = acceptSponsor(st, s.id);
+                      return signed
+                        ? { ok: true, message: `Signed with ${signed.name}.` }
+                        : { ok: false, message: 'That offer is no longer available.' };
+                    });
+                    return outcome ?? { ok: false, message: 'No career is loaded.' };
                   })
                 }
               >
@@ -165,7 +199,8 @@ export function SponsorsPage() {
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </Panel>
 
       <Panel title="Active deals">
@@ -192,7 +227,7 @@ export function SponsorsPage() {
                   <td className="num">{formatMoney(s.perFight)}</td>
                   <td className="num">{s.monthly > 0 ? formatMoney(s.monthly) : ''}</td>
                   <td className="small">
-                    {s.postsPerMonth} posts, {s.appearancesPerYear} appearances
+                    {s.appearancesPerYear} appearances
                     {s.moralityClause ? ', morality clause' : ''}
                   </td>
                   <td className="num">{Math.round(s.satisfaction)}</td>
@@ -241,7 +276,11 @@ export function ManagementPage() {
   }
   const manager = managerFor(save, me.id);
   const conflicts = conflictsOfInterest(save, me.id);
-  const available = Object.values(save.managers ?? {}).filter((m) => m.id !== manager?.id && m.clientIds.length < m.clientCapacity);
+  // Newest first, so the manager a search just turned up is the one at the top of the list.
+  const available = Object.values(save.managers ?? {})
+    .filter((m) => m.id !== manager?.id && m.clientIds.length < m.clientCapacity)
+    .reverse();
+  const nextSearch = nextManagerSearchOn(save);
 
   return (
     <div className="page">
@@ -261,10 +300,7 @@ export function ManagementPage() {
                   ['Negotiation', Math.round(manager.negotiation)],
                   ['Matchmaking influence', Math.round(manager.matchmakingInfluence)],
                   ['Sponsor network', Math.round(manager.sponsorNetwork)],
-                  ['Media skill', Math.round(manager.mediaSkill)],
-                  ['Loyalty', Math.round(manager.loyalty)],
                   ['Aggressiveness', Math.round(manager.aggressiveness)],
-                  ['Honesty', Math.round(manager.honesty)],
                   ['Clients', `${manager.clientIds.length} of ${manager.clientCapacity}`],
                   ['Your relationship', Math.round(me.relationships.manager)],
                 ]}
@@ -279,34 +315,39 @@ export function ManagementPage() {
               <button
                 className="danger mt"
                 disabled={busy}
-                onClick={() => void act('Releasing the manager', () => mutate((st) => fireManager(st, me.id))?.message ?? 'Done.')}
+                onClick={() => void act('Releasing the manager', () => mutate((st) => fireManager(st, me.id)) ?? 'Done.')}
               >
                 Release {manager.name}
               </button>
             </>
           ) : (
-            <p className="dim">You are unrepresented. A manager takes a percentage but negotiates better purses.</p>
+            <p className="dim">
+              You are unrepresented. A manager takes a percentage of every purse. In return a good negotiator gets better
+              contract and fight terms, a strong sponsor network brings more and bigger sponsor offers, and influence with
+              the matchmaker makes your callouts count for more.
+            </p>
           )}
         </Panel>
 
         <Panel title="Available managers">
           <p className="small dim">
-            A better negotiator gets you more of the purse and charges more for it. An aggressive one pushes harder and
-            burns goodwill.
+            A better negotiator gets you more of the purse and charges more for it. An aggressive one pushes harder
+            still.
           </p>
-          {available.slice(0, 5).map((m) => (
+          {available.length === 0 && <p className="dim">Nobody is available right now.</p>}
+          {available.map((m) => (
             <div key={m.id} className="social-item">
               <p>
                 <strong>{m.name}</strong> <span className="dim small">{m.commissionPct} percent</span>
               </p>
               <p className="small">
                 Negotiation {Math.round(m.negotiation)}, influence {Math.round(m.matchmakingInfluence)}, sponsor network{' '}
-                {Math.round(m.sponsorNetwork)}, honesty {Math.round(m.honesty)}.
+                {Math.round(m.sponsorNetwork)}.
               </p>
               <p className="small dim">{m.note}</p>
               <button
                 disabled={busy}
-                onClick={() => void act('Hiring the manager', () => mutate((st) => hireManager(st, me.id, m.id))?.message ?? 'Done.')}
+                onClick={() => void act('Hiring the manager', () => mutate((st) => hireManager(st, me.id, m.id)) ?? 'Done.')}
               >
                 Hire {m.name}
               </button>
@@ -314,20 +355,20 @@ export function ManagementPage() {
           ))}
           <button
             className="mt"
-            disabled={busy}
+            disabled={busy || Boolean(nextSearch)}
             onClick={() =>
               void act('Looking for representation', () => {
-                const created = mutate((st) => {
+                const outcome = mutate((st) => {
                   const rng = new Rng(st.rng);
-                  const out = generateManager(st, rng);
+                  const out = searchForManager(st, st.fighters[me.id], rng);
                   st.rng = rng.getState();
                   return out;
                 });
-                return created ? `${created.name} is interested in representing you.` : 'Nobody new is interested.';
+                return outcome ?? 'Done.';
               })
             }
           >
-            Ask around for representation
+            {nextSearch ? `Ask around again from ${formatDate(nextSearch)}` : 'Ask around for representation'}
           </button>
         </Panel>
       </div>
@@ -534,39 +575,6 @@ export function CareerPage() {
         onChange={setTab}
       />
 
-      {tab === 'state' && (
-        <Panel title="Retirement">
-          <p className="small dim">
-            Walking away ends the career for good: any belt is vacated, open offers are withdrawn, and the record
-            stands as it is. There is no coming back from this one.
-          </p>
-          {!confirmRetire ? (
-            <button className="small danger" onClick={() => setConfirmRetire(true)}>
-              Consider retirement
-            </button>
-          ) : (
-            <div className="row">
-              <button
-                className="small danger"
-                disabled={busy}
-                onClick={() =>
-                  act('Retiring', () => {
-                    const result = retireFighter(save, me, 'Walked away on their own terms.');
-                    if (result.ok) syncCareerState(save);
-                    return result.message;
-                  })
-                }
-              >
-                Retire now, permanently
-              </button>
-              <button className="small" onClick={() => setConfirmRetire(false)}>
-                Keep fighting
-              </button>
-            </div>
-          )}
-        </Panel>
-      )}
-
       {tab === 'achievements' && (
         <Panel title="What this career has done" flush>
           {achievements.length === 0 ? (
@@ -656,6 +664,45 @@ export function CareerPage() {
               </>
             );
           })()}
+        </Panel>
+      )}
+
+      {/* Below the career state, so the first thing on the page is where the career stands rather than
+          the control that ends it. */}
+      {tab === 'state' && (
+        <Panel title="Retirement">
+          <p className="small dim">
+            Walking away ends the career for good: any belt is vacated, open offers are withdrawn, and the record
+            stands as it is. There is no coming back from this one.
+          </p>
+          {!confirmRetire ? (
+            <button className="small danger" onClick={() => setConfirmRetire(true)}>
+              Consider retirement
+            </button>
+          ) : (
+            <div className="row">
+              <button
+                className="small danger"
+                disabled={busy}
+                onClick={() =>
+                  void act('Retiring', () => {
+                    const result = retireFighter(save, me, 'Walked away on their own terms.');
+                    if (result.ok) syncCareerState(save);
+                    return result;
+                  }).then((outcome) => {
+                    // The confirmation closes only when the career actually ended. A refusal leaves
+                    // it open beside the reason, so the player can see what to deal with first.
+                    if (outcome.ok) setConfirmRetire(false);
+                  })
+                }
+              >
+                Retire now, permanently
+              </button>
+              <button className="small" onClick={() => setConfirmRetire(false)}>
+                Keep fighting
+              </button>
+            </div>
+          )}
         </Panel>
       )}
 
@@ -986,7 +1033,7 @@ export function CareerPage() {
                         <td>{other?.name ?? 'Unknown fighter'}</td>
                         <td className="small nowrap">{MATCHUP_SOURCE_LABEL[interest.source]}</td>
                         <td className={interest.eligibility === 'eligible' ? 'small good' : 'small warn'}>
-                          {interestStatusLine(save, interest)}
+                          {interestStatusLine(save, interest, me.id)}
                         </td>
                       </tr>
                     );

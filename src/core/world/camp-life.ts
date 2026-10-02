@@ -9,8 +9,12 @@ import { sponsorsFor } from './finance';
 import { managerFor } from './finance';
 import { dopingState } from './antidoping';
 import { COOLDOWNS, mayNotify } from './decisions';
-import { PROMOTION_MARKETING } from '../config/branding';
 import { record } from './finance';
+import { trainingCostScale } from './circuit';
+import { pronouns } from './pronouns';
+import { marketingSenderFor } from './social';
+import { promotionConfig } from './regional';
+import { PROMOTION_NAME } from '../config/branding';
 
 /**
  * Career life between the fights.
@@ -69,7 +73,15 @@ export interface CampEventDefinition {
     linkedFighterId?: string | null;
     /** Overrides the default anti repetition signature. */
     signature?: string;
+    /** The sponsor the item names, so the choice acts on that sponsor and not the first one found. */
+    aboutSponsorId?: string;
   };
+  /**
+   * How long this kind stays away once it has appeared. The default is five weeks. The evergreen
+   * gym items could otherwise come round every five weeks for a whole career, which is how one
+   * teammate came to be "watching your rounds" twenty six times in three years.
+   */
+  cooldownDays?: number;
 }
 
 export interface CampLifeContext {
@@ -83,6 +95,14 @@ export interface CampLifeContext {
   campWeek: number;
   teammates: Fighter[];
   gymName: string | null;
+  /** The booked card is on the regional circuit. */
+  isRegional: boolean;
+  /** The booked bout is an amateur one. */
+  isAmateur: boolean;
+  /** The promotion putting on the booked card, or the main promotion. */
+  promotionName: string;
+  /** The booked card's promotion id, absent for the main promotion. */
+  promotionId: string | null;
   rng: Rng;
 }
 
@@ -96,22 +116,25 @@ const EVENTS: CampEventDefinition[] = [
     kind: 'teammate-encouragement',
     mandatory: false,
     weight: 3,
+    cooldownDays: 75,
     applies: (c) => c.teammates.length > 0,
     build: (c) => {
       const mate = pickTeammate(c)!;
+      // The teammate's own pronouns. Gyms are mixed, so the player's division says nothing here.
+      const p = pronouns(mate);
       return {
         sender: 'fighter',
         senderName: mate.name,
         subject: `${mate.name} has been watching your rounds`,
         category: 'gym',
         body: `${mate.name} pulled you aside after training. ${c.rng.pick([
-          'He says the timing looks better than it has in a year.',
-          'He thinks you are being too polite in sparring and should let go more.',
-          'He wants to know if you need extra rounds this week.',
+          `${p.He} says the timing looks better than it has in a year.`,
+          `${p.He} thinks you are being too polite in sparring and should let go more.`,
+          `${p.He} wants to know if you need extra rounds this week.`,
         ])}`,
         choices: [
-          { key: 'camp-thank', label: 'Thank him', hint: 'Strengthens the friendship.' },
-          { key: 'camp-ask-rounds', label: 'Ask him for extra rounds', hint: 'Better preparation, a little more wear.' },
+          { key: 'camp-thank', label: `Thank ${p.him}`, hint: 'Strengthens the friendship.' },
+          { key: 'camp-ask-rounds', label: `Ask ${p.him} for extra rounds`, hint: 'Better preparation, a little more wear.' },
           { key: 'camp-brush-off', label: 'Brush it off', hint: 'Costs some goodwill in the room.' },
         ],
         linkedFighterId: mate.id,
@@ -125,15 +148,16 @@ const EVENTS: CampEventDefinition[] = [
     applies: (c) => c.teammates.length > 1 && c.inCamp,
     build: (c) => {
       const mate = pickTeammate(c)!;
+      const p = pronouns(mate);
       return {
         sender: 'fighter',
         senderName: mate.name,
         subject: `Friction with ${mate.name}`,
         category: 'gym',
         body: `Sparring got heated and ${mate.name} did not take it well. ${c.rng.pick([
-          'He thinks you went too hard for a Tuesday.',
-          'He says you have been taking the best rounds and leaving him the scraps.',
-          'He accused you of showing him up in front of the coaches.',
+          `${p.He} thinks you went too hard for a Tuesday.`,
+          `${p.He} says you have been taking the best rounds and leaving ${p.him} the scraps.`,
+          `${p.He} accused you of showing ${p.him} up in front of the coaches.`,
         ])} The room noticed.`,
         choices: [
           { key: 'camp-apologize', label: 'Apologize', hint: 'Repairs the relationship, costs a little standing.' },
@@ -157,7 +181,7 @@ const EVENTS: CampEventDefinition[] = [
       body: c.rng.pick([
         `The staff think the plan is too rigid for ${c.opponent?.name ?? 'this opponent'}. They want a second option ready.`,
         'The coaches think you are overtraining. They want to pull the intensity back for a week.',
-        `They have found something in ${c.opponent?.name ?? 'the opponent'}: he resets the same way every time he is pressured.`,
+        `They have found something in ${c.opponent?.name ?? 'the opponent'}: ${pronouns(c.opponent ?? c.me).he} resets the same way every time ${pronouns(c.opponent ?? c.me).he} is pressured.`,
       ]),
       choices: [
         { key: 'camp-follow-coach', label: 'Follow their advice', hint: 'Better preparation.' },
@@ -176,7 +200,9 @@ const EVENTS: CampEventDefinition[] = [
       sponsorsFor(c.save, c.me.id).some((s) => s.status === 'active' && s.appearancesPerYear > 0) &&
       mayNotify(c.save, { signature: `sponsor-request|${c.me.id}`, cooldownDays: COOLDOWNS.sponsorRequest }),
     build: (c) => {
-      const sponsor = c.rng.pick(sponsorsFor(c.save, c.me.id).filter((s) => s.status === 'active'));
+      // Picked from the same sponsors applies() checked: one with no appearance days in the deal
+      // is not going to ask for a campaign.
+      const sponsor = c.rng.pick(sponsorsFor(c.save, c.me.id).filter((s) => s.status === 'active' && s.appearancesPerYear > 0));
       return {
         sender: 'manager',
         senderName: sponsor.name,
@@ -189,6 +215,7 @@ const EVENTS: CampEventDefinition[] = [
           { key: 'camp-sponsor-campaign', label: 'Do the campaign', hint: 'Pays well, costs a day of camp.' },
           { key: 'camp-sponsor-decline-campaign', label: 'Stay in camp', hint: 'Protects preparation, slight goodwill cost.' },
         ],
+        aboutSponsorId: sponsor.id,
       };
     },
   },
@@ -263,6 +290,7 @@ const EVENTS: CampEventDefinition[] = [
     kind: 'gym-politics',
     mandatory: false,
     weight: 1.2,
+    cooldownDays: 90,
     applies: (c) => Boolean(c.gymName) && c.teammates.length > 0,
     build: (c) => ({
       sender: 'gym-owner',
@@ -273,7 +301,6 @@ const EVENTS: CampEventDefinition[] = [
         'A rival gym has been calling your coaches. One of them is listening.',
         'The gym is losing money and the owner is talking about raising fighter percentages.',
         'A well known fighter has asked to join the team, and not everyone wants them here.',
-        'One of the younger fighters has asked you to mentor them.',
       ]),
       choices: [
         { key: 'camp-gym-support', label: 'Back the gym', hint: 'Strengthens your standing there.' },
@@ -289,15 +316,16 @@ const EVENTS: CampEventDefinition[] = [
     applies: (c) => c.teammates.some((f) => (f.ranking ?? 99) > 12) && (c.me.ranking ?? 99) <= 12,
     build: (c) => {
       const junior = c.rng.pick(c.teammates.filter((f) => (f.ranking ?? 99) > 12));
+      const p = pronouns(junior);
       return {
         sender: 'fighter',
         senderName: junior.name,
         subject: `${junior.name} wants to learn from you`,
         category: 'gym',
-        body: `${junior.name} has asked whether you would work with him properly, not just share rounds. It would cost you time in your own camp.`,
+        body: `${junior.name} has asked whether you would work with ${p.him} properly, not just share rounds. It would cost you time in your own camp.`,
         choices: [
-          { key: 'camp-mentor-accept', label: 'Take him under your wing', hint: 'A lasting bond, at some cost to your own preparation.' },
-          { key: 'camp-mentor-decline', label: 'Tell him to find someone else', hint: 'Keeps your camp focused.' },
+          { key: 'camp-mentor-accept', label: `Take ${p.him} under your wing`, hint: 'A lasting bond, at some cost to your own preparation.' },
+          { key: 'camp-mentor-decline', label: `Tell ${p.him} to find someone else`, hint: 'Keeps your camp focused.' },
         ],
         linkedFighterId: junior.id,
       };
@@ -307,10 +335,12 @@ const EVENTS: CampEventDefinition[] = [
     kind: 'promotion-marketing',
     mandatory: false,
     weight: 1.6,
-    applies: (c) => c.daysToFight !== null && c.daysToFight < 45,
+    // An amateur card has no marketing department to ask anything of anyone.
+    applies: (c) => c.daysToFight !== null && c.daysToFight < 45 && !c.isAmateur,
     build: (c) => ({
       sender: 'matchmaker',
-      senderName: PROMOTION_MARKETING,
+      // The promotion putting on the card asks, not the main promotion that has not signed you.
+      senderName: marketingSenderFor(c.promotionId),
       subject: 'A promotional request',
       category: 'career',
       body: c.rng.pick([
@@ -355,9 +385,9 @@ const EVENTS: CampEventDefinition[] = [
         c.me.weightMisses > 0 ? ' Given your history, the team wants to be conservative.' : ''
       } The plan is on track, but there is a decision about how aggressive the last stretch should be.`,
       choices: [
-        { key: 'camp-cut-conservative', label: 'Be conservative', hint: 'Safer, slightly less sharp.' },
+        { key: 'camp-cut-conservative', label: 'Be conservative', hint: 'Takes a little more off now, so the last days are easier.' },
         { key: 'camp-cut-standard', label: 'Stick to the plan', hint: 'Balanced.' },
-        { key: 'camp-cut-aggressive', label: 'Push it harder', hint: 'Sharper on the night, higher risk on the scale.' },
+        { key: 'camp-cut-aggressive', label: 'Push it harder', hint: 'Sharper on the night, harder on the body over a career.' },
       ],
     }),
   },
@@ -400,6 +430,9 @@ const EVENTS: CampEventDefinition[] = [
   },
 ];
 
+/** Optional items with a reply, across social and career life, that one week may add to the inbox. */
+export const OPTIONAL_ITEMS_PER_WEEK = 1;
+
 /** How many meaningful items this week may produce. */
 export function campLifeBudget(c: CampLifeContext): number {
   if (c.daysToFight !== null && c.daysToFight <= 7) return 3;
@@ -413,6 +446,7 @@ export function campLifeBudget(c: CampLifeContext): number {
 export function buildCampContext(save: SaveGame, me: Fighter, rng: Rng): CampLifeContext {
   const bout = hasLiveBooking(save, me);
   const opponent = bout ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] ?? null : null;
+  const promotionId = bout ? save.events[bout.eventId]?.promotionId ?? null : null;
   const camp = Object.values(save.camps).find((x) => x.fighterId === me.id && (x.status === 'planned' || x.status === 'running'));
   const gym = me.gymId ? save.gyms[me.gymId] : null;
   const teammates = gym
@@ -431,6 +465,10 @@ export function buildCampContext(save: SaveGame, me: Fighter, rng: Rng): CampLif
     campWeek: camp?.weeksCompleted ?? 0,
     teammates,
     gymName: gym?.name ?? null,
+    isRegional: Boolean(promotionId),
+    isAmateur: Boolean(bout?.isAmateur),
+    promotionName: promotionConfig(promotionId)?.name ?? PROMOTION_NAME,
+    promotionId,
     rng,
   };
 }
@@ -446,16 +484,36 @@ export function generateCampLife(save: SaveGame, me: Fighter, rng: Rng): string[
   const budget = campLifeBudget(c);
   if (budget === 0) return [];
 
-  // Anti repetition: nothing from the last five weeks comes round again.
+  // Anti repetition: nothing from the last five weeks comes round again, and the evergreen kinds
+  // stay away for longer.
+  const lastSeen = new Map<string, number>();
+  for (const m of save.inbox) {
+    if (!m.decisionKey?.startsWith('camp-life-')) continue;
+    const kind = m.decisionKey.split('|')[1];
+    const days = daysBetween(m.date, save.date);
+    if (!lastSeen.has(kind) || days < lastSeen.get(kind)!) lastSeen.set(kind, days);
+  }
   const recent = new Set(
-    save.inbox
-      .filter((m) => m.decisionKey?.startsWith('camp-life-') && daysBetween(m.date, save.date) < 35)
-      .map((m) => m.decisionKey!.split('|')[1])
+    EVENTS.filter((e) => lastSeen.has(e.kind) && lastSeen.get(e.kind)! < (e.cooldownDays ?? 35)).map((e) => e.kind)
   );
+  // Only open mandatory items hold the rest back. This counted every item with a reply, so two
+  // unanswered optional ones silenced the compliance questions that genuinely need an answer.
   const openMandatory = save.inbox.filter(
-    (m) => m.requiresAction && m.status !== 'resolved' && m.status !== 'expired' && m.decisionKey?.startsWith('camp-life-')
+    (m) =>
+      m.requiresAction &&
+      m.mandatory !== false &&
+      m.status !== 'resolved' &&
+      m.status !== 'expired' &&
+      m.decisionKey?.startsWith('camp-life-')
   ).length;
   if (openMandatory >= 2) return [];
+  // One optional item with a reply a week, across the social feed and career life together. Each
+  // is small on its own, and at one or two a week for a whole career they buried the inbox.
+  let optionalLeft = save.inbox.some(
+    (m) => m.mandatory === false && m.requiresAction && daysBetween(m.date, save.date) < 7
+  )
+    ? 0
+    : OPTIONAL_ITEMS_PER_WEEK;
 
   const eligible = EVENTS.filter((e) => {
     if (recent.has(e.kind)) return false;
@@ -477,6 +535,9 @@ export function generateCampLife(save: SaveGame, me: Fighter, rng: Rng): string[
     const key = `camp-life-${save.date}|${chosen.kind}`;
     if (save.inbox.some((m) => m.decisionKey === key)) continue;
     const built = chosen.build(c);
+    const optional = !chosen.mandatory && built.choices.length > 0;
+    if (optional && optionalLeft <= 0) continue;
+    if (optional) optionalLeft--;
     const message = addInboxMessage(save, {
       sender: built.sender,
       senderName: built.senderName,
@@ -493,9 +554,20 @@ export function generateCampLife(save: SaveGame, me: Fighter, rng: Rng): string[
     message.decisionCreatedOn = save.date;
     // Explicit: only a genuinely mandatory item stops the calendar.
     message.mandatory = chosen.mandatory;
+    if (built.aboutSponsorId) message.aboutSponsorId = built.aboutSponsorId;
     created.push(chosen.kind);
   }
   return created;
+}
+
+/**
+ * The sponsor a campaign item named. A message written before the id was stored falls back to the
+ * first active sponsor, which is what every message did then.
+ */
+function linkedSponsor(save: SaveGame, sponsorId: string | undefined, meId: string) {
+  const named = sponsorId ? save.sponsors?.[sponsorId] : undefined;
+  if (named) return named.status === 'active' ? named : undefined;
+  return sponsorsFor(save, meId).find((s) => s.status === 'active');
 }
 
 /** Applies the consequence of a camp life choice, exactly once. */
@@ -618,7 +690,7 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
       text = 'Word gets around that you have been asking questions.';
       break;
     case 'camp-mentor-accept':
-      if (other) applyRelationship(save, me.id, other.id, { mentorBond: 30, friendship: 12, trust: 10, teammateBond: 10 }, 'mentorship', 'You took him on.');
+      if (other) applyRelationship(save, me.id, other.id, { mentorBond: 30, friendship: 12, trust: 10, teammateBond: 10 }, 'mentorship', `You took ${pronouns(other).him} on.`);
       me.campSharpness = clamp(me.campSharpness - 2, 0, 100);
       text = other ? `You are working with ${other.name} now.` : 'You took on a student.';
       break;
@@ -627,17 +699,19 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
       text = 'You kept your camp to yourself.';
       break;
     case 'camp-promo-accept':
-      me.relationships.matchmaker = clamp(me.relationships.matchmaker + 6, 0, 100);
+      // The matchmaker relationship is the main promotion's. A regional card's marketing request
+      // says nothing to them either way.
+      if (!me.circuit) me.relationships.matchmaker = clamp(me.relationships.matchmaker + 6, 0, 100);
       if (me.fame) me.fame.recognition = clamp(me.fame.recognition + 3, 0, 100);
       me.campSharpness = clamp(me.campSharpness - 1, 0, 100);
       text = 'Marketing got what they wanted.';
       break;
     case 'camp-promo-decline':
-      me.relationships.matchmaker = clamp(me.relationships.matchmaker - 7, 0, 100);
+      if (!me.circuit) me.relationships.matchmaker = clamp(me.relationships.matchmaker - 7, 0, 100);
       text = 'You kept the day for training.';
       break;
     case 'camp-doc-accept':
-      record(save, me.id, 'in', 'sponsorship', 15000, 'Sponsor appearance');
+      record(save, me.id, 'in', 'appearance', Math.round(15000 * trainingCostScale(me)), 'Documentary access fee');
       if (me.fame) me.fame.recognition = clamp(me.fame.recognition + 7, 0, 100);
       me.campSharpness = clamp(me.campSharpness - 3, 0, 100);
       text = 'The crew are in the gym all week.';
@@ -658,15 +732,15 @@ export function applyCampChoice(save: SaveGame, messageId: string, choiceKey: st
       text = 'You are pushing the cut harder than the team would like.';
       break;
     case 'camp-sponsor-campaign': {
-      const sponsor = sponsorsFor(save, me.id).find((s) => s.status === 'active');
+      const sponsor = linkedSponsor(save, message.aboutSponsorId, me.id);
       if (sponsor) sponsor.satisfaction = clamp(sponsor.satisfaction + 15, 0, 100);
-      record(save, me.id, 'in', 'sponsorship', 12000, 'Sponsor appearance');
+      record(save, me.id, 'in', 'sponsorship', Math.round(12000 * trainingCostScale(me)), 'Sponsor appearance');
       me.campSharpness = clamp(me.campSharpness - 2, 0, 100);
       text = 'The shoot went well and the cheque cleared.';
       break;
     }
     case 'camp-sponsor-decline-campaign': {
-      const sponsor = sponsorsFor(save, me.id).find((s) => s.status === 'active');
+      const sponsor = linkedSponsor(save, message.aboutSponsorId, me.id);
       if (sponsor) sponsor.satisfaction = clamp(sponsor.satisfaction - 8, 0, 100);
       text = 'You stayed in camp.';
       break;

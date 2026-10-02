@@ -1,5 +1,5 @@
 import type { GamePlanKey } from '../types/world';
-import type { Tendencies } from '../types/fighter';
+import type { Ratings, Tendencies } from '../types/fighter';
 import { clamp } from '../rng';
 import type { PlanProfile } from './state';
 
@@ -10,8 +10,9 @@ import type { PlanProfile } from './state';
 const PLAN_EFFECTS: Record<GamePlanKey, Partial<PlanProfile>> = {
   pressure: { pressure: 0.34, distance: -0.24, pace: 0.16, staminaMult: 0.2, caution: -0.12 },
   counter: { counter: 0.34, pressure: -0.2, pace: -0.1, caution: 0.14, staminaMult: -0.1 },
-  'outside-range': { distance: 0.34, pressure: -0.22, caution: 0.12, staminaMult: -0.06 },
-  'pocket-boxing': { pressure: 0.24, distance: -0.3, pace: 0.12, caution: -0.24, staminaMult: 0.12 },
+  'outside-range': { distance: 0.34, pressure: -0.22, caution: 0.08, staminaMult: -0.03 },
+  // Caution was -0.24, a free knockdown edge for anyone who picked it.
+  'pocket-boxing': { pressure: 0.24, distance: -0.3, pace: 0.12, caution: -0.12, staminaMult: 0.12 },
   'body-attack': { bodyAttack: 0.4, pace: 0.04, staminaMult: 0.06 },
   'leg-kick-attack': { legKick: 0.42, distance: 0.08, staminaMult: 0.08 },
   'clinch-attack': { clinch: 0.38, distance: -0.26, staminaMult: 0.18 },
@@ -22,7 +23,7 @@ const PLAN_EFFECTS: Record<GamePlanKey, Partial<PlanProfile>> = {
   'high-pace': { pace: 0.26, pressure: 0.16, staminaMult: 0.32, caution: -0.1 },
   'conservative-pace': { pace: -0.24, caution: 0.24, staminaMult: -0.2, finishSeeking: -0.14 },
   'early-finish': { finishSeeking: 0.36, pace: 0.18, caution: -0.22, staminaMult: 0.22 },
-  'late-fight': { pace: -0.14, caution: 0.14, staminaMult: -0.16, finishSeeking: -0.06 },
+  'late-fight': { pace: -0.14, caution: 0.1, staminaMult: -0.08, finishSeeking: -0.06 },
   'protect-injury': { caution: 0.3, pace: -0.16, staminaMult: -0.08, protectInjury: true },
   'avoid-strength': { caution: 0.16, avoidStrength: true },
 };
@@ -67,7 +68,31 @@ export const GAME_PLAN_DESCRIPTION: Record<GamePlanKey, string> = {
   'avoid-strength': "Steer the fight away from the opponent's best area.",
 };
 
-export function buildPlanProfile(t: Tendencies, plans: GamePlanKey[]): PlanProfile {
+/** Plans that only pay off for a fighter whose grappling is the better weapon. */
+const GRAPPLING_PLANS: GamePlanKey[] = ['takedown-pressure', 'fence-wrestling', 'top-control', 'submission-hunting', 'clinch-attack'];
+/** Plans that only pay off for a fighter whose striking is the better weapon. */
+const STRIKING_PLANS: GamePlanKey[] = ['pressure', 'pocket-boxing', 'high-pace', 'early-finish'];
+
+/**
+ * How well a plan suits the fighter, as a multiplier on what the plan asks them to do. A
+ * wrestler told to stand and trade does it half heartedly, and a striker told to shoot does
+ * not shoot well. Without this every plan moved every fighter the same way, so the same two
+ * striking plans were best for everyone.
+ */
+export function planFit(key: GamePlanKey, ratings: Ratings): number {
+  const grapplingEdge = Math.max(ratings.wrestling, ratings.grappling) - ratings.striking;
+  if (GRAPPLING_PLANS.includes(key)) return clamp((grapplingEdge + 10) / 20, 0.3, 1.3);
+  if (STRIKING_PLANS.includes(key)) return clamp((-grapplingEdge + 10) / 20, 0.3, 1.3);
+  return 1;
+}
+
+/**
+ * Builds the fight night profile from the fighter's habits and the chosen plans. With ratings
+ * given, each plan's change to what the fighter wants to do is scaled by how well it fits them.
+ * Its stamina cost and its effect on caution apply in full whatever the fit, so a plan that
+ * does not suit the fighter still costs what it costs.
+ */
+export function buildPlanProfile(t: Tendencies, plans: GamePlanKey[], ratings?: Ratings): PlanProfile {
   const p: PlanProfile = {
     pressure: t.pressure,
     distance: t.range,
@@ -88,6 +113,7 @@ export function buildPlanProfile(t: Tendencies, plans: GamePlanKey[]): PlanProfi
   for (const key of plans) {
     const eff = PLAN_EFFECTS[key];
     if (!eff) continue;
+    const fit = ratings ? planFit(key, ratings) : 1;
     for (const [k, v] of Object.entries(eff)) {
       if (typeof v === 'boolean') {
         (p as unknown as Record<string, boolean>)[k] = v;
@@ -95,7 +121,8 @@ export function buildPlanProfile(t: Tendencies, plans: GamePlanKey[]): PlanProfi
         p.staminaMult += v as number;
       } else {
         const cur = (p as unknown as Record<string, number>)[k] ?? 0;
-        (p as unknown as Record<string, number>)[k] = cur + (v as number);
+        const scaled = k === 'caution' ? (v as number) : (v as number) * fit;
+        (p as unknown as Record<string, number>)[k] = cur + scaled;
       }
     }
   }
@@ -130,6 +157,7 @@ export function planCoherence(plans: GamePlanKey[]): number {
     ['pressure', 'counter'],
     ['pressure', 'outside-range'],
     ['pocket-boxing', 'outside-range'],
+    ['pocket-boxing', 'counter'],
     ['high-pace', 'conservative-pace'],
     ['high-pace', 'late-fight'],
     ['early-finish', 'conservative-pace'],

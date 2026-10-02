@@ -40,7 +40,12 @@ export function FightWeekPage() {
   const runOperation = useGame((s) => s.runOperation);
   const navigate = useNavigate();
   const { boutId } = useParams();
-  const [note, setNote] = useState<string | null>(null);
+  // The last stage's outcome, kept with the day it happened. It used to stay at the top through
+  // every later stage of the week; stages on one day resolve back to back, so the note lasts the
+  // day and a day advance clears it. Clearing it when the next stage changed would wipe it the
+  // moment it was set, since completing a stage is what changes the next one.
+  const [noteState, setNote] = useState<{ text: string; on: string } | null>(null);
+  const note = noteState && noteState.on === save.date ? noteState.text : null;
 
   const bout = boutId ? save.bouts[boutId] : null;
   if (!bout) {
@@ -55,7 +60,26 @@ export function FightWeekPage() {
   const opponent = me ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
   const event = save.events[bout.eventId];
   const tasks = tasksForBout(save, bout.id);
-  const nextTask = tasks.find((t) => t.status !== 'complete' && t.status !== 'skipped' && t.dueOn <= save.date) ?? null;
+  // The same rule careerStatus uses: a due mandatory stage comes first. Taking the first due stage
+  // in order put an optional media day in front of the weigh in while the dock pointed at the
+  // weigh in, so the page and the button disagreed about what came next.
+  const due = tasks.filter((t) => t.status !== 'complete' && t.status !== 'skipped' && t.dueOn <= save.date);
+  const nextTask = due.find((t) => t.mandatory) ?? due[0] ?? null;
+  // A stage has happened once it is resolved and its day has come. Arrival and the medical record
+  // themselves as done when fight week is created, days before their date, so status alone showed
+  // 'Done' and narrated 'You arrived' while the calendar was still the day before.
+  const happened = (t: FightWeekTask) => t.status === 'complete' && (t.resolvedOn ?? t.dueOn) <= save.date;
+  const happenedSoFar = tasks.filter((t) => happened(t) && t.outcome);
+  const scheduled = bout.status === 'scheduled';
+  // The next stage names what is coming even when nothing is due today, so a mandatory weigh in
+  // two days out no longer reads as 'Nothing outstanding'.
+  const upcoming = tasks.find((t) => !happened(t) && t.status !== 'skipped') ?? null;
+  const nextLabel = nextTask
+    ? stageLabel(nextTask.stage)
+    : scheduled && upcoming
+      ? `${stageLabel(upcoming.stage)} on ${formatDate(upcoming.dueOn)}`
+      : 'Nothing outstanding';
+  const allDone = scheduled && tasks.length > 0 && tasks.every((t) => happened(t) || t.status === 'skipped');
 
   const runStage = async (task: FightWeekTask, work: () => string) => {
     const outcome = await runOperation('resolve-stage', stageLabel(task.stage), (report) => {
@@ -75,40 +99,103 @@ export function FightWeekPage() {
         summary: '',
       };
     });
-    if (outcome.ok) setNote(outcome.headlines[0] ?? null);
+    const text = outcome.ok ? outcome.headlines[0] : null;
+    if (text) setNote({ text, on: useGame.getState().save?.date ?? save.date });
   };
+
+  const head = (
+    <div className="page-head">
+      <h1>Fight week</h1>
+      <span className="sub">
+        {me?.name} against {opponent?.name} · <Link to={`/event/${event?.id}`}>{event?.name}</Link> ·{' '}
+        {formatDate(bout.date)}
+      </span>
+    </div>
+  );
+
+  // A canceled bout has no fight week left. Canceling clears its stages, so this page used to read
+  // 'Every stage is done. The next step is the fight itself.' straight after a withdrawal, and the
+  // ruling that canceled it never appeared, because the cancel happens in the same step that
+  // completes the weigh in.
+  if (bout.status === 'canceled') {
+    const weighIn = save.weighIns?.[bout.id] ?? null;
+    return (
+      <div className="page">
+        {head}
+        <Panel title="Bout canceled">
+          <Notice kind="bad">{weighIn?.rulingText ?? bout.cancelReason ?? 'This bout was canceled.'}</Notice>
+          {weighIn && <WeighInSummary boutId={bout.id} />}
+          {weighIn && weighIn.log.length > 0 && (
+            <ul className="small dim mt">
+              {weighIn.log.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          )}
+          <button className="primary mt" onClick={() => navigate('/dashboard')}>
+            Back to the dashboard
+          </button>
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Fight week</h1>
-        <span className="sub">
-          {me?.name} against {opponent?.name} · <Link to={`/event/${event?.id}`}>{event?.name}</Link> ·{' '}
-          {formatDate(bout.date)}
-        </span>
-      </div>
+      {head}
 
       {note && <Notice kind="good">{note}</Notice>}
+
+      {/* The action leads the page. Below the schedule and the summary it sat about two screens
+          down on a phone, where the dock is hidden on this page and nothing pointed to it. */}
+      {!scheduled ? (
+        <Panel title="The fight is over">
+          <p>Fight week ended with the fight.</p>
+          {bout.resultId && (
+            <button className="primary" onClick={() => navigate(`/fight/${bout.id}`)}>
+              See the result
+            </button>
+          )}
+        </Panel>
+      ) : (
+        nextTask && (
+          <StagePanel
+            task={nextTask}
+            save={save}
+            busy={busy}
+            onComplete={(work) => void runStage(nextTask, work)}
+            mutate={mutate}
+            navigate={navigate}
+          />
+        )
+      )}
 
       <div className="grid c2">
         <Panel title="Schedule">
           <ul className="stage-list">
-            {tasks.map((t) => (
-              <li key={t.id}>
-                <span className="when">{formatDate(t.dueOn)}</span>
-                <span style={{ flex: 1 }}>
-                  {stageLabel(t.stage)}
-                  {t.mandatory && <span className="tag warn" style={{ marginLeft: 6 }}>required</span>}
-                </span>
-                <span className={t.status === 'complete' ? 'done' : t.status === 'skipped' ? 'dim' : 'pending'}>
-                  {t.status === 'complete' ? 'Done' : t.status === 'skipped' ? 'Skipped' : t.dueOn <= save.date ? 'Due now' : 'Upcoming'}
-                </span>
-              </li>
-            ))}
+            {tasks.map((t) => {
+              const label = happened(t)
+                ? 'Done'
+                : t.status === 'skipped'
+                  ? 'Skipped'
+                  : !scheduled
+                    ? 'Not held'
+                    : t.status !== 'complete' && t.dueOn <= save.date
+                      ? 'Due now'
+                      : 'Upcoming';
+              return (
+                <li key={t.id}>
+                  <span className="when">{formatDate(t.dueOn)}</span>
+                  <span style={{ flex: 1 }}>
+                    {stageLabel(t.stage)}
+                    {t.mandatory && <span className="tag warn" style={{ marginLeft: 6 }}>required</span>}
+                  </span>
+                  <span className={label === 'Done' ? 'done' : label === 'Skipped' || label === 'Not held' ? 'dim' : 'pending'}>{label}</span>
+                </li>
+              );
+            })}
           </ul>
-          {tasks.every((t) => t.status === 'complete' || t.status === 'skipped') && (
-            <p className="small dim mt">Every stage is done. The next step is the fight itself.</p>
-          )}
+          {allDone && <p className="small dim mt">Every stage is done. The next step is the fight itself.</p>}
         </Panel>
 
         <Panel title="Where you stand">
@@ -119,38 +206,54 @@ export function FightWeekPage() {
               ['Date', formatDate(bout.date)],
               ['Contracted weight', `${bout.contractedWeightLb} lb`],
               ['Rounds', bout.scheduledRounds],
-              ['Championship', bout.isTitleFight ? 'Undisputed title' : bout.isInterimTitleFight ? 'Interim title' : 'No'],
-              ['Next stage', nextTask ? stageLabel(nextTask.stage) : 'Nothing outstanding'],
+              ['Championship', bout.isTitleFight ? 'Undisputed title' : bout.isInterimTitleFight ? 'Interim title' : bout.regionalTitle ? 'Regional title' : 'No'],
+              ['Next stage', nextLabel],
             ]}
           />
         </Panel>
       </div>
 
-      {nextTask && (
-        <StagePanel
-          task={nextTask}
-          save={save}
-          busy={busy}
-          onComplete={(work) => void runStage(nextTask, work)}
-          mutate={mutate}
-          navigate={navigate}
-        />
-      )}
-
-      {tasks.filter((t) => t.status === 'complete' && t.outcome).length > 0 && (
+      {happenedSoFar.length > 0 && (
         <Panel title="What has happened so far">
           <ul className="small">
-            {tasks
-              .filter((t) => t.status === 'complete' && t.outcome)
-              .map((t) => (
-                <li key={t.id}>
-                  <strong>{stageLabel(t.stage)}:</strong> {t.outcome}
-                </li>
-              ))}
+            {happenedSoFar.map((t) => (
+              <li key={t.id}>
+                <strong>{stageLabel(t.stage)}:</strong> {t.outcome}
+              </li>
+            ))}
           </ul>
         </Panel>
       )}
     </div>
+  );
+}
+
+/**
+ * The weigh in's outcome: the ruling, the bout's status, any forfeit and the media line. Shared by
+ * the weigh in panel and the canceled bout page, which is where a cancelling ruling ends up.
+ */
+function WeighInSummary({ boutId, showNotice = false }: { boutId: string; showNotice?: boolean }) {
+  const save = useGame((s) => s.save)!;
+  const state = save.weighIns?.[boutId] ?? null;
+  const bout = save.bouts[boutId];
+  if (!state) return null;
+  const meId = save.player.fighterId;
+  const me = meId ? save.fighters[meId] : null;
+  const opponent = me && bout ? save.fighters[bout.fighterAId === me.id ? bout.fighterBId : bout.fighterAId] : null;
+  return (
+    <>
+      {showNotice && (
+        <Notice kind={state.boutStatus === 'canceled' ? 'bad' : state.ineligible.length > 0 ? 'warn' : 'good'}>{state.rulingText}</Notice>
+      )}
+      <KeyValues
+        rows={[
+          ['Bout status', state.boutStatus === 'canceled' ? 'Canceled' : state.boutStatus === 'catchweight' ? 'Proceeding at catchweight' : 'Proceeding as contracted'],
+          ['Purse forfeit', state.forfeitAmount > 0 ? formatMoney(state.forfeitAmount) : 'None'],
+          ['Title eligible', state.isChampionship ? (state.ineligible.length === 0 ? 'Both fighters' : state.ineligible.length === 2 ? 'Neither fighter' : `${save.fighters[state.ineligible.includes(me?.id ?? '') ? opponent?.id ?? '' : me?.id ?? '']?.name ?? 'One fighter'} only`) : 'Not a title bout'],
+          ['Media', state.mediaLine ?? ''],
+        ]}
+      />
+    </>
   );
 }
 
@@ -344,8 +447,13 @@ function WeighInStagePanel({ task, busy, onComplete, mutate }: { task: FightWeek
         <div className="row mb">
           <span className="tag">{WEIGH_IN_STAGE_LABEL[state.stage]}</span>
           <span className="small dim">
-            Contracted at {state.limitLb} lb
-            {state.isChampionship ? ', championship limit with no allowance' : `, with a ${state.allowanceLb} lb allowance`}
+            {/* The contracted weight already includes the non title allowance. 'Contracted at 156 lb,
+                with a 1 lb allowance' read as a 157 lb limit. A catchweight is its own number. */}
+            {state.isChampionship
+              ? `Limit ${state.limitLb} lb, the championship limit with no allowance`
+              : state.allowanceLb > 0 && state.divisionLimitLb !== undefined && state.limitLb === state.divisionLimitLb + state.allowanceLb
+                ? `Limit ${state.limitLb} lb (${state.divisionLimitLb} plus the ${state.allowanceLb} lb non title allowance)`
+                : `Limit ${state.limitLb} lb, the contracted weight`}
           </span>
         </div>
 
@@ -454,17 +562,7 @@ function WeighInStagePanel({ task, busy, onComplete, mutate }: { task: FightWeek
 
         {state.stage === 'complete' && (
           <>
-            <Notice kind={state.boutStatus === 'canceled' ? 'bad' : state.ineligible.length > 0 ? 'warn' : 'good'}>
-              {state.rulingText}
-            </Notice>
-            <KeyValues
-              rows={[
-                ['Bout status', state.boutStatus === 'canceled' ? 'Canceled' : state.boutStatus === 'catchweight' ? 'Proceeding at catchweight' : 'Proceeding as contracted'],
-                ['Purse forfeit', state.forfeitAmount > 0 ? formatMoney(state.forfeitAmount) : 'None'],
-                ['Title eligible', state.isChampionship ? (state.ineligible.length === 0 ? 'Both fighters' : state.ineligible.length === 2 ? 'Neither fighter' : `${save.fighters[state.ineligible.includes(me?.id ?? '') ? opponent?.id ?? '' : me?.id ?? '']?.name ?? 'One fighter'} only`) : 'Not a title bout'],
-                ['Media', state.mediaLine ?? ''],
-              ]}
-            />
+            <WeighInSummary boutId={task.boutId} showNotice />
             <button
               className="primary"
               disabled={busy}
@@ -543,7 +641,7 @@ function CeremonialWeighInStage({ task, busy, onComplete, mutate }: { task: Figh
                   const f = s.player.fighterId ? s.fighters[s.player.fighterId] : null;
                   if (f) {
                     const rng = new Rng(s.rng);
-                    applyMediaEffects(s, f, task.boutId, c.effects, `Ceremonial weigh in: ${c.label}`, rng);
+                    applyMediaEffects(s, f, task.boutId, c.effects, `Ceremonial weigh in: ${c.label}`, rng, 'ceremonial weigh in');
                     s.rng = rng.getState();
                   }
                   completeStage(s, task.id, `${c.label}. ${c.detail}`);
@@ -570,7 +668,7 @@ function FaceoffStage({ task, busy, onComplete, mutate }: { task: FightWeekTask;
   // The real rivalry intensity, so a heated build actually unlocks the confrontational
   // option rather than the list always looking the same.
   const rivalry = me && opponent ? findRivalry(save, me.id, opponent.id)?.intensity ?? 0 : 0;
-  const choices = faceoffChoices(rivalry);
+  const choices = faceoffChoices(rivalry, opponent);
 
   return (
     <Panel title={stageLabel(task.stage)}>
@@ -595,7 +693,7 @@ function FaceoffStage({ task, busy, onComplete, mutate }: { task: FightWeekTask;
                     // opponent focus it costs actually reaches their camp. This used to read
                     // three of the six declared effects and drop the rest.
                     const rng = new Rng(s.rng);
-                    applyMediaEffects(s, f, task.boutId, c.effects, `Faceoff: ${c.label}`, rng);
+                    applyMediaEffects(s, f, task.boutId, c.effects, `Faceoff: ${c.label}`, rng, 'faceoff');
                     s.rng = rng.getState();
                   }
                   completeStage(s, task.id, `${c.label}. ${c.detail}`);

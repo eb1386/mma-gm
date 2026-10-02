@@ -1,17 +1,19 @@
 import { contractedWeight, DIVISION_BY_ID } from '../config/divisions';
 import { clamp, Rng } from '../rng';
-import { addDays, daysBetween, type FighterId, type IsoDate } from '../types/common';
+import { addDays, daysBetween, formatDate, formatMoney, type FighterId, type IsoDate, joinSentence } from '../types/common';
 import { isChampionshipBout, type Bout } from '../types/fight';
 import type { Fighter } from '../types/fighter';
 import type { FightCardEvent, FightOffer } from '../types/world';
 import type { SaveGame } from '../types/save';
 import { purseForBout } from './economy';
+import { managerFor } from './finance';
 import { addInboxMessage, resolveMessagesForOffer } from './inbox';
-import { regionOfFighter } from './matchmaking';
+import { CHAMPION_TURNAROUND_DAYS, regionOfFighter } from './matchmaking';
 import { travelDistanceKm, VENUE_CITIES } from './venues';
-import { canCompete } from './health';
-import { fulfilContenderStatus } from './contender';
-import { PROMOTION_MATCHMAKING } from '../config/branding';
+import { activeInjuries, canCompete } from './health';
+import { checkPlayerInjuries } from './injury-flow';
+import { currentContender, fulfilContenderStatus, grantContenderStatus } from './contender';
+import { PROMOTION_ABBREVIATION, PROMOTION_MATCHMAKING } from '../config/branding';
 import { bookBout, findExistingOffer, offerBlockReason, offerKey, OFFER_COOLDOWN_DAYS, recentlyDeclined, type OfferIdentity } from './availability';
 
 /**
@@ -34,9 +36,21 @@ export interface CreateOfferOptions {
   bookingKind?: string;
   /** The persistent matchmaking interest that produced this offer, when there was one. */
   matchupInterestId?: string | null;
+  /** Who the inbox says the offer is from. Regional promotions have their own matchmakers. */
+  senderName?: string;
+  /** An amateur bout on the regional circuit. */
+  isAmateur?: boolean;
+  /** A regional championship, settled by the regional circuit rather than the main promotion. */
+  regionalTitle?: boolean;
 }
 
 export function rankingImplication(save: SaveGame, fighter: Fighter, opponent: Fighter, opts: CreateOfferOptions): string {
+  if (opts.isAmateur) return 'An amateur bout. It builds the amateur record and pays nothing.';
+  if (opts.regionalTitle) return 'A regional championship on the line, the biggest thing a scout can see.';
+  // A tryout is checked before the circuit, because the player is still on the circuit when it is
+  // offered, and the regional rankings line told them the stakes were points when they are a contract.
+  if (opts.bookingKind === 'tryout') return `A tryout. Win well and a ${PROMOTION_ABBREVIATION} contract follows. Lose and it is back to the circuit.`;
+  if (fighter.circuit) return 'A win climbs the regional rankings and moves the call up closer.';
   if (opts.isInterimTitleFight) return 'Interim championship on the line.';
   if (opts.isTitleFight) return 'Undisputed championship on the line.';
   const table = save.rankings[fighter.divisionId];
@@ -139,6 +153,7 @@ export function createFightOffer(
     campWeeksAvailable: Math.max(0, Math.floor((noticeDays - 7) / 7)),
     showPay: purse.show,
     winBonus: purse.win,
+    baseShowPay: purse.show,
     shortNoticeBonus: noticeDays < 24 ? (contract?.terms.shortNoticeBonus ?? 0) : 0,
     rankingImplication: rankingImplication(save, fighter, opponent, opts),
     travelKm: travelDistanceKm(regionOfFighter(fighter), venue?.region ?? 'north-america'),
@@ -148,6 +163,8 @@ export function createFightOffer(
     isReplacementSlot: opts.isReplacementSlot,
     bookingKind: opts.bookingKind,
     matchupInterestId: opts.matchupInterestId ?? null,
+    isAmateur: opts.isAmateur || undefined,
+    regionalTitle: opts.regionalTitle || undefined,
     idempotencyKey: key,
     medicallyContingent: contingent,
     status: 'open',
@@ -161,9 +178,9 @@ export function createFightOffer(
   const championship = isChampionshipBout(opts) ? championshipContext(save, fighter, opts) : '';
   addInboxMessage(save, {
     sender: 'matchmaker',
-    senderName: PROMOTION_MATCHMAKING,
-    subject: `${contingent ? 'Medically contingent offer' : opts.isTitleFight ? 'Title fight offer' : opts.isInterimTitleFight ? 'Interim title fight offer' : opts.isMainEvent ? 'Main event offer' : 'Fight offer'}: ${opponent.name}`,
-    body: `${event.name} in ${event.city}, ${event.country} on ${event.date}. ${opts.scheduledRounds} rounds at ${offer.contractedWeightLb} lb. ${noticeDays} days notice, about ${offer.campWeeksAvailable} weeks of camp. Reason for the offer: ${opts.reason}. ${offer.rankingImplication}${championship}${health.ok ? '' : ` Note: currently unavailable (${health.reason}).`}${contingent ? ' This offer is contingent on medical clearance in time for the event. It is withdrawn automatically if you are not cleared.' : ''}`,
+    senderName: opts.senderName ?? PROMOTION_MATCHMAKING,
+    subject: `${contingent ? 'Medically contingent offer' : opts.bookingKind === 'tryout' ? 'Proving Ground tryout' : opts.isTitleFight ? 'Title fight offer' : opts.isInterimTitleFight ? 'Interim title fight offer' : opts.regionalTitle ? 'Regional title fight offer' : opts.isAmateur ? 'Amateur bout offer' : opts.isMainEvent ? 'Main event offer' : 'Fight offer'}: ${opponent.name}`,
+    body: `${event.name} in ${event.city}, ${event.country} on ${formatDate(event.date)}. ${opts.scheduledRounds} rounds at ${offer.contractedWeightLb} lb. ${noticeDays} days notice, about ${offer.campWeeksAvailable} weeks of camp. Reason for the offer: ${joinSentence(opts.reason, '')} ${offer.rankingImplication}${championship}${health.ok ? '' : ` Note: currently unavailable (${health.reason}).`}${contingent ? ' This offer is contingent on medical clearance in time for the event. It is withdrawn automatically if you are not cleared.' : ''}`,
     category: 'offer',
     requiresAction: true,
     deadline: offer.deadline,
@@ -212,12 +229,28 @@ export type OfferResponse =
   | { kind: 'request-more-time'; weeks: number }
   | { kind: 'volunteer-replacement' };
 
+/**
+ * How a reply reads to the player. Carried on the outcome so the interface colours a refusal as a
+ * refusal: it used to show every reply, a pulled offer included, in the green success style.
+ */
+export type OfferTone = 'good' | 'info' | 'bad';
+
 export interface OfferOutcome {
   accepted: boolean;
   boutId: string | null;
   message: string;
+  /** The change to the matchmaker relationship this reply actually applied. */
   relationshipDelta: number;
   newOffer: FightOffer | null;
+  tone: OfferTone;
+}
+
+/** How long a volunteer stays on the short notice list. */
+export const SHORT_NOTICE_LIST_DAYS = 120;
+
+/** True while the fighter is on the short notice list. */
+export function onShortNoticeList(fighter: Fighter, today: IsoDate): boolean {
+  return Boolean(fighter.volunteeredShortNoticeUntil && fighter.volunteeredShortNoticeUntil >= today);
 }
 
 /**
@@ -228,7 +261,7 @@ export interface OfferOutcome {
 export function respondToOffer(save: SaveGame, offerId: string, response: OfferResponse, rng: Rng): OfferOutcome {
   const offer = save.fightOffers[offerId];
   if (!offer || offer.status !== 'open') {
-    return { accepted: false, boutId: null, message: 'That offer is no longer on the table.', relationshipDelta: 0, newOffer: null };
+    return { accepted: false, boutId: null, message: 'That offer is no longer on the table.', relationshipDelta: 0, newOffer: null, tone: 'bad' };
   }
   const fighter = save.fighters[offer.fighterId];
   const opponent = save.fighters[offer.opponentId];
@@ -236,7 +269,7 @@ export function respondToOffer(save: SaveGame, offerId: string, response: OfferR
   if (!fighter || !opponent || !event) {
     offer.status = 'withdrawn';
     resolveMessagesForOffer(save, offer.id, 'The bout is no longer available.');
-    return { accepted: false, boutId: null, message: 'The bout is no longer available.', relationshipDelta: 0, newOffer: null };
+    return { accepted: false, boutId: null, message: 'The bout is no longer available.', relationshipDelta: 0, newOffer: null, tone: 'bad' };
   }
 
   if (response.kind === 'accept') {
@@ -253,18 +286,23 @@ export function respondToOffer(save: SaveGame, offerId: string, response: OfferR
         message: 'That bout could not be booked. One of the fighters was matched elsewhere first.',
         relationshipDelta: 0,
         newOffer: null,
+        tone: 'bad',
       };
     }
     offer.status = 'accepted';
     resolveMessagesForOffer(save, offer.id, `Accepted the bout against ${opponent.name}.`);
     fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker + (offer.noticeDays < 24 ? 8 : 3), 0, 100);
     if (offer.noticeDays < 24) fighter.acceptedShortNotice++;
+    // An injury the player is carrying is judged against this booking now, not next Monday, so a
+    // fight it cannot clear in time is a decision before the career status is next read.
+    if (fighter.id === save.player.fighterId) checkPlayerInjuries(save);
     return {
       accepted: true,
       boutId: bout.id,
-      message: `Bout agreed. ${fighter.name} faces ${opponent.name} at ${event.name} on ${event.date}.`,
+      message: `Bout agreed. ${fighter.name} faces ${opponent.name} at ${event.name} on ${formatDate(event.date)}.`,
       relationshipDelta: offer.noticeDays < 24 ? 8 : 3,
       newOffer: null,
+      tone: 'good',
     };
   }
 
@@ -273,7 +311,40 @@ export function respondToOffer(save: SaveGame, offerId: string, response: OfferR
     fighter.offerCooldownUntil = addDays(save.date, OFFER_COOLDOWN_DAYS);
     const outcome = declineConsequence(save, fighter, offer, response.reason, rng);
     resolveMessagesForOffer(save, offer.id, `Declined the bout against ${opponent.name}. ${outcome.message}`);
-    return { accepted: false, boutId: null, message: outcome.message, relationshipDelta: outcome.delta, newOffer: outcome.replacement };
+    return { accepted: false, boutId: null, message: outcome.message, relationshipDelta: outcome.delta, newOffer: outcome.replacement, tone: outcome.tone };
+  }
+
+  // Volunteering is not a request about this bout, so it costs no request slot. It used to take
+  // one, which made a later legitimate request the one that pulled the offer. It is good for the
+  // relationship once per spell on the list, not once per click, or it was free goodwill to farm.
+  if (response.kind === 'volunteer-replacement') {
+    if (onShortNoticeList(fighter, save.date)) {
+      return { accepted: false, boutId: null, message: 'Already on the short notice list.', relationshipDelta: 0, newOffer: offer, tone: 'info' };
+    }
+    fighter.volunteeredShortNoticeUntil = addDays(save.date, SHORT_NOTICE_LIST_DAYS);
+    const before = fighter.relationships.matchmaker;
+    fighter.relationships.matchmaker = clamp(before + 4, 0, 100);
+    return {
+      accepted: false,
+      boutId: null,
+      message: `Noted. ${fighter.name} is on the short notice list until ${formatDate(fighter.volunteeredShortNoticeUntil)}, and the matchmaker will call first if a slot opens.`,
+      relationshipDelta: fighter.relationships.matchmaker - before,
+      newOffer: offer,
+      tone: 'good',
+    };
+  }
+
+  // A second money request after one was granted is answered without costing a slot. The purse is
+  // settled, and the button says so, so this only catches an older page or a stale click.
+  if (response.kind === 'request-money' && offer.moneyGranted) {
+    return {
+      accepted: false,
+      boutId: null,
+      message: `The purse was already raised once for this bout. It stays at ${formatMoney(offer.showPay)}.`,
+      relationshipDelta: 0,
+      newOffer: offer,
+      tone: 'info',
+    };
   }
 
   // Requests. Each one costs a request slot; the matchmaker's patience is finite.
@@ -288,127 +359,201 @@ export function respondToOffer(save: SaveGame, offerId: string, response: OfferR
       message: 'The matchmaker has run out of patience with the back and forth and pulled the offer.',
       relationshipDelta: -7,
       newOffer: null,
+      tone: 'bad',
     };
   }
 
+  // Every request branch reports the relationship change it costs, and it is applied here, once.
+  // Most branches used to return a change that nothing applied, while two applied their own, so
+  // the number on the outcome and the relationship disagreed.
+  const outcome = resolveRequest(save, offer, fighter, event, response, rng);
+  const before = fighter.relationships.matchmaker;
+  fighter.relationships.matchmaker = clamp(before + outcome.relationshipDelta, 0, 100);
+  return { ...outcome, relationshipDelta: fighter.relationships.matchmaker - before };
+}
+
+type RequestResponse = Exclude<OfferResponse, { kind: 'accept' } | { kind: 'decline' } | { kind: 'volunteer-replacement' }>;
+
+/**
+ * Re-prices an offer whose date moved.
+ *
+ * The short notice bonus was baked into the show pay when the offer was made, and a moved date
+ * kept it, so asking for more time on a replacement slot paid a short notice purse for a full
+ * camp. The purse is rebuilt from the contract for the new notice, and any raise the player had
+ * already negotiated is carried over on top. Amateur bouts pay nothing and are left alone.
+ */
+function repriceOffer(save: SaveGame, offer: FightOffer, fighter: Fighter, previousNoticeDays: number): void {
+  if (offer.isAmateur) return;
+  const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
+  const priced = (notice: number) =>
+    purseForBout(contract, fighter, save, {
+      isMainEvent: offer.isMainEvent,
+      isTitleFight: isChampionshipBout({ isTitleFight: offer.isTitleFight, isInterimTitleFight: offer.isInterimTitleFight }),
+      shortNotice: notice < 24,
+    });
+  const oldBase = priced(previousNoticeDays);
+  const raise = Math.max(0, offer.showPay - oldBase.show);
+  const next = priced(offer.noticeDays);
+  offer.showPay = next.show + raise;
+  offer.winBonus = next.win;
+  offer.baseShowPay = next.show;
+  offer.shortNoticeBonus = offer.noticeDays < 24 ? (contract?.terms.shortNoticeBonus ?? 0) : 0;
+}
+
+/** Moves an offer onto a later card and re-prices it for the new notice. */
+function moveOffer(save: SaveGame, offer: FightOffer, fighter: Fighter, later: FightCardEvent): string {
+  const previousNotice = offer.noticeDays;
+  const hadBonus = offer.shortNoticeBonus > 0;
+  offer.eventId = later.id;
+  offer.eventName = later.name;
+  offer.date = later.date;
+  // The location moves with the card. It used to keep the old city, so the offer named one
+  // place and the fight happened in another.
+  offer.city = later.city;
+  offer.country = later.country;
+  offer.travelKm = travelDistanceKm(regionOfFighter(fighter), VENUE_CITIES.find((v) => v.city === later.city)?.region ?? 'north-america');
+  offer.noticeDays = daysBetween(save.date, later.date);
+  offer.campWeeksAvailable = Math.max(0, Math.floor((offer.noticeDays - 7) / 7));
+  repriceOffer(save, offer, fighter, previousNotice);
+  return hadBonus && offer.shortNoticeBonus === 0
+    ? ` It is no longer short notice, so the short notice bonus comes off and the show pay is now ${formatMoney(offer.showPay)}.`
+    : '';
+}
+
+function resolveRequest(save: SaveGame, offer: FightOffer, fighter: Fighter, event: FightCardEvent, response: RequestResponse, rng: Rng): OfferOutcome {
   const leverage = clamp(
     (fighter.ranking !== null ? 16 - fighter.ranking : 2) * 3 + fighter.popularity * 0.4 + fighter.relationships.matchmaker * 0.3,
     0,
     100
   );
+  const result = (message: string, relationshipDelta: number, tone: OfferTone, newOffer: FightOffer | null = offer): OfferOutcome => ({
+    accepted: false,
+    boutId: null,
+    message,
+    relationshipDelta,
+    newOffer,
+    tone,
+  });
+  const tryout = offer.bookingKind === 'tryout';
 
   switch (response.kind) {
     case 'request-money': {
-      const cap = offer.showPay * (1 + clamp(leverage / 190, 0.03, 0.5));
+      // The ceiling is set from the purse the offer opened at, and only one raise is granted per
+      // offer. It used to be set from the current figure with two asks allowed, so the asks
+      // compounded to nearly double the contracted show pay and made the contract talks pointless.
+      // A manager's negotiating skill is worth more room on a purse request.
+      const base = offer.baseShowPay ?? offer.showPay;
+      const cap = base * (1 + clamp((leverage + (managerFor(save, fighter.id)?.negotiation ?? 0) * 0.15) / 400, 0.02, 0.2));
       // Asking for less than the offer already pays is not a negotiation. The test used to be
       // only against the ceiling, so any number at or below it was granted, including a smaller
       // one or a negative one, and the purse was cut while the reply said it had gone up.
       if (response.amount > offer.showPay && response.amount <= cap) {
         const granted = Math.round(Math.min(response.amount, cap));
         offer.showPay = granted;
-        return { accepted: false, boutId: null, message: `Purse increased to ${granted}. The offer stands.`, relationshipDelta: -1, newOffer: offer };
+        offer.moneyGranted = true;
+        return result(`Purse increased to ${formatMoney(granted)}. The offer stands.`, -1, 'good');
       }
       if (response.amount <= offer.showPay) {
-        return {
-          accepted: false,
-          boutId: null,
-          message: 'That is at or below what is already on the table, so the offer stands as it is.',
-          relationshipDelta: 0,
-          newOffer: offer,
-        };
+        return result('That is at or below what is already on the table, so the offer stands as it is.', 0, 'info');
       }
-      fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker - 3, 0, 100);
-      return { accepted: false, boutId: null, message: 'That number is not happening for this bout. The original offer stands.', relationshipDelta: -3, newOffer: offer };
+      return result('That number is not happening for this bout. The original offer stands.', -3, 'bad');
     }
     case 'request-date': {
+      // Only a card from the same promotion. A regional offer could otherwise move onto a main
+      // promotion card, and a main promotion offer onto a regional one.
       const later = Object.values(save.events)
-        .filter((e) => e.status === 'announced' && daysBetween(offer.date, e.date) > 20 && daysBetween(offer.date, e.date) < 100)
+        .filter((e) => e.status === 'announced' && e.promotionId === event.promotionId && daysBetween(offer.date, e.date) > 20 && daysBetween(offer.date, e.date) < 100)
         .sort((a, b) => (a.date < b.date ? -1 : 1))[0];
       if (later && rng.chance(clamp(0.3 + leverage / 220, 0.15, 0.8))) {
-        offer.eventId = later.id;
-        offer.eventName = later.name;
-        offer.date = later.date;
-        offer.city = later.city;
-        offer.country = later.country;
-        offer.noticeDays = daysBetween(save.date, later.date);
-        offer.campWeeksAvailable = Math.max(0, Math.floor((offer.noticeDays - 7) / 7));
-        return { accepted: false, boutId: null, message: `Moved to ${later.name} on ${later.date}.`, relationshipDelta: -1, newOffer: offer };
+        const repriced = moveOffer(save, offer, fighter, later);
+        return result(`Moved to ${later.name} on ${formatDate(later.date)}.${repriced}`, -1, 'good');
       }
-      return { accepted: false, boutId: null, message: 'No suitable later date is available. The original offer stands.', relationshipDelta: -2, newOffer: offer };
+      return result('No suitable later date is available. The original offer stands.', -2, 'info');
     }
     case 'request-opponent': {
       if (rng.chance(clamp(leverage / 260, 0.05, 0.4))) {
         offer.status = 'withdrawn';
         resolveMessagesForOffer(save, offer.id, 'The matchmaker will look for a different opponent.');
-        return {
-          accepted: false,
-          boutId: null,
-          message: 'The matchmaker will look at other options and come back with something else.',
-          relationshipDelta: -4,
-          newOffer: null,
-        };
+        return result('The matchmaker will look at other options and come back with something else.', -4, 'info', null);
       }
-      fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker - 5, 0, 100);
-      return { accepted: false, boutId: null, message: 'This is the fight they want to make. The offer stands as is.', relationshipDelta: -5, newOffer: offer };
+      return result('This is the fight they want to make. The offer stands as is.', -5, 'bad');
     }
     case 'request-catchweight': {
       const division = DIVISION_BY_ID[offer.divisionId];
       const delta = Math.abs(response.weightLb - division.limitLb);
-      if (delta <= 6 && !offer.isTitleFight && rng.chance(0.55)) {
+      if (delta <= 6 && !isChampionshipBout(offer) && !offer.isCatchweight && rng.chance(0.55)) {
         offer.contractedWeightLb = response.weightLb;
         offer.isCatchweight = true;
-        return { accepted: false, boutId: null, message: `Catchweight agreed at ${response.weightLb} lb.`, relationshipDelta: -1, newOffer: offer };
+        return result(`Catchweight agreed at ${response.weightLb} lb.`, -1, 'good');
       }
-      return { accepted: false, boutId: null, message: 'The bout stays at the division weight.', relationshipDelta: -2, newOffer: offer };
+      return result('The bout stays at the division weight.', -2, 'bad');
     }
     case 'request-five-rounds': {
+      if (tryout) return result('Tryouts are three rounds. That is the format.', 0, 'bad');
       if (offer.isMainEvent || rng.chance(clamp(leverage / 300, 0.03, 0.3))) {
         offer.scheduledRounds = 5;
-        return { accepted: false, boutId: null, message: 'Approved as a five round bout.', relationshipDelta: 0, newOffer: offer };
+        return result('Approved as a five round bout.', 0, 'good');
       }
-      return { accepted: false, boutId: null, message: 'Five rounds are reserved for the main event on this card.', relationshipDelta: -1, newOffer: offer };
+      return result('Five rounds are reserved for the main event on this card.', -1, 'bad');
     }
     case 'request-title-fight': {
+      if (tryout) return result('A tryout is for a contract, not a belt. Win it and the rest follows.', 0, 'bad');
+      if (event.promotionId) {
+        return result('The regional belt goes to the number one contender. Climb the regional rankings and the title fight comes to you.', 0, 'bad');
+      }
       const table = save.rankings[fighter.divisionId];
       const contenderReady = fighter.ranking !== null && fighter.ranking <= 3 && fighter.winStreak >= 2;
-      const championAvailable = table.championId && !save.fighters[table.championId]?.nextBoutId;
-      if (contenderReady && championAvailable && rng.chance(0.45)) {
-        offer.status = 'withdrawn';
-        resolveMessagesForOffer(save, offer.id, 'The matchmaker will put a title shot together instead.');
-        return {
-          accepted: false,
-          boutId: null,
-          message: 'The case has been heard. The matchmaker will put a title shot together instead of this bout.',
-          relationshipDelta: 2,
-          newOffer: null,
-        };
+      // A request cannot jump somebody who has already earned the shot. The offer stays open, so
+      // asking does not cost the player the fight they were offered.
+      const standing = currentContender(save, fighter.divisionId);
+      if (standing && standing.fighterId !== fighter.id) {
+        const holder = save.fighters[standing.fighterId];
+        return result(`${holder?.name ?? 'Another fighter'} already holds the number one contender spot, so the next title shot is theirs. This offer is still open.`, 0, 'info');
       }
-      return {
-        accepted: false,
-        boutId: null,
-        message: contenderReady
+      // The champion has to be in the division and close enough to the end of their turnaround
+      // that the title pass, which looks up to 160 days ahead, can actually make the fight.
+      // Otherwise the promise was one the simulation never kept, and the player had given up a
+      // real offer for it.
+      const champion = table.championId ? save.fighters[table.championId] : null;
+      const championIdle = champion?.lastFightDate ? daysBetween(champion.lastFightDate, save.date) : 400;
+      const championAvailable =
+        champion !== null &&
+        champion.divisionId === fighter.divisionId &&
+        !champion.nextBoutId &&
+        championIdle + 160 >= CHAMPION_TURNAROUND_DAYS;
+      if (contenderReady && championAvailable && rng.chance(0.45)) {
+        // The decision is recorded as a real contender claim, which is what the title pass books
+        // from. Only once it is held is the current offer withdrawn.
+        const grant = grantContenderStatus(save, fighter, fighter.divisionId, 'promotion-decision', null);
+        if (!grant.granted) return result(`${grant.message} This offer is still open.`, 0, 'info');
+        const earliest = addDays(champion!.lastFightDate ?? save.date, CHAMPION_TURNAROUND_DAYS);
+        const from = earliest > addDays(save.date, 40) ? earliest : addDays(save.date, 40);
+        offer.status = 'withdrawn';
+        resolveMessagesForOffer(save, offer.id, 'The promotion named you the number one contender instead.');
+        return result(
+          `The case has been heard. You are named the number one contender, and this bout is off. Expect the title offer for a card from about ${formatDate(from)} onward, once ${champion!.name} is ready to defend.`,
+          2,
+          'good',
+          null
+        );
+      }
+      return result(
+        contenderReady
           ? 'The title picture is not open right now. Win this one and the case makes itself.'
           : 'Not yet. There is more work to do before that conversation happens.',
-        relationshipDelta: -2,
-        newOffer: offer,
-      };
+        -2,
+        'bad'
+      );
     }
     case 'request-more-time': {
       const later = Object.values(save.events)
-        .filter((e) => e.status === 'announced' && daysBetween(offer.date, e.date) >= response.weeks * 7 - 10)
+        .filter((e) => e.status === 'announced' && e.promotionId === event.promotionId && daysBetween(offer.date, e.date) >= response.weeks * 7 - 10)
         .sort((a, b) => (a.date < b.date ? -1 : 1))[0];
       if (later && rng.chance(0.5)) {
-        offer.eventId = later.id;
-        offer.eventName = later.name;
-        offer.date = later.date;
-        offer.noticeDays = daysBetween(save.date, later.date);
-        offer.campWeeksAvailable = Math.max(0, Math.floor((offer.noticeDays - 7) / 7));
-        return { accepted: false, boutId: null, message: `Extra preparation time granted. Now on ${later.date}.`, relationshipDelta: -1, newOffer: offer };
+        const repriced = moveOffer(save, offer, fighter, later);
+        return result(`Extra preparation time granted. Now on ${formatDate(later.date)}.${repriced}`, -1, 'good');
       }
-      return { accepted: false, boutId: null, message: 'The card is set. There is no more time available.', relationshipDelta: -2, newOffer: offer };
-    }
-    case 'volunteer-replacement': {
-      return { accepted: false, boutId: null, message: 'Noted. The matchmaker will call first if a slot opens.', relationshipDelta: 4, newOffer: offer };
+      return result('The card is set. There is no more time available.', -2, 'bad');
     }
   }
 }
@@ -451,7 +596,7 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
     replacementHistory: [],
     cancelReason: null,
     purseA: { show: offer.showPay, win: offer.winBonus },
-    purseB: purseForBout(contractB, opponent, save, {
+    purseB: event.promotionId ? { show: offer.isAmateur ? 0 : offer.showPay, win: offer.isAmateur ? 0 : offer.winBonus } : purseForBout(contractB, opponent, save, {
       isMainEvent: offer.isMainEvent,
       isTitleFight: isChampionshipBout(offer),
       shortNotice,
@@ -462,6 +607,10 @@ function acceptOffer(save: SaveGame, offer: FightOffer): Bout | null {
     // The category has to survive acceptance. Without it a player who accepted an eliminator
     // would win it and be credited with nothing.
     bookingKind: offer.bookingKind,
+    isAmateur: offer.isAmateur,
+    regionalTitle: offer.regionalTitle,
+    // Kept on the bout so the condition can be enforced when fight week begins.
+    medicallyContingent: offer.medicallyContingent || undefined,
   };
   void contractA;
 
@@ -514,6 +663,7 @@ interface DeclineOutcome {
   message: string;
   delta: number;
   replacement: FightOffer | null;
+  tone: OfferTone;
 }
 
 function declineConsequence(
@@ -524,7 +674,13 @@ function declineConsequence(
   rng: Rng
 ): DeclineOutcome {
   const health = canCompete(fighter, save.date);
-  const injured = !health.ok || reason === 'injury';
+  // The medical reason is checked against the medical record. The reason the player picked used
+  // to count as proof, so a healthy fighter could turn down every offer for free. A fighter who
+  // cannot compete at all (an injury that blocks, a suspension) declines for free whatever the
+  // stated reason; a minor injury that does not block counts only when it is the reason given.
+  const hurt = activeInjuries(fighter, save.date).length > 0;
+  const injured = !health.ok || (reason === 'injury' && hurt);
+  const falseClaim = reason === 'injury' && !injured;
   const veryShortNotice = offer.noticeDays < 18;
   const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
   const obligated = contract ? contract.fightsRemaining > 0 : false;
@@ -542,20 +698,27 @@ function declineConsequence(
       message: 'The matchmaker accepts the medical situation. No damage done.',
       delta: 0,
       replacement: null,
+      tone: 'info',
     };
   }
+  // The soft reasons still cost the small amount they report. The figure was returned and never
+  // applied, so the outcome and the relationship disagreed.
   if (veryShortNotice && reason === 'short-notice') {
+    fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker - 1, 0, 100);
     return {
       message: 'Turning down a bout on that little notice is understood. It is noted and nothing more.',
       delta: -1,
       replacement: null,
+      tone: 'info',
     };
   }
   if (reason === 'unreasonable' && (offer.travelKm > 12000 || offer.noticeDays < 21)) {
+    fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker - 2, 0, 100);
     return {
       message: 'The objection is taken on board. The matchmaker will come back with something more workable.',
       delta: -2,
       replacement: null,
+      tone: 'info',
     };
   }
 
@@ -577,6 +740,7 @@ function declineConsequence(
       ? 'Another refusal with fights still owed on the contract. Release is now a real possibility.'
       : 'Another refusal. There is very little goodwill left.';
   }
+  if (falseClaim) message += ' The medical team has no record of an injury.';
 
   fighter.relationships.matchmaker = clamp(fighter.relationships.matchmaker + delta, 0, 100);
 
@@ -586,7 +750,7 @@ function declineConsequence(
       id: `news-${++save.counters.news}`,
       date: save.date,
       headline: `${fighter.name} turns down another bout`,
-      body: `${fighter.name} has declined the offer against ${save.fighters[offer.opponentId]?.name ?? 'the proposed opponent'}. It is the ${recentDeclines} refusal on record.`,
+      body: `${fighter.name} has declined the offer against ${save.fighters[offer.opponentId]?.name ?? 'the proposed opponent'}. That makes ${recentDeclines} refusals on record.`,
       tags: ['news'],
       fighterIds: [fighter.id],
       importance: 2,
@@ -604,7 +768,7 @@ function declineConsequence(
     message += ' The promotion has terminated the agreement.';
   }
 
-  return { message, delta, replacement: null };
+  return { message, delta, replacement: null, tone: 'bad' };
 }
 
 export function expireOffers(save: SaveGame): void {

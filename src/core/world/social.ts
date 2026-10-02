@@ -1,11 +1,17 @@
 import { hashString, Rng } from '../rng';
-import { addDays, daysBetween, type FighterId, type IsoDate } from '../types/common';
+import { addDays, daysBetween, formatMoney, type FighterId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { addHypeMoment, escalateRivalry, findRivalry, hypeStore } from './hype';
 import { applyRelationship } from './relationships';
-import { PROMOTION_MARKETING } from '../config/branding';
-import { record } from './finance';
+import { PROMOTION_MARKETING, PROMOTION_NAME } from '../config/branding';
+import { PROVING_GROUND_ID } from '../config/regional';
+import { record, sponsorsFor } from './finance';
+import { addInboxMessage } from './inbox';
+import { fillPronouns, pronouns } from './pronouns';
+import { promotionConfig } from './regional';
+import { dial } from './identity';
+import type { FinishMethod } from '../types/fight';
 
 /**
  * Social and media items that arrive through the inbox.
@@ -125,21 +131,21 @@ const OPENERS: Record<SocialTone, string[]> = {
   confident: ['I have seen enough. {date} answers it.', 'The work is done. All that is left is the walk.', 'I like where I am at.'],
   aggressive: ['{opp} is going to find out what this level costs.', 'Talk all week. I only need fifteen minutes.', 'Somebody is getting carried out and it is not me.'],
   funny: ['Big words for someone who has to make weight too.', 'I have read the tweets. The grammar worries me more than the wrestling.', 'Sure. Bring a mouthguard.'],
-  dismissive: ['Not thinking about it.', 'Next question.', 'He can say what he likes. It does not change the matchup.'],
-  technical: ['The read is simple. He resets to his right every time he is pressured.', 'It comes down to whether he can hold the center. He cannot.', 'Watch the second round of his last fight and you have the whole plan.'],
+  dismissive: ['Not thinking about it.', 'Next question.', '{He} can say what {he} likes. It does not change the matchup.'],
+  technical: ['The read is simple. {He} resets to {his} right every time {he} is pressured.', 'It comes down to whether {he} can hold the center. {He} cannot.', 'Watch the second round of {his} last fight and you have the whole plan.'],
   emotional: ['This one means more than people know.', 'I have given up a lot to be standing here.', 'My family has carried this with me.'],
-  honest: ['Honestly, it is a hard fight. That is why I took it.', 'I have doubts like anyone. I just do the work anyway.', 'He is good. I think I am better.'],
+  honest: ['Honestly, it is a hard fight. That is why I took it.', 'I have doubts like anyone. I just do the work anyway.', '{He} is good. I think I am better.'],
   evasive: ['We will see on the night.', 'I do not want to get into that.', 'The fight is the answer.'],
   promotional: ['{event}. You do not want to miss this one.', 'Tell a friend. This is the one to watch.', 'Two fighters who came to finish. {date}.'],
-  controversial: ['Half this division is protected and everyone knows it.', 'I said what I said. Somebody had to.', 'They gave him the ranking. I am taking it back.'],
+  controversial: ['Half this division is protected and everyone knows it.', 'I said what I said. Somebody had to.', 'They gave {him} the ranking. I am taking it back.'],
   silent: [],
 };
 
 const CLOSERS: Record<SocialTone, string[]> = {
-  respectful: ['See you in there.', 'Good luck to him on the scale.', 'Let the fight decide it.'],
+  respectful: ['See you in there.', 'Good luck to {him} on the scale.', 'Let the fight decide it.'],
   confident: ['That is all.', 'See you {date}.', 'Nothing changes.'],
   aggressive: ['Bring whatever you have.', 'I will be waiting.', 'Say it again on Saturday.'],
-  funny: ['Anyway, back to training.', 'Love you all.', 'Somebody get him a coach.'],
+  funny: ['Anyway, back to training.', 'Love you all.', 'Somebody get {him} a coach.'],
   dismissive: ['Moving on.', 'That is it from me.', ''],
   technical: ['That is the fight.', 'It is not complicated.', 'Simple as that.'],
   emotional: ['Thank you to everyone who stayed.', 'This is for them.', 'I am ready.'],
@@ -157,8 +163,9 @@ const CROWD_REACTION = [
   'Most of the responses are supportive.',
   'A few of the responses are not printable.',
   'It barely registers. The timeline moves on.',
-  'The comment section turns into an argument about the last fight.',
 ];
+/** Only for a fighter who has a last fight on record to argue about. */
+const LAST_FIGHT_REACTION = 'The comment section turns into an argument about the last fight.';
 
 // ---------------------------------------------------------------------------
 // Item templates
@@ -175,6 +182,24 @@ interface Template {
   /** Which tones make sense as a reply here. */
   tones: SocialTone[];
   baseEffects?: SocialEffects;
+  /**
+   * How long the same item from the same source stays away, in days. The default suits items
+   * tied to a fight, which should be able to come round again in the next camp. The evergreen
+   * ones (a clip resurfacing, a judging argument) could otherwise appear every three weeks for
+   * a whole career.
+   */
+  cooldownDays?: number;
+}
+
+/** The default repeat window for a template that sets none. */
+const DEFAULT_COOLDOWN_DAYS = 21;
+
+/** The longest a former opponent's loss stays fresh enough for them to ask for it back. */
+const REMATCH_WINDOW_DAYS = 3 * 365;
+
+/** Judged results, the only ones a scorecard argument can be about. */
+function isJudged(method: FinishMethod | null): boolean {
+  return method !== null && /^(decision|draw|technical-decision|technical-draw)/.test(method);
 }
 
 export interface GenerationContext {
@@ -188,16 +213,59 @@ export interface GenerationContext {
   isTitleFight: boolean;
   rivalryIntensity: number;
   lastResultWasWin: boolean | null;
+  /** How the last recorded fight ended, so text about it can be true to it. */
+  lastResultMethod: FinishMethod | null;
   daysSinceLastFight: number | null;
+  /** The booked card is on the regional circuit. */
+  isRegional: boolean;
+  /** The booked bout is an amateur one. */
+  isAmateur: boolean;
+  /** The booked card's promotion id, absent for the main promotion. */
+  promotionId: string | null;
+  /** The promotion putting on the booked card, or the main promotion. */
+  promotionName: string;
+  /**
+   * The most recent fighter the player beat in this career who is still active in the division
+   * and lost within the last three years. A rematch request needs somebody real to come from.
+   */
+  rematchCandidate: Fighter | null;
   rng: Rng;
 }
 
-function fill(text: string, ctx: GenerationContext): string {
-  return text
+/**
+ * Fills a template. The pronoun tokens belong to whoever the item is about: the opponent by
+ * default, or the former opponent or champion for the items that come from them. Everyone the
+ * text can mean is in the player's division, so the player's division is the fallback.
+ */
+function fill(text: string, ctx: GenerationContext, subject: Fighter | null = ctx.opponent): string {
+  const filled = text
     .replace(/\{opp\}/g, ctx.opponent?.name ?? 'the opponent')
     .replace(/\{me\}/g, ctx.me.name)
     .replace(/\{event\}/g, ctx.eventName ?? 'the card')
     .replace(/\{date\}/g, ctx.eventDate ?? 'fight night');
+  return fillPronouns(filled, pronouns(subject ?? ctx.me));
+}
+
+/** The fighter an item's text is about, for its pronouns. */
+function subjectOf(template: Template, ctx: GenerationContext): Fighter | null {
+  if (template.source === 'former-opponent') return ctx.rematchCandidate;
+  if (template.source === 'champion') return championOf(ctx);
+  return ctx.opponent;
+}
+
+function championOf(ctx: GenerationContext): Fighter | null {
+  const table = ctx.save.rankings[ctx.me.divisionId];
+  return table?.championId ? ctx.save.fighters[table.championId] ?? null : null;
+}
+
+/**
+ * Who a promotion's marketing request comes from. A regional card's own promotion asks, not
+ * the main promotion that has never signed the fighter. The tryout series is the main
+ * promotion's, so its marketing is the main promotion's too.
+ */
+export function marketingSenderFor(promotionId: string | null | undefined): string {
+  if (!promotionId || promotionId === PROVING_GROUND_ID) return PROMOTION_MARKETING;
+  return `${promotionConfig(promotionId)?.name ?? 'The promotion'} marketing`;
 }
 
 const TEMPLATES: Template[] = [
@@ -226,7 +294,7 @@ const TEMPLATES: Template[] = [
       `${c.opponent!.name} says ${c.rng.pick([
         'you have been ducking the fight for a year',
         'the promotion had to talk you into this',
-        'he has your number and everyone can see it',
+        '{he} has your number and everyone can see it',
         'you are the easiest name on the list',
       ])}. It is already being written up.`,
     tones: ['aggressive', 'dismissive', 'funny', 'confident', 'silent'],
@@ -251,13 +319,14 @@ const TEMPLATES: Template[] = [
     source: 'opponent',
     applies: (c) => Boolean(c.opponent) && c.rivalryIntensity < 25,
     headline: (c) => `${c.opponent!.name} speaks well of you`,
-    body: (c) => `${c.opponent!.name} called you ${c.rng.pick(['the toughest out in the division', 'a problem for anyone', 'the fight he wanted'])}. No edge to it.`,
+    body: (c) => `${c.opponent!.name} called you ${c.rng.pick(['the toughest out in the division', 'a problem for anyone', 'the fight {he} wanted'])}. No edge to it.`,
     tones: ['respectful', 'confident', 'honest', 'funny'],
   },
   {
     key: 'fans-inactivity',
     context: 'inactivity',
     source: 'fans',
+    cooldownDays: 75,
     applies: (c) => (c.daysSinceLastFight ?? 0) > 240 && !c.opponent,
     headline: () => 'Fans are asking where you have been',
     body: (c) => `A thread about the division has turned into an argument about your last ${Math.round((c.daysSinceLastFight ?? 300) / 30)} months out of the cage.`,
@@ -279,7 +348,8 @@ const TEMPLATES: Template[] = [
     key: 'reporter-rumor',
     context: 'injury-rumor',
     source: 'reporter',
-    applies: (c) => Boolean(c.opponent) && (c.daysToFight ?? 99) < 45,
+    // No reporter is chasing camp rumors about an amateur bout.
+    applies: (c) => Boolean(c.opponent) && (c.daysToFight ?? 99) < 45 && !c.isAmateur,
     headline: () => 'A reporter is chasing an injury rumor',
     body: (c) =>
       `A reporter has asked whether camp has been interrupted. ${c.rng.pick([
@@ -294,7 +364,7 @@ const TEMPLATES: Template[] = [
     key: 'weight-concern',
     context: 'weight-concern',
     source: 'fans',
-    applies: (c) => Boolean(c.opponent) && (c.daysToFight ?? 99) < 21,
+    applies: (c) => Boolean(c.opponent) && (c.daysToFight ?? 99) < 21 && !c.isAmateur,
     headline: () => 'A weight cut clip is worrying people',
     body: () => 'A short clip from the gym has people speculating about how much is left to come off. It has been reposted with some unkind commentary.',
     tones: ['confident', 'honest', 'dismissive', 'funny'],
@@ -303,6 +373,7 @@ const TEMPLATES: Template[] = [
     key: 'viral-clip',
     context: 'viral-clip',
     source: 'fans',
+    cooldownDays: 60,
     applies: () => true,
     headline: () => 'A clip of yours is going around',
     body: (c) =>
@@ -313,7 +384,7 @@ const TEMPLATES: Template[] = [
     key: 'promotion-promote',
     context: 'promotion-request',
     source: 'promotion',
-    applies: (c) => Boolean(c.opponent) && (c.daysToFight ?? 99) < 35,
+    applies: (c) => Boolean(c.opponent) && (c.daysToFight ?? 99) < 35 && !c.isAmateur,
     headline: (c) => `The promotion wants you promoting ${c.eventName ?? 'the card'}`,
     body: (c) => `Marketing has asked for a post about ${c.eventName ?? 'the event'} on ${c.eventDate ?? 'fight night'}. It is a request, not an obligation.`,
     tones: ['promotional', 'confident', 'funny', 'silent'],
@@ -323,6 +394,7 @@ const TEMPLATES: Template[] = [
     key: 'champion-dismissal',
     context: 'title-talk',
     source: 'champion',
+    cooldownDays: 75,
     applies: (c) => {
       const table = c.save.rankings[c.me.divisionId];
       return Boolean(table?.championId) && table.championId !== c.me.id && (c.me.ranking ?? 99) <= 6;
@@ -338,7 +410,7 @@ const TEMPLATES: Template[] = [
       return `${champ?.name ?? 'The champion'} was asked about you and said ${c.rng.pick([
         'the division has more interesting names',
         'you need another win first',
-        'he does not think about you at all',
+        '{he} does not think about you at all',
       ])}.`;
     },
     tones: ['aggressive', 'confident', 'respectful', 'controversial'],
@@ -348,15 +420,25 @@ const TEMPLATES: Template[] = [
     key: 'former-opponent-rematch',
     context: 'rematch-request',
     source: 'former-opponent',
-    applies: (c) => c.me.record.wins + c.me.record.losses > 4 && !c.opponent,
-    headline: () => 'A former opponent wants it again',
-    body: (c) => `Somebody you have already beaten is publicly asking for a rematch, saying ${c.rng.pick(['the first one was close', 'he was hurt going in', 'he has changed camps'])}.`,
+    cooldownDays: 90,
+    // Somebody real the player beat in this career, still fighting in the division. It used to
+    // fire on any record over four fights, so a fighter with no wins at all heard from
+    // "somebody you have already beaten", who was never named.
+    applies: (c) => Boolean(c.rematchCandidate) && !c.opponent,
+    headline: (c) => `${c.rematchCandidate!.name} wants it again`,
+    body: (c) =>
+      `${c.rematchCandidate!.name} is publicly asking for a rematch, saying ${c.rng.pick([
+        'the first one was close',
+        '{he} was hurt going in',
+        '{he} has changed camps',
+      ])}.`,
     tones: ['dismissive', 'respectful', 'confident', 'funny'],
   },
   {
     key: 'teammate-defense',
     context: 'compliment',
     source: 'teammate',
+    cooldownDays: 60,
     applies: (c) => Boolean(c.me.gymId) && c.rivalryIntensity > 15,
     headline: () => 'A teammate has stepped in for you',
     body: () => 'One of your training partners has replied to the noise on your behalf. It is well meant and slightly heated.',
@@ -366,7 +448,10 @@ const TEMPLATES: Template[] = [
     key: 'judging-debate',
     context: 'judging-debate',
     source: 'fans',
-    applies: (c) => c.lastResultWasWin !== null,
+    cooldownDays: 60,
+    // Only a fight the judges decided, and only while it is recent. It fired after knockouts and
+    // after fights a year old.
+    applies: (c) => isJudged(c.lastResultMethod) && (c.daysSinceLastFight ?? 999) < 45,
     headline: () => 'A scorecard argument has your name in it',
     body: (c) => `An argument about judging in the division keeps circling back to your last fight. ${c.rng.pick(['Opinion is divided.', 'Most people agree with the decision.', 'A former judge weighed in.'])}`,
     tones: ['honest', 'technical', 'dismissive', 'controversial'],
@@ -396,14 +481,22 @@ const TEMPLATES: Template[] = [
     source: 'fans',
     applies: (c) => c.lastResultWasWin === false && (c.daysSinceLastFight ?? 99) < 12,
     headline: () => 'The loss is being dissected',
-    body: (c) => `The result has people questioning ${c.rng.pick(['your gas tank', 'the game plan', 'the corner', 'whether the ranking was ever right'])}.`,
+    body: (c) =>
+      `The result has people questioning ${c.rng.pick([
+        'your gas tank',
+        'the game plan',
+        'the corner',
+        // Only a ranked fighter has a ranking to doubt.
+        ...(c.me.ranking !== null ? ['whether the ranking was ever right'] : []),
+      ])}.`,
     tones: ['honest', 'emotional', 'dismissive', 'confident', 'silent'],
   },
   {
     key: 'sponsor-post',
     context: 'sponsor-request',
     source: 'sponsor',
-    applies: (c) => c.me.popularity > 25,
+    cooldownDays: 60,
+    applies: (c) => c.me.popularity > 25 && !c.isAmateur,
     headline: () => 'A sponsor wants a post',
     body: () => 'A brand you work with has asked for one post before the fight. It is straightforward and it pays.',
     tones: ['promotional', 'funny', 'honest', 'silent'],
@@ -439,8 +532,9 @@ const RISK_TEXT: Partial<Record<SocialTone, string>> = {
 };
 
 function composeReply(tone: SocialTone, ctx: GenerationContext, template: Template): SocialReply {
-  const opener = OPENERS[tone].length > 0 ? fill(ctx.rng.pick(OPENERS[tone]), ctx) : '';
-  const closer = CLOSERS[tone].length > 0 ? fill(ctx.rng.pick(CLOSERS[tone]), ctx) : '';
+  const subject = subjectOf(template, ctx);
+  const opener = OPENERS[tone].length > 0 ? fill(ctx.rng.pick(OPENERS[tone]), ctx, subject) : '';
+  const closer = CLOSERS[tone].length > 0 ? fill(ctx.rng.pick(CLOSERS[tone]), ctx, subject) : '';
   const text = tone === 'silent' ? 'No reply.' : [opener, closer].filter(Boolean).join(' ');
   const base = template.baseEffects ?? {};
   const toneEffects = EFFECT_BY_TONE[tone];
@@ -470,7 +564,8 @@ export function weeklySocialBudget(ctx: GenerationContext): number {
   else if (days !== null) budget = 1;
   else budget = ctx.rng.chance(0.35) ? 1 : 0;
   if (ctx.rivalryIntensity > 55) budget += 1;
-  const openness = ctx.me.personality?.mediaComfort ?? 0.5;
+  // The dial is stored 0 to 100. Read raw against a 0 to 1 threshold, no fighter was ever shy.
+  const openness = dial(ctx.me.personality, 'mediaComfort');
   if (openness < 0.3) budget = Math.max(0, budget - 1);
   if (ctx.me.popularity > 65) budget += 1;
   return Math.min(3, budget);
@@ -484,6 +579,7 @@ export function buildContext(save: SaveGame, me: Fighter, rng: Rng): GenerationC
   const lastResultId = me.boutIds.filter((id) => save.history.results[id]).pop();
   const lastResult = lastResultId ? save.history.results[lastResultId] : null;
   const rivalry = opponent ? findRivalry(save, me.id, opponent.id)?.intensity ?? 0 : 0;
+  const promotionId = event?.promotionId ?? null;
   return {
     save,
     me,
@@ -495,9 +591,27 @@ export function buildContext(save: SaveGame, me: Fighter, rng: Rng): GenerationC
     isTitleFight: Boolean(live?.isTitleFight || live?.isInterimTitleFight),
     rivalryIntensity: rivalry,
     lastResultWasWin: lastResult ? lastResult.winnerId === me.id : null,
+    lastResultMethod: lastResult?.method ?? null,
     daysSinceLastFight: me.lastFightDate ? daysBetween(me.lastFightDate, save.date) : null,
+    isRegional: Boolean(promotionId),
+    isAmateur: Boolean(live?.isAmateur),
+    promotionId,
+    promotionName: promotionConfig(promotionId)?.name ?? PROMOTION_NAME,
+    rematchCandidate: rematchCandidate(save, me),
     rng,
   };
+}
+
+function rematchCandidate(save: SaveGame, me: Fighter): Fighter | null {
+  for (let i = me.boutIds.length - 1; i >= 0; i--) {
+    const result = save.history.results[me.boutIds[i]];
+    if (!result || result.winnerId !== me.id || !result.loserId) continue;
+    if (daysBetween(result.date, save.date) > REMATCH_WINDOW_DAYS) break;
+    const loser = save.fighters[result.loserId];
+    if (!loser || loser.retired || loser.activityStatus !== 'active' || loser.divisionId !== me.divisionId) continue;
+    return loser;
+  }
+  return null;
 }
 
 /**
@@ -510,18 +624,26 @@ export function generateSocialItems(save: SaveGame, me: Fighter, rng: Rng): Soci
   const budget = weeklySocialBudget(ctx);
   if (budget === 0) return [];
 
-  // The same archetype from the same source is blocked for three weeks.
-  const recentSignatures = new Set(
-    Object.values(save.socialFeed)
-      .filter((i) => daysBetween(i.date, save.date) < 21)
-      .map((i) => `${i.signature}|${i.sourceFighterId ?? 'none'}`)
-  );
+  // The same archetype from the same source is blocked for its cooldown: three weeks for items
+  // tied to a fight, longer for the evergreen ones.
+  const lastSeen = new Map<string, number>();
+  for (const i of Object.values(save.socialFeed)) {
+    const sig = `${i.signature}|${i.sourceFighterId ?? 'none'}`;
+    const days = daysBetween(i.date, save.date);
+    if (!lastSeen.has(sig) || days < lastSeen.get(sig)!) lastSeen.set(sig, days);
+  }
   const openCount = Object.values(save.socialFeed).filter((i) => i.resolvedOn === null && i.expiresOn >= save.date).length;
   if (openCount >= 4) return [];
+  // One optional item a week, across the social feed and career life together.
+  const createdThisWeek = Object.values(save.socialFeed).some(
+    (i) => i.targetFighterId === me.id && daysBetween(i.date, save.date) < 7
+  );
+  if (createdThisWeek) return [];
 
   const eligible = TEMPLATES.filter((t) => {
-    const sourceId = t.source === 'opponent' ? ctx.opponent?.id ?? 'none' : 'none';
-    if (recentSignatures.has(`${t.key}|${sourceId}`)) return false;
+    const sourceId = sourceFighterIdFor(t, ctx) ?? 'none';
+    const seen = lastSeen.get(`${t.key}|${sourceId}`);
+    if (seen !== undefined && seen < (t.cooldownDays ?? DEFAULT_COOLDOWN_DAYS)) return false;
     try {
       return t.applies(ctx);
     } catch {
@@ -531,23 +653,28 @@ export function generateSocialItems(save: SaveGame, me: Fighter, rng: Rng): Soci
   if (eligible.length === 0) return [];
 
   const created: SocialItem[] = [];
-  const want = Math.min(budget - openCount, eligible.length);
+  const want = Math.min(budget - openCount, eligible.length, OPTIONAL_SOCIAL_ITEMS_PER_WEEK);
   for (let i = 0; i < want; i++) {
     const template = rng.weighted(eligible, () => 1);
     if (created.some((c) => c.signature === template.key)) continue;
     const key = `social-${me.id}-${template.key}-${save.date}`;
     if (save.socialFeed[key]) continue;
+    // An item about a booked fight cannot outlive the fight. It used to stay answerable for up
+    // to nine days after the event, still saying all that was left was the walk.
+    const tenDays = addDays(save.date, 10);
+    const expiresOn = ctx.boutId && ctx.eventDate && ctx.eventDate < tenDays ? ctx.eventDate : tenDays;
+    const subject = subjectOf(template, ctx);
     const item: SocialItem = {
       id: key,
       date: save.date,
-      expiresOn: addDays(save.date, 10),
+      expiresOn,
       source: template.source,
       sourceName: sourceNameFor(template, ctx),
-      sourceFighterId: template.source === 'opponent' ? ctx.opponent?.id ?? null : null,
+      sourceFighterId: sourceFighterIdFor(template, ctx),
       targetFighterId: me.id,
       context: template.context,
-      headline: fill(template.headline(ctx), ctx),
-      body: fill(template.body(ctx), ctx),
+      headline: fill(template.headline(ctx), ctx, subject),
+      body: fill(template.body(ctx), ctx, subject),
       replies: template.tones.map((tone) => composeReply(tone, ctx, template)),
       selectedReplyKey: null,
       immediateReaction: null,
@@ -560,6 +687,16 @@ export function generateSocialItems(save: SaveGame, me: Fighter, rng: Rng): Soci
     created.push(item);
   }
   return created;
+}
+
+/** Optional social items one weekly pass may create. */
+export const OPTIONAL_SOCIAL_ITEMS_PER_WEEK = 1;
+
+/** The fighter an item comes from, when it comes from one, so replies move that relationship. */
+function sourceFighterIdFor(template: Template, ctx: GenerationContext): FighterId | null {
+  if (template.source === 'opponent') return ctx.opponent?.id ?? null;
+  if (template.source === 'former-opponent') return ctx.rematchCandidate?.id ?? null;
+  return null;
 }
 
 function sourceNameFor(template: Template, ctx: GenerationContext): string {
@@ -577,13 +714,13 @@ function sourceNameFor(template: Template, ctx: GenerationContext): string {
       return table.championId ? ctx.save.fighters[table.championId]?.name ?? 'The champion' : 'The champion';
     }
     case 'promotion':
-      return PROMOTION_MARKETING;
+      return marketingSenderFor(ctx.promotionId);
     case 'sponsor':
       return 'Sponsor';
     case 'rival':
       return 'Rival';
     case 'former-opponent':
-      return 'Former opponent';
+      return ctx.rematchCandidate?.name ?? 'Former opponent';
   }
 }
 
@@ -597,13 +734,21 @@ export function replyToSocialItem(save: SaveGame, itemId: string, replyKey: stri
   if (item.resolvedOn) return item.immediateReaction;
   const reply = item.replies.find((r) => r.key === replyKey);
   if (!reply) return null;
+  // A pre fight item whose fight has happened, or fallen through, is closed rather than answered.
+  // A stale screen could otherwise still apply its effects, hype included, to a finished bout.
+  if (boutIsOver(save, item)) {
+    closeAsFightHappened(save, item);
+    return item.immediateReaction;
+  }
 
   const me = save.fighters[item.targetFighterId];
   if (me) applySocialEffects(save, me, item, reply, rng);
 
   item.selectedReplyKey = replyKey;
   item.resolvedOn = save.date;
-  const reaction = rng.pick(CROWD_REACTION);
+  // The argument about the last fight needs a last fight on record to argue about.
+  const hasRecordedFight = Boolean(me?.boutIds.some((id) => save.history.results[id]));
+  const reaction = rng.pick(hasRecordedFight ? [...CROWD_REACTION, LAST_FIGHT_REACTION] : CROWD_REACTION);
   const opponentLine =
     item.sourceFighterId && reply.tone !== 'silent'
       ? ` ${save.fighters[item.sourceFighterId]?.name ?? 'The other camp'} ${
@@ -688,7 +833,7 @@ function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply
       h.hardcore = clampPct(h.hardcore + e.hype * 0.6);
       h.casual = clampPct(h.casual + e.hype * 1.1);
       h.media = clampPct(h.media + e.hype * 0.9);
-      addHypeMoment(save, item.boutId, `${me.name}: ${reply.text.slice(0, 80)}`, e.hype);
+      addHypeMoment(save, item.boutId, `${me.name}: ${shortQuote(reply.text, 80)}`, e.hype);
     }
   }
 
@@ -707,12 +852,27 @@ function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply
       }
     }
   }
+  // The same handling as a press conference: the player's own agreements only, a note on the
+  // sponsor and a letter in the inbox. A termination used to happen in silence, so the player
+  // found a sponsor missing with no idea why.
   if (e.sponsorRisk && e.sponsorRisk > 0) {
-    for (const sponsor of Object.values(save.sponsors ?? {})) {
+    for (const sponsor of sponsorsFor(save, me.id)) {
       if (sponsor.status !== 'active' || !sponsor.moralityClause) continue;
       const exposure = (e.sponsorRisk / 100) * (1 - sponsor.satisfaction / 100);
       if (!rng.chance(exposure)) continue;
       sponsor.status = 'terminated';
+      sponsor.note = 'Terminated after a social media post.';
+      addInboxMessage(save, {
+        sender: 'manager',
+        senderName: sponsor.name,
+        subject: `${sponsor.name} has ended the agreement`,
+        body: `${sponsor.name} has terminated the sponsorship over your post. The morality clause was invoked.`,
+        category: 'career',
+        requiresAction: false,
+        deadline: null,
+        choices: [],
+        linkedFighterId: me.id,
+      });
     }
   }
 
@@ -720,11 +880,41 @@ function applySocialEffects(save: SaveGame, me: Fighter, item: SocialItem, reply
   if (e.fineRisk && rng.chance(e.fineRisk / 100)) {
     const fine = Math.round(2000 + rng.range(0, 8000));
     record(save, me.id, 'out', 'fine', fine, 'Fine for a social media post');
+    addInboxMessage(save, {
+      sender: 'commission',
+      senderName: 'Athletic commission',
+      subject: 'A fine for a post',
+      body: `The commission has fined you ${formatMoney(fine)} over a social media post.`,
+      category: 'career',
+      requiresAction: false,
+      deadline: null,
+      choices: [],
+      linkedFighterId: me.id,
+    });
   }
 }
 
 function clampPct(v: number): number {
   return Math.max(0, Math.min(100, v));
+}
+
+/** Shortens a quote at a word boundary, so a hype moment never ends in half a word. */
+function shortQuote(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 3);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).replace(/[\s.,;:]+$/, '')}...`;
+}
+
+/** The item belongs to a bout that is no longer coming up: fought, cancelled or gone. */
+function boutIsOver(save: SaveGame, item: SocialItem): boolean {
+  if (!item.boutId) return false;
+  return save.bouts[item.boutId]?.status !== 'scheduled';
+}
+
+function closeAsFightHappened(save: SaveGame, item: SocialItem): void {
+  item.resolvedOn = save.date;
+  item.immediateReaction = save.bouts[item.boutId ?? '']?.status === 'completed' ? 'The fight has happened.' : 'The fight is off.';
 }
 
 /** Items awaiting a reply that have not expired. */
@@ -741,6 +931,9 @@ export function pruneSocial(save: SaveGame, keepDays = 200): number {
   let removed = 0;
   for (const id of Object.keys(save.socialFeed)) {
     const item = save.socialFeed[id];
+    // An item about a fight that has happened is closed without the cost of ignoring it. Nobody
+    // answers a pre fight question after the fight, and the player was never asked to.
+    if (item.resolvedOn === null && boutIsOver(save, item)) closeAsFightHappened(save, item);
     if (item.resolvedOn === null && item.expiresOn < save.date) {
       item.resolvedOn = save.date;
       item.immediateReaction = 'The moment passed without a reply.';

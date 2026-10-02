@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { DIVISION_BY_ID } from '@core/config/divisions';
-import { GAME_PLAN_DESCRIPTION, GAME_PLAN_LABEL } from '@core/sim/plan';
 import { ageOn, formatClock, formatDate, formatHeight, formatMoney } from '@core/types/common';
-import { METHOD_LABEL, type FightResult, type RoundStatLine } from '@core/types/fight';
+import { isChampionshipBout, METHOD_LABEL, type Bout, type FightResult, type RoundStatLine } from '@core/types/fight';
+import type { SaveGame } from '@core/types/save';
+import { preFightBlocker, stageLabel, tasksForBout } from '@core/world/fightweek';
 import { allOfficials, getOfficial, officialSummary } from '@core/world/officials';
 import type { GamePlanKey } from '@core/types/world';
 import { estimateRatings } from '@core/world/scouting';
@@ -24,29 +25,10 @@ import {
 } from '@core/world/playback';
 import { getHype, hypeLabel } from '@core/world/hype';
 import { Bar } from '../components';
+import { GamePlanPicker } from '../GamePlanPicker';
 import { useGame } from '../store';
 import { planSourceLabel, recallPlan, rememberPlan } from '@core/world/gameplan-memory';
 import { EstimatedRating, KeyValues, Notice, Panel, Rating, Tabs } from '../components';
-
-const ALL_PLANS: GamePlanKey[] = [
-  'pressure',
-  'counter',
-  'outside-range',
-  'pocket-boxing',
-  'body-attack',
-  'leg-kick-attack',
-  'clinch-attack',
-  'takedown-pressure',
-  'fence-wrestling',
-  'top-control',
-  'submission-hunting',
-  'high-pace',
-  'conservative-pace',
-  'early-finish',
-  'late-fight',
-  'protect-injury',
-  'avoid-strength',
-];
 
 const SPEEDS = PLAYBACK_SPEEDS;
 
@@ -92,6 +74,11 @@ function StatsBlock({ a, b, nameA, nameB }: { a: RoundStatLine; b: RoundStatLine
   );
 }
 
+function recordLine(r: { wins: number; losses: number; draws: number } | undefined): string {
+  if (!r) return '0-0';
+  return `${r.wins}-${r.losses}${r.draws ? `-${r.draws}` : ''}`;
+}
+
 export function FightPage() {
   const save = useGame((s) => s.save)!;
   const runOperation = useGame((s) => s.runOperation);
@@ -115,8 +102,12 @@ export function FightPage() {
   const [speedKey, setSpeedKey] = useState<string>(
     PLAYBACK_SPEEDS.some((s) => s.key === save.settings.simSpeed) ? save.settings.simSpeed : DEFAULT_SPEED
   );
-  const [visible, setVisible] = useState(0);
-  const [mode, setMode] = useState<'instant' | 'live' | 'rounds'>('live');
+  // A fight already on record opens on its result. Opening an old fight from the history or the
+  // event page used to replay it live from the first event and hide the result until it finished.
+  // The player's own fight still starts live, because it has no result until Start is pressed.
+  const hadResultOnMount = Boolean(boutId && save.bouts[boutId]?.resultId);
+  const [visible, setVisible] = useState(hadResultOnMount ? Number.MAX_SAFE_INTEGER : 0);
+  const [mode, setMode] = useState<'instant' | 'live' | 'rounds'>(hadResultOnMount ? 'instant' : 'live');
   const [tab, setTab] = useState('play-by-play');
   // One authoritative playback state. Nothing else decides what the screen may show.
   const [playback, setPlayback] = useState<PlaybackState>('preparing');
@@ -128,6 +119,13 @@ export function FightPage() {
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   // Instant mode still shows a visible processing step before the result appears.
   const [revealing, setRevealing] = useState(false);
+  const setFightPlayback = useGame((s) => s.setFightPlayback);
+  const navigate = useNavigate();
+  // Where the page scrolls once the fight starts: the commentary for a replay, the result for an
+  // instant reveal. Nothing moved before, so the player was left looking at the hype timeline.
+  const scrollTarget = useRef<'playback' | 'result' | null>(null);
+  const playbackRef = useRef<HTMLDivElement | null>(null);
+  const resultRef = useRef<HTMLDivElement | null>(null);
 
   const result: FightResult | null = bout?.resultId ? save.history.results[bout.resultId] ?? null : null;
   const a = bout ? save.fighters[bout.fighterAId] : null;
@@ -154,29 +152,53 @@ export function FightPage() {
   }, [result, mode, roundGate, maxVisible]);
   const roundComplete = mode === 'rounds' && shown >= roundStopIndex && !atEnd;
   const canContinueToNextRound = roundComplete && result !== null && !roundEndedByFinish(result, currentRound);
+  // Paused is a speed with no interval, so live playback at that speed is not running.
+  const speedMs = SPEEDS.find((s) => s.key === speedKey)?.ms ?? 0;
+  const running = mode === 'live' && !atEnd && speedMs > 0;
 
   useEffect(() => {
     if (!result) {
       setPlayback('preparing');
       return;
     }
-    setPlayback(stateForIndex(result, shown - 1, mode === 'live' && !atEnd));
-  }, [result, shown, atEnd, mode]);
+    setPlayback(stateForIndex(result, shown - 1, running));
+  }, [result, shown, running]);
+
+  // The rest of the app holds its pre fight view while the result is still hidden here. The flag
+  // is also raised by runFight before the simulation, so there is no render in between where the
+  // header or the inbox badge already shows the outcome. Cleared when the result is revealed and
+  // whenever the page goes away, so it can never strand the dock.
+  const replaying = Boolean(result) && !visibility.concluded;
+  useEffect(() => {
+    if (!replaying || !boutId) return undefined;
+    setFightPlayback(boutId);
+    return () => setFightPlayback(null);
+  }, [replaying, boutId, setFightPlayback]);
+  useEffect(() => () => setFightPlayback(null), [setFightPlayback]);
+
+  useEffect(() => {
+    const target = scrollTarget.current;
+    if (!target) return;
+    const el = target === 'playback' ? playbackRef.current : visibility.showWinner ? resultRef.current : null;
+    if (!el) return;
+    scrollTarget.current = null;
+    const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+  }, [result, visibility.showWinner]);
 
   useEffect(() => {
     if (!result) return;
     if (mode === 'instant') return;
-    const speed = SPEEDS.find((s) => s.key === speedKey)!;
-    if (speed.ms === 0) return;
+    if (speedMs === 0) return;
     const ceiling = mode === 'rounds' ? roundStopIndex : maxVisible;
     if (visible >= ceiling) return;
     // Important moments are held on for longer so a knockout is not one flicker.
-    const wait = holdFor(events[visible], speed.ms);
+    const wait = holdFor(events[visible], speedMs);
     timer.current = setTimeout(() => setVisible((v) => Math.min(ceiling, v + 1)), wait);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [result, mode, speedKey, visible, maxVisible, roundStopIndex, events]);
+  }, [result, mode, speedMs, visible, maxVisible, roundStopIndex, events]);
 
   useEffect(() => {
     if (result && mode === 'instant') setVisible(maxVisible);
@@ -210,6 +232,17 @@ export function FightPage() {
   const estA = estimateRatings(save, a);
   const estB = estimateRatings(save, b);
   const division = DIVISION_BY_ID[bout.divisionId];
+  // Until the result is revealed the bout is billed as it stood before the fight. The fighters
+  // already carry the result, which put the new record and belt on the tape at round one.
+  const pre = visibility.concluded ? undefined : bout.preFight;
+  const recordA = bout.isAmateur ? (pre ? pre.amateurRecordA : a.amateurRecord) : (pre?.recordA ?? a.record);
+  const recordB = bout.isAmateur ? (pre ? pre.amateurRecordB : b.amateurRecord) : (pre?.recordB ?? b.record);
+  const standingA = (pre ? pre.championA : a.isChampion) ? 'Champion' : ((pre ? pre.rankingA : a.ranking) ?? 'Unranked');
+  const standingB = (pre ? pre.championB : b.isChampion) ? 'Champion' : ((pre ? pre.rankingB : b.ranking) ?? 'Unranked');
+  // The game plan and Start appear only when this fight can actually happen now: booked, on or
+  // after its date, with the weigh in behind it. The event page preview reached Start weeks out.
+  const blocker = !result && isPlayerBout ? preFightBlocker(save, bout.id) : null;
+  const fightable = isPlayerBout && bout.status === 'scheduled' && save.date >= bout.date && !blocker;
 
   /**
    * Starts the fight through the central operation controller.
@@ -224,6 +257,12 @@ export function FightPage() {
     setPlayback('preparing');
     setVisible(0);
     setRoundGate(1);
+    // Raised before the result exists, so nothing outside this page renders the outcome first.
+    setFightPlayback(bout.id);
+    // Instant mode holds its reveal from the start for the same reason: the first render with a
+    // result must already count as not concluded.
+    if (mode === 'instant') setRevealing(true);
+    scrollTarget.current = mode === 'instant' ? 'result' : 'playback';
     const outcome = await runOperation('simulate-fight', 'Preparing the fight', (report) => {
       report('simulating-fight', 'Loading fighters and camp state');
       const bt = save.bouts[bout.id];
@@ -236,22 +275,20 @@ export function FightPage() {
       return { ok: true, noOpReason: null, error: null, fromDate: null, toDate: null, daysAdvanced: 0, eventsResolved: [], headlines: [], stoppedBecause: null, navigateTo: null, summary: '' };
     });
     if (!outcome.ok) {
+      setRevealing(false);
+      setFightPlayback(null);
+      scrollTarget.current = null;
       setStartError(outcome.error ?? 'The fight could not be started.');
       setPlayback('error');
       return;
     }
     if (mode === 'instant') {
       // Even instant mode shows that something happened before the answer lands.
-      setRevealing(true);
       setVisible(Number.MAX_SAFE_INTEGER);
       setTimeout(() => setRevealing(false), 900);
     } else {
       setVisible(0);
     }
-  };
-
-  const togglePlan = (p: GamePlanKey) => {
-    setPlans((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : cur.length >= 3 ? cur : [...cur, p]));
   };
 
   const eventsToShow = events.slice(0, shown).filter((e) => e.text);
@@ -267,6 +304,7 @@ export function FightPage() {
           {bout.scheduledRounds} rounds at {bout.contractedWeightLb} lb
         </span>
         {bout.isTitleFight && <span className="tag champ">championship</span>}
+        {bout.regionalTitle && <span className="tag champ">regional title</span>}
         {bout.isInterimTitleFight && <span className="tag interim">interim title</span>}
         {bout.isCatchweight && <span className="tag warn">catchweight</span>}
         {bout.titleIneligibleFighterIds.length > 0 && (
@@ -294,18 +332,13 @@ export function FightPage() {
                 <Link to={`/fighter/${b.id}`}>{b.name}</Link>
               </strong>
             </div>
-            <div className="a">
-              {a.record.wins}-{a.record.losses}
-              {a.record.draws ? `-${a.record.draws}` : ''}
-            </div>
-            <div className="label">Record</div>
-            <div className="b">
-              {b.record.wins}-{b.record.losses}
-              {b.record.draws ? `-${b.record.draws}` : ''}
-            </div>
-            <div className="a">{a.isChampion ? 'Champion' : (a.ranking ?? 'Unranked')}</div>
+            {/* An amateur bout is billed on the amateur records, which is all either fighter has. */}
+            <div className="a">{recordLine(recordA)}</div>
+            <div className="label">{bout.isAmateur ? 'Amateur record' : 'Record'}</div>
+            <div className="b">{recordLine(recordB)}</div>
+            <div className="a">{standingA}</div>
             <div className="label">Ranking</div>
-            <div className="b">{b.isChampion ? 'Champion' : (b.ranking ?? 'Unranked')}</div>
+            <div className="b">{standingB}</div>
             <div className="a">{ageOn(a.birthDate, save.date) ?? a.ageAtSnapshot ?? '?'}</div>
             <div className="label">Age</div>
             <div className="b">{ageOn(b.birthDate, save.date) ?? b.ageAtSnapshot ?? '?'}</div>
@@ -326,11 +359,11 @@ export function FightPage() {
               <EstimatedRating estimate={estB.ovr} low={estB.exact ? undefined : estB.ovrLow} high={estB.exact ? undefined : estB.ovrHigh} />
             </div>
             <div className="a">
-              <Rating value={a.longevity} />
+              <Rating value={pre?.longevityA ?? a.longevity} />
             </div>
             <div className="label">Longevity</div>
             <div className="b">
-              <Rating value={b.longevity} />
+              <Rating value={pre?.longevityB ?? b.longevity} />
             </div>
             <div className="a small dim">{a.styleLabels.map((s) => s.label).join(', ')}</div>
             <div className="label">Style</div>
@@ -344,7 +377,11 @@ export function FightPage() {
           )}
         </Panel>
 
-        {!result && isPlayerBout && (
+        {!result && isPlayerBout && !fightable && (
+          <NotYetPanel bout={bout} save={save} blockerLabel={blocker ? stageLabel(blocker.stage) : null} onGo={navigate} />
+        )}
+
+        {!result && fightable && (
           <Panel title="Game plan">
             <p className="small dim">
               Pick up to three. A coherent plan sharpens preparation. Stacking contradictory plans wastes the camp.
@@ -354,20 +391,7 @@ export function FightPage() {
                 <span className="tag">{planLabel}</span> Preselected from your camp. Change it if the read has moved on.
               </p>
             )}
-            <div className="row" style={{ gap: 4 }}>
-              {ALL_PLANS.map((p) => (
-                <span key={p} className={`plan-chip${plans.includes(p) ? ' on' : ''}`} onClick={() => togglePlan(p)} title={GAME_PLAN_DESCRIPTION[p]}>
-                  {GAME_PLAN_LABEL[p]}
-                </span>
-              ))}
-            </div>
-            <ul className="small dim mt" style={{ paddingLeft: 16 }}>
-              {plans.map((p) => (
-                <li key={p}>
-                  <strong>{GAME_PLAN_LABEL[p]}:</strong> {GAME_PLAN_DESCRIPTION[p]}
-                </li>
-              ))}
-            </ul>
+            <GamePlanPicker plans={plans} onChange={(next) => setPlans(next)} />
             <div className="row mt">
               <label>Presentation</label>
               <select value={mode} disabled={busy} onChange={(e) => setMode(e.target.value as typeof mode)}>
@@ -440,7 +464,7 @@ export function FightPage() {
                     <tbody>
                       {[...hype.moments].reverse().map((m, i) => (
                         <tr key={i}>
-                          <td className="dim small nowrap">{m.date}</td>
+                          <td className="dim small nowrap">{formatDate(m.date)}</td>
                           <td className="wrap small">{m.label}</td>
                           <td className={`num ${m.delta > 0 ? 'good' : 'bad'}`}>
                             {m.delta > 0 ? '+' : ''}
@@ -475,23 +499,17 @@ export function FightPage() {
         {result && !visibility.concluded && (
           <Panel title="In progress">
             <p className="playback-status">
-              <span className="tag">{PLAYBACK_LABEL[visibility.state]}</span>
+              <span className="tag">{PLAYBACK_LABEL[revealing ? 'preparing' : playback]}</span>
               <span className="small dim">Round {currentRound} of {result.scheduledRounds}</span>
             </p>
             <p className="dim small">
-              The official result, the scorecards, the money, the rankings and the post fight tasks all stay hidden
-              until the fight is over.
+              The official result, the scorecards, the purse and the rankings stay hidden until the fight is over.
             </p>
-          </Panel>
-        )}
-
-        {result && visibility.collectingScorecards && !visibility.showScorecards && (
-          <Panel title="Scorecards Being Collected">
-            <p>The final horn has sounded. The judges are handing in their cards.</p>
           </Panel>
         )}
 
         {result && visibility.showWinner && (
+          <div ref={resultRef} className="scroll-anchor">
           <Panel title="Result">
             <p style={{ fontSize: 15 }}>
               {result.winnerId ? (
@@ -570,12 +588,14 @@ export function FightPage() {
                 Injuries: {[...result.injuriesA.map((i) => `${a.name}: ${i}`), ...result.injuriesB.map((i) => `${b.name}: ${i}`)].join('. ')}
               </p>
             )}
+            {isPlayerBout && visibility.showMoney && <Aftermath save={save} bout={bout} result={result} />}
           </Panel>
+          </div>
         )}
       </div>
 
       {result && (
-        <>
+        <div ref={playbackRef} className="scroll-anchor">
           <Tabs
             tabs={[
               { key: 'play-by-play', label: 'Play by play' },
@@ -625,13 +645,13 @@ export function FightPage() {
                 <span className={`tag${fightFinished ? ' champ' : ''}`}>{PLAYBACK_LABEL[playback]}</span>
                 <span className="small dim">
                   Round {currentRound} of {result.scheduledRounds}
-                  {fightFinished ? ' · the fight has officially ended' : mode === 'live' && !atEnd ? ' · running' : ''}
+                  {fightFinished ? ' · the fight has officially ended' : running ? ' · running' : ''}
                 </span>
               </div>
               {events.length === 0 ? (
                 <p className="dim small">
-                  The detailed play by play for this fight has been trimmed to keep the save small. The result, round
-                  summaries and full statistics are all preserved.
+                  The detailed play by play for this fight has been archived to keep the save small. The result, recap,
+                  totals and scorecards are all preserved.
                 </p>
               ) : (
                 <div className="play-by-play" ref={commentaryRef} onScroll={onCommentaryScroll}>
@@ -700,7 +720,7 @@ export function FightPage() {
                       </>
                     );
                   })()}
-                  <p className="small dim">Corner: {result.rounds.find((r) => r.round === currentRound)?.summary ?? 'Reset and go again.'}</p>
+                  <p className="small dim">Corner: {result.rounds.find((r) => r.round === currentRound)?.summary || 'Reset and go again.'}</p>
                   <button
                     className="primary"
                     onClick={() => {
@@ -835,8 +855,151 @@ export function FightPage() {
               </p>
             </Panel>
           )}
-        </>
+        </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Shown in place of the game plan when the player's bout cannot be fought from here yet.
+ *
+ * The tale of the tape stays above it, so the event page preview is still a preview. It used to
+ * offer Start the fight on any unfought bout, weeks early or after a cancellation.
+ */
+function NotYetPanel({
+  bout,
+  save,
+  blockerLabel,
+  onGo,
+}: {
+  bout: Bout;
+  save: SaveGame;
+  blockerLabel: string | null;
+  onGo: (to: string) => void;
+}) {
+  if (bout.status === 'canceled') {
+    return (
+      <Panel title="Bout canceled">
+        <Notice kind="bad">This bout was canceled.{bout.cancelReason ? ` ${bout.cancelReason}` : ''}</Notice>
+        <button className="mt" onClick={() => onGo('/dashboard')}>
+          Back to the dashboard
+        </button>
+      </Panel>
+    );
+  }
+  if (bout.status !== 'scheduled') {
+    return (
+      <Panel title="Not on the card">
+        <p>This bout is not scheduled to be fought.</p>
+      </Panel>
+    );
+  }
+  if (blockerLabel) {
+    return (
+      <Panel title="Before the fight">
+        <p>{blockerLabel} has not happened yet. It comes before the walk to the cage.</p>
+        <button className="primary" onClick={() => onGo(`/fightweek/${bout.id}`)}>
+          Go to fight week
+        </button>
+      </Panel>
+    );
+  }
+  // Fight week exists once its stages have been created; before that the camp is where the work is.
+  const inFightWeek = tasksForBout(save, bout.id).length > 0;
+  return (
+    <Panel title="Not fight night yet">
+      <p>Fight night is {formatDate(bout.date)}. The game plan is chosen here on the night, after the weigh in.</p>
+      <button className="primary" onClick={() => onGo(inFightWeek ? `/fightweek/${bout.id}` : '/camp')}>
+        {inFightWeek ? 'Go to fight week' : 'Go to camp'}
+      </button>
+    </Panel>
+  );
+}
+
+function rankLabel(champion: boolean, ranking: number | null): string {
+  return champion ? 'Champion' : ranking === null ? 'Unranked' : `#${ranking}`;
+}
+
+/**
+ * What the fight changed for the player: the money, any bonus, the belt and the ranking.
+ *
+ * The result panel showed the method and the narrative and nothing else, so a player who had just
+ * won a title or a bonus saw no sign of it beyond the tale of the tape quietly changing.
+ */
+function Aftermath({ save, bout, result }: { save: SaveGame; bout: Bout; result: FightResult }) {
+  const meId = save.player.fighterId;
+  if (!meId) return null;
+  const isA = bout.fighterAId === meId;
+  if (!isA && bout.fighterBId !== meId) return null;
+  const me = save.fighters[meId];
+  const event = save.events[bout.eventId];
+  const regional = Boolean(event?.promotionId);
+  const division = DIVISION_BY_ID[bout.divisionId];
+  const won = result.winnerId === meId;
+  const rows: [string, string][] = [];
+
+  // The money as it was actually paid, from the ledger. A save that has pruned those lines falls
+  // back to the purse agreed at booking.
+  const entries = (save.ledger ?? []).filter((e) => e.boutId === bout.id && e.fighterId === meId);
+  const sum = (pick: (e: (typeof entries)[number]) => boolean) => entries.filter(pick).reduce((t, e) => t + e.amount, 0);
+  if (bout.isAmateur) {
+    rows.push(['Purse', 'None. Amateur bouts pay nothing.']);
+  } else if (entries.length > 0) {
+    const show = sum((e) => e.kind === 'show-pay');
+    const win = sum((e) => e.kind === 'win-bonus');
+    const takeHome = sum((e) => e.direction === 'in') - sum((e) => e.direction === 'out');
+    rows.push(['Purse', `${formatMoney(show)} to show${win > 0 ? `, ${formatMoney(win)} to win` : ''}`]);
+    rows.push(['Take home', `${formatMoney(takeHome)} after commission, the gym's share, tax and travel`]);
+  } else {
+    const purse = isA ? bout.purseA : bout.purseB;
+    rows.push(['Purse', `${formatMoney(purse.show)} to show${won && purse.win > 0 ? `, ${formatMoney(purse.win)} to win` : ''}`]);
+  }
+
+  // Regional cards pay no bonuses. On the main promotion they are decided once the card is done.
+  if (!regional && event) {
+    if (event.status !== 'completed') {
+      rows.push(['Bonuses', 'Bonuses are announced after the card']);
+    } else {
+      const bonuses: string[] = [];
+      if (event.performanceBonusFighterIds?.includes(meId)) bonuses.push(`Performance of the Night, ${formatMoney(event.bonusAmount)}`);
+      if (event.fightOfTheNightBoutId === bout.id) bonuses.push('Fight of the Night');
+      rows.push(['Bonuses', bonuses.length > 0 ? bonuses.join('. ') : 'None on this card']);
+    }
+  }
+
+  // The belt, judged against who held it going in. The live champion flag cannot tell a new
+  // champion from a successful defence once the result has been applied.
+  const pre = bout.preFight;
+  if (isChampionshipBout(bout) && pre && division) {
+    const title = `${bout.isInterimTitleFight ? 'interim ' : ''}${division.name} title`;
+    const winner = result.winnerId ? save.fighters[result.winnerId] : null;
+    const winnerWasChampion = result.winnerId === bout.fighterAId ? pre.championA : pre.championB;
+    const holder = pre.championA ? save.fighters[bout.fighterAId] : pre.championB ? save.fighters[bout.fighterBId] : null;
+    if (winner && bout.titleIneligibleFighterIds.includes(winner.id)) {
+      rows.push(['Title', `${winner.name} missed weight and could not win the ${title}`]);
+    } else if (winner) {
+      rows.push(['Title', winnerWasChampion ? `${winner.name} retains the ${title}` : `${winner.name} is the new ${bout.isInterimTitleFight ? 'interim ' : ''}${division.name} champion`]);
+    } else {
+      rows.push(['Title', holder ? `${holder.name} retains the ${title}` : `The ${title} stays vacant`]);
+    }
+  }
+
+  // Rankings are recomputed in the weekly pass, so straight after the fight the number has not
+  // moved yet. Saying so is better than showing the old number as if it were the new one.
+  if (!regional && pre && me) {
+    const before = rankLabel(isA ? pre.championA : pre.championB, isA ? pre.rankingA : pre.rankingB);
+    const now = rankLabel(me.isChampion, me.ranking);
+    const table = save.rankings[bout.divisionId];
+    if (now !== before) rows.push(['Ranking', `${before} before the fight, ${now} now`]);
+    else if (!table || table.updatedOn <= bout.date) rows.push(['Ranking', `${before}. Rankings update next week`]);
+    else rows.push(['Ranking', `${before}, unchanged`]);
+  }
+
+  return (
+    <div className="mt">
+      <h3>Aftermath</h3>
+      <KeyValues rows={rows} />
     </div>
   );
 }

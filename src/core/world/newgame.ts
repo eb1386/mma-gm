@@ -4,7 +4,7 @@ import type { SnapshotFile } from '../data/snapshot';
 import { NAME_BANKS } from '../data/names';
 import { clamp, Rng } from '../rng';
 import { addDays, type GameMode, type IsoDate } from '../types/common';
-import { ovrDisplayed, RATING_KEYS, type Fighter, type Ratings } from '../types/fighter';
+import { ovrDisplayed, RATING_KEYS, type Fighter, type Ratings, historyRatings } from '../types/fighter';
 import { DEFAULT_SETTINGS, SAVE_SCHEMA_VERSION, type SaveGame, type SaveSettings } from '../types/save';
 import type { Gym } from '../types/world';
 import { generateContract } from './economy';
@@ -12,11 +12,15 @@ import { potConfidenceFor } from './development';
 import { updatePot } from './pot';
 import { createGym, hireStaff, moveFighterToGym, seedRankedProduced } from './gyms';
 import { allDivisionRankings } from './rankings';
-import { clampWalkingWeight } from './health';
-import { generateFighter, uniformConfidence } from './generator';
+import { clampWalkingWeight, longevityFromWear } from './health';
+import { cleanNickname, estimatedBirthDate } from '../data/real-fighter';
+import { CREATION_PRESETS, generateFighter, makeDevelopmentProfile, uniformConfidence, type CreationPreset } from './generator';
 import { scheduleEvents } from './matchmaking';
 import { pushNews } from './history';
 import { ensureOfficials } from './officials';
+import { startRegionalCareer } from './regional';
+import { seedManagers, seedOpeningBalance } from './finance';
+import { MIN_REGIONAL_START_AGE } from '../config/regional';
 
 /**
  * New game construction.
@@ -58,6 +62,11 @@ export interface NewGameOptions {
   playerFighterId?: string;
   /** Fighter created by the player, already built by the creation screen. */
   createdFighter?: Fighter;
+  /**
+   * Start the created fighter on a regional promotion rather than signed to the main roster. A
+   * fighter under eighteen starts as an amateur.
+   */
+  regionalPromotionId?: string;
   /** Coach mode setup. */
   coach?: { name: string; gymId?: string; newGym?: { name: string; country: string; city: string } };
   /** Called as each phase begins. Lets the interface report progress and stay responsive. */
@@ -293,6 +302,17 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
   phase('Copying real fighters', `${snapshot.fighters.length} athletes`);
   for (const f of snapshot.fighters) {
     const copy = JSON.parse(JSON.stringify(f)) as Fighter;
+    // A snapshot built before the builder stripped them carries the profile's quotes.
+    copy.nickname = cleanNickname(copy.nickname);
+    // Longevity follows wear by the health model's weighting, which older snapshots did not use.
+    copy.longevity = longevityFromWear(copy.wear);
+    // The source publishes an age, not a date of birth. Without a birth date the fighter would
+    // stay that age for the whole save, so one is estimated from the snapshot date (not the
+    // career start date, which can differ) and flagged as an estimate.
+    if (!copy.birthDate && copy.ageAtSnapshot !== null) {
+      copy.birthDate = estimatedBirthDate(copy.id, copy.ageAtSnapshot, snapshot.meta.snapshotDate);
+      copy.birthDateEstimated = true;
+    }
     // Walking weight is a model estimate, never a sourced fact, and the snapshot builder
     // sets it from the divisional norm alone. Holding it to what this fighter can actually
     // cut is the same rule the weekly pass applies.
@@ -371,8 +391,8 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
     f.ratingHistory = [
       {
         date: save.date,
-        ratings: { ...f.ratings },
-        ovr: ovrDisplayed(f.ratings),
+        ratings: historyRatings(f.ratings),
+        ovr: ovrDisplayed(historyRatings(f.ratings)),
         pot: f.pot,
         longevity: f.longevity,
         reason: 'save created',
@@ -386,24 +406,41 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
       const created = opts.createdFighter;
       save.fighters[created.id] = created;
       save.player.fighterId = created.id;
-      const contract = generateContract(created, save, rng, {
-        isPlayerFighter: true,
-        fights: 4,
-        note: 'Simulated game contract issued on signing. Real contract terms are not public and are never used here.',
-      });
-      save.contracts[contract.id] = contract;
-      created.contractId = contract.id;
+      save.player.startRanking = null;
+      if (!opts.regionalPromotionId) {
+        const contract = generateContract(created, save, rng, {
+          isPlayerFighter: true,
+          fights: 4,
+          note: 'Simulated game contract issued on signing. Real contract terms are not public and are never used here.',
+        });
+        save.contracts[contract.id] = contract;
+        created.contractId = contract.id;
+      }
       if (!created.gymId) {
-        const gym = rng.weighted(
-          Object.values(save.gyms).filter((g) => g.fighterIds.length < g.capacity),
-          (g) => g.reputation
-        );
+        const open = Object.values(save.gyms).filter((g) => g.fighterIds.length < g.capacity);
+        // A created fighter trains near home: a gym in their own country when there is one. This
+        // used to apply to regional starts only, so a main roster start from Brazil was placed by a
+        // pick across every gym in the world and often landed on another continent.
+        const local = open.filter((g) => g.country === created.country);
+        const gym = rng.weighted(local.length > 0 ? local : open, (g) => g.reputation);
         moveFighterToGym(save, created.id, gym.id);
       }
+      if (opts.regionalPromotionId) startRegionalCareer(save, created, opts.regionalPromotionId, rng);
+      // The projection pass above ran before the created fighter existed, so their Pot read zero
+      // until the year end refresh.
+      updatePot(save, created);
+      created.potConfidence = potConfidenceFor(created, save.date);
+      created.ratingHistory = [
+        { date: save.date, ratings: historyRatings(created.ratings), ovr: ovrDisplayed(historyRatings(created.ratings)), pot: created.pot, longevity: created.longevity, reason: 'career created' },
+      ];
     } else if (opts.playerFighterId) {
       save.player.fighterId = opts.playerFighterId;
       const f = save.fighters[opts.playerFighterId];
       if (f) {
+        const table = save.rankings[f.divisionId];
+        // Where the career starts, so the ranking milestones count only what this career climbs.
+        save.player.startRanking =
+          table?.championId === f.id ? 0 : table?.interimChampionId === f.id ? 1 : table?.entries.find((e) => e.fighterId === f.id)?.rank ?? f.ranking ?? null;
         const existing = f.contractId ? save.contracts[f.contractId] : null;
         if (existing) {
           existing.note =
@@ -440,6 +477,15 @@ export function createNewGame(snapshot: SnapshotFile, opts: NewGameOptions): New
         if (f) f.relationships.player = 55;
       }
     }
+  }
+
+  // The money a fighter career opens with, and the managers there are to choose from. Both are
+  // set once the player fighter, gym and circuit exist, because the opening balance is sized from
+  // how that fighter lives. Neither draws from the world rng.
+  if (opts.mode === 'fighter' && save.player.fighterId) {
+    const me = save.fighters[save.player.fighterId];
+    if (me) seedOpeningBalance(save, me);
+    seedManagers(save, opts.seed);
   }
 
   // 6. Schedule the opening months of the calendar.
@@ -506,12 +552,75 @@ export interface CreateFighterInput {
  * only determines naming, home market popularity, travel distance and which regional gyms
  * are nearby.
  */
+function createdDevelopment(rng: Rng, ratings: Ratings, age: number, preset: CreationPreset | undefined) {
+  const profile = makeDevelopmentProfile(rng, ratings, age);
+  const ovr = RATING_KEYS.reduce((s, k) => s + ratings[k], 0) / 6;
+  if (preset?.ceilingMean !== undefined) {
+    // An absolute ceiling for the preset, with a year's more room for every year a fighter starts
+    // younger than twenty three, so starting at sixteen still pays off. Only created fighters take
+    // this path: the generated world keeps the profile it was balanced around.
+    const mean = preset.ceilingMean + Math.max(0, 23 - age);
+    profile.hiddenCeiling = clamp(rng.normal(mean, 4), ovr + 3, 95);
+  } else {
+    profile.hiddenCeiling = clamp(profile.hiddenCeiling + (preset?.potBias ?? 0), ovr - 3, 99);
+  }
+  return profile;
+}
+
+/**
+ * The ages a preset can be created at.
+ *
+ * The age field took anything from sixteen to forty five whatever the preset, so a late career
+ * veteran's full budget and 24-8 record could be put on a sixteen year old, who then started far
+ * above the local circuit with a whole career of Longevity ahead. A few years either side of the
+ * preset's own range is allowed. The raw prospect reaches down to the youngest regional start,
+ * because starting at sixteen and earning the call up is the path that preset is for. The sandbox
+ * is free by design.
+ */
+export function presetAgeBounds(preset: CreationPreset | undefined): [number, number] {
+  if (!preset || preset.key === 'sandbox') return [MIN_REGIONAL_START_AGE, 45];
+  const lo = preset.key === 'raw-prospect' ? MIN_REGIONAL_START_AGE : Math.max(MIN_REGIONAL_START_AGE, preset.ageRange[0] - 3);
+  return [lo, Math.min(45, preset.ageRange[1] + 4)];
+}
+
+/**
+ * Wear that gives a created fighter the Longevity their age and record imply. The deficit is the
+ * career already lived, so it goes into the head and the joints, the two kinds of wear rest barely
+ * recovers; spread over the fast healing kinds it melted back a point every few weeks. Past 60 on
+ * those two, the remainder is spread over the other four. The longevityFromWear weights sum to one:
+ * head and joints carry 0.52 of it and the rest 0.48.
+ */
+function createdWear(longevity: number): Pick<Fighter, 'wear' | 'longevity'> {
+  const deficit = 100 - longevity;
+  const lasting = Math.min(60, deficit / 0.52);
+  const rest = Math.max(0, (deficit - lasting * 0.52) / 0.48);
+  const wear = { neurological: lasting, joint: lasting, facial: rest, body: rest, weightCut: rest, recovery: rest };
+  return { wear, longevity: longevityFromWear(wear) };
+}
+
 export function buildCreatedFighter(input: CreateFighterInput, seed: number, today: IsoDate): Fighter {
+  const preset = CREATION_PRESETS.find((p) => p.key === input.presetKey);
+  // Reassigned once the form values are sanitised below.
   const rng = new Rng(seed ^ 0xc0ffee);
   const bank = NAME_BANKS.find((b) => b.country === input.country) ?? NAME_BANKS[0];
   const division = DIVISION_BY_ID[input.divisionId];
   const ratings = {} as Ratings;
-  for (const k of RATING_KEYS) ratings[k] = clamp(Math.round(input.allocation[k]), 15, 90);
+  for (const k of RATING_KEYS) ratings[k] = clamp(Math.round(Number.isFinite(input.allocation[k]) ? input.allocation[k] : 15), 15, 90);
+  // Number fields arrive straight from the form. An emptied field is NaN and a typed one can be
+  // anything, and both used to reach the fighter as they were: a NaN height, an age of four.
+  const num = (v: number, fallback: number, lo: number, hi: number) => clamp(Math.round(Number.isFinite(v) ? v : fallback), lo, hi);
+  input = {
+    ...input,
+    age: num(input.age, preset ? Math.round((preset.ageRange[0] + preset.ageRange[1]) / 2) : 24, ...presetAgeBounds(preset)),
+    heightIn: num(input.heightIn, division.priors.heightIn.mean, 58, 86),
+    reachIn: num(input.reachIn, division.priors.reachIn.mean, 56, 92),
+    walkingWeightLb: num(input.walkingWeightLb, division.limitLb + division.typicalWalkAroundOverLb, division.floorLb, division.limitLb + 45),
+    startingRecord: {
+      wins: num(input.startingRecord.wins, 0, 0, 60),
+      losses: num(input.startingRecord.losses, 0, 0, 40),
+    },
+  };
+  const { wins, losses } = input.startingRecord;
 
   const birthYear = Number(today.slice(0, 4)) - input.age;
   const base = generateFighter(rng, {
@@ -531,11 +640,13 @@ export function buildCreatedFighter(input: CreateFighterInput, seed: number, tod
     firstName: input.firstName,
     lastName: input.lastName,
     name: `${input.firstName} ${input.lastName}`.trim(),
-    nickname: input.nickname,
+    nickname: cleanNickname(input.nickname?.trim()),
     country: input.country,
     countryCode: bank.code,
     hometown: input.hometown,
-    birthDate: `${birthYear}-${String(rng.int(1, 12)).padStart(2, '0')}-${String(rng.int(1, 28)).padStart(2, '0')}`,
+    // The birthday falls in the year before today's date, so the fighter is exactly the age the
+    // player chose. A random month used to leave half of them a year younger than they were made.
+    birthDate: addDays(`${birthYear}${today.slice(4, 8)}${today.slice(8, 10) === '29' && today.slice(5, 7) === '02' ? '28' : today.slice(8, 10)}`, -rng.int(0, 360)),
     ageAtSnapshot: input.age,
     heightIn: input.heightIn,
     reachIn: input.reachIn,
@@ -547,8 +658,22 @@ export function buildCreatedFighter(input: CreateFighterInput, seed: number, tod
     eligibleDivisions: [input.divisionId],
     ratings,
     ratingConfidence: uniformConfidence('very-high'),
-    record: { wins: input.startingRecord.wins, losses: input.startingRecord.losses, draws: 0, noContests: 0 },
+    record: { wins, losses, draws: 0, noContests: 0 },
     ufcRecord: { wins: 0, losses: 0, draws: 0, noContests: 0 },
+    // The method totals and the streak describe the record the player chose. They were inherited
+    // from a random record the generator rolled and then discarded, so a 4-0 fighter could show
+    // seven knockout wins and a streak longer than their win count.
+    methods: {
+      koWins: Math.round(wins * 0.4),
+      subWins: Math.round(wins * 0.25),
+      decWins: wins - Math.round(wins * 0.4) - Math.round(wins * 0.25),
+      koLosses: Math.round(losses * 0.35),
+      subLosses: Math.round(losses * 0.25),
+      decLosses: losses - Math.round(losses * 0.35) - Math.round(losses * 0.25),
+    },
+    winStreak: losses === 0 ? wins : Math.min(wins, base.winStreak),
+    lossStreak: 0,
+    careerEarnings: wins * 9000 + losses * 6000,
     gymId: input.gymId,
     isRealPerson: false,
     realSourceIds: null,
@@ -557,9 +682,16 @@ export function buildCreatedFighter(input: CreateFighterInput, seed: number, tod
     peakOvr: ovrDisplayed(ratings),
     peakOvrDate: today,
     popularity: clamp(6 + input.startingRecord.wins * 1.2, 1, 40),
-    longevity: clamp(Math.round(98 - Math.max(0, input.age - 23) * 1.6 - input.startingRecord.losses * 1.4), 30, 100),
+    // Wear is the source of truth for Longevity: every health pass recomputes Longevity from it. The
+    // chosen Longevity used to be set alone over the generator's light wear, so the first rest week
+    // raised it from 93 to 98.
+    ...createdWear(clamp(Math.round(98 - Math.max(0, input.age - 23) * 1.6 - input.startingRecord.losses * 1.4), 30, 100)),
     lastFightDate: null,
     walkingWeightNote: undefined,
+    // The development profile belongs to the fighter the player actually built. It used to be the
+    // one drawn for a throwaway Ovr 60 base, and the preset's ceiling bias was never applied, so a
+    // raw prospect did not have the higher ceiling its description promises.
+    development: createdDevelopment(rng, ratings, input.age, preset),
   } as Fighter & { walkingWeightNote?: undefined };
   void division;
 }

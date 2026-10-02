@@ -69,7 +69,13 @@ function ageMultiplier(key: RatingKey, age: number, profile: Fighter['developmen
   const peak = curve.peak + (profile.peakAge - 29.5);
   if (age <= peak) {
     // Growth capacity tapers as the peak approaches rather than stopping abruptly.
-    return clamp(1 - Math.pow(clamp((age - 18) / Math.max(1, peak - 18), 0, 1), 2.1) * 0.6, 0.25, 1.1);
+    const base = clamp(1 - Math.pow(clamp((age - 18) / Math.max(1, peak - 18), 0, 1), 2.1) * 0.6, 0.25, 1.1);
+    // A teenager improves faster than anybody. The curve used to flatten below eighteen, so a
+    // fighter who started at sixteen developed exactly as slowly as an adult, which is the opposite
+    // of how a young fighter actually grows. Nobody in the main roster is this young, so this only
+    // shapes careers that start on the regional circuit.
+    const youth = age < 21 ? 1 + (21 - age) * 0.18 : 1;
+    return base * youth;
   }
   return 0;
 }
@@ -200,7 +206,24 @@ export interface PotProjectionOptions {
   stepWeeks?: number;
   /** Years of career to project. */
   horizonYears?: number;
+  /** The difficulty's development rate as this fighter trains under it. One for the world. */
+  difficultyScale?: number;
 }
+
+/**
+ * The training quality a projected career averages, week in week out.
+ *
+ * A career is about nine weeks of ordinary gym time at 0.42 for every eight weeks of camp at
+ * about 0.7, which blends to about 0.55, and the fights in between teach a little more than the
+ * projection models directly. The projection used to train every week at camp level or better,
+ * 0.6 to 1.0, so Pot assumed a career nobody lives and almost nobody reached it. The projection's
+ * steps are two to thirteen weeks long, too coarse to switch between camp and gym time, so one
+ * blended figure is applied to every step with a little spread between paths. Calibrated against
+ * full simulated careers in the projection's own average room: about 28 percent of them finish
+ * above Pot, which is what the default 72nd percentile setting promises.
+ */
+export const POT_TRAINING_QUALITY = 0.63;
+export const POT_TRAINING_QUALITY_SPREAD = 0.05;
 
 export function estimatePot(
   fighter: Fighter,
@@ -225,7 +248,7 @@ export function estimatePot(
     };
     const simFighter: Fighter = { ...fighter, development: pathProfile, ratings: { ...fighter.ratings } };
     const input: DevelopmentInput = {
-      trainingQuality: clamp(0.6 + rng.next() * 0.4, 0, 1),
+      trainingQuality: clamp(POT_TRAINING_QUALITY + (rng.next() * 2 - 1) * POT_TRAINING_QUALITY_SPREAD, 0, 1),
       focus,
       coaching: clamp(rng.normal(66, 12), 20, 96),
       partners: {
@@ -238,7 +261,7 @@ export function estimatePot(
       },
       activity: clamp(0.5 + rng.next() * 0.5, 0, 1),
       longevity: fighter.longevity,
-      difficultyScale: 1,
+      difficultyScale: opts.difficultyScale ?? 1,
       trainingCapacity: 1,
     };
 
@@ -252,8 +275,9 @@ export function estimatePot(
       // Projected forward from the real date. It used to walk a fabricated calendar starting in
       // the year 2000, and `developWeek` derives age from the birth date whenever there is one,
       // so every real fighter was projected as a child: growth ran at its maximum and the aging
-      // decline never applied at all. The snapshot age is still updated for the generated
-      // fighters who have no birth date and fall back to it.
+      // decline never applied at all. Every fighter now has a birth date (real ones an estimated
+      // one), so the advancing simDate is what ages the copy; the snapshot age is still stepped for
+      // a fighter with no birth date, who falls back to it.
       const simDate = addDays(date, step * stepWeeks * 7);
       simFighter.ageAtSnapshot = Math.floor(simAge);
       const deltas = developWeek(simFighter, simDate, input, rng, stepWeeks);

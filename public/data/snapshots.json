@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-07-29T08:58:14.516Z",
+  "generatedAt": "2026-10-02T15:35:37.291Z",
   "snapshots": [
     {
-      "snapshotId": "ufc-official-2026-07-29",
-      "snapshotDate": "2026-07-29",
-      "label": "Official UFC roster, 2026-07-29",
-      "file": "snapshot-2026-07-29.json",
-      "fighterCount": 176,
+      "snapshotId": "ufc-official-2026-10-01",
+      "snapshotDate": "2026-10-01",
+      "label": "Official UFC roster, 2026-10-01",
+      "file": "snapshot-2026-10-01.json",
+      "fighterCount": 664,
       "isLatest": true
     }
   ]

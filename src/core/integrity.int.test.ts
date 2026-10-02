@@ -4,7 +4,8 @@ import { addDays } from './types/common';
 import { bookedCareer, newCareer, runWorld } from './testing/fixtures';
 import { runGymMonth } from './world/gyms';
 import { simulatePlayerBout } from './world/tick';
-import { createCamp, finalizeCamp, CAMP_FORM_BASELINE, estimateCampCost } from './world/camp';
+import { campEndFor, campStartFor, createCamp, finalizeCamp, CAMP_FORM_BASELINE, estimateCampCost, runCampWeek, type CampSetup } from './world/camp';
+import { ledger } from './world/finance';
 import { performSocialAction, socialActionAllowance, SOCIAL_ACTIONS_PER_WEEK, decaySocial, recordSocialHistory } from './world/identity';
 import { rememberPlan, recallPlan } from './world/gameplan-memory';
 import { migrateSave } from './save/migrate';
@@ -169,6 +170,103 @@ describe('camp form reaches fight night', () => {
     expect(f.save.counters.camp).toBe(before);
     // And the quote must match what is actually charged.
     expect(createCamp(f.save, me, setup).cost).toBe(quoted.cost);
+  });
+});
+
+describe('camp length, bookings and rooms', () => {
+  const campCostsOf = (save: SaveGame, fighterId: string) =>
+    ledger(save)
+      .filter((e) => e.fighterId === fighterId && e.kind === 'camp-costs')
+      .reduce((t, e) => t + e.amount, 0);
+  const setupFor = (save: SaveGame, me: Fighter, boutDate: string, weeks: number, over: Partial<CampSetup> = {}): CampSetup => ({
+    boutId: null,
+    startDate: weeks > 0 ? campStartFor(boutDate, weeks) : save.date,
+    endDate: campEndFor(boutDate),
+    focus: { striking: 1, grappling: 1, wrestling: 1, submissions: 1, cardio: 1, durability: 1 },
+    intensity: 0.68,
+    gymId: me.gymId,
+    campType: 'home',
+    specialistHired: null,
+    gamePlan: ['pressure'],
+    arriveEarlyDays: 0,
+    ...over,
+  });
+
+  it('charges a twelve day camp with a specialist what it quoted, for one prep week at most', () => {
+    const f = newCareer(9204);
+    const me = playerOf(f.save);
+    const setup = setupFor(f.save, me, addDays(f.save.date, 12), 0, { specialistHired: 'Specialist coach', arriveEarlyDays: 4 });
+    const quoted = estimateCampCost(f.save, setup);
+    expect(quoted.weeks).toBe(0);
+    expect(quoted.cost).toBeGreaterThan(0);
+    const before = campCostsOf(f.save, me.id);
+    const camp = createCamp(f.save, me, setup);
+    f.save.camps[camp.id] = camp;
+    const rng = new Rng(3);
+    // The weekly pass keeps calling while the camp is live; a zero week camp used to run every time.
+    for (let w = 0; w < 4; w++) runCampWeek(f.save, camp, rng);
+    expect(camp.weeksCompleted).toBeLessThanOrEqual(Math.max(1, camp.weeks));
+    expect(campCostsOf(f.save, me.id) - before).toBe(quoted.cost);
+  });
+
+  it('charges a full camp exactly its quote across the weeks, bookings included', () => {
+    const f = newCareer(9205);
+    const me = playerOf(f.save);
+    const setup = setupFor(f.save, me, addDays(f.save.date, 7 + 6 * 7), 6, { specialistHired: 'Specialist coach', arriveEarlyDays: 7 });
+    const quoted = estimateCampCost(f.save, setup);
+    expect(quoted.weeks).toBe(6);
+    const before = campCostsOf(f.save, me.id);
+    const camp = createCamp(f.save, me, setup);
+    f.save.camps[camp.id] = camp;
+    const rng = new Rng(4);
+    for (let w = 0; w < 8; w++) runCampWeek(f.save, camp, rng);
+    expect(camp.weeksCompleted).toBe(6);
+    expect(campCostsOf(f.save, me.id) - before).toBe(quoted.cost);
+  });
+
+  it('prices early arrival, so the longest option is no longer free', () => {
+    const f = newCareer(9206);
+    const me = playerOf(f.save);
+    const boutDate = addDays(f.save.date, 7 + 8 * 7);
+    const standard = estimateCampCost(f.save, setupFor(f.save, me, boutDate, 8));
+    const early = estimateCampCost(f.save, setupFor(f.save, me, boutDate, 8, { arriveEarlyDays: 12 }));
+    expect(early.cost).toBeGreaterThan(standard.cost);
+  });
+
+  it('leaves any camp sharper than none at the same notice, and a long camp close to an ideal one', () => {
+    const sharpnessAfter = (weeks: number) => {
+      const f = newCareer(9207);
+      const me = playerOf(f.save);
+      const camp = createCamp(f.save, me, setupFor(f.save, me, addDays(f.save.date, 7 + weeks * 7), weeks));
+      f.save.camps[camp.id] = camp;
+      camp.weeksCompleted = weeks;
+      return finalizeCamp(f.save, camp, new Rng(6)).sharpness;
+    };
+    // A fighter who skips camp on three weeks' notice or more opens at about 0.45.
+    expect(sharpnessAfter(3)).toBeGreaterThan(0.45);
+    expect(sharpnessAfter(12)).toBeGreaterThan(sharpnessAfter(8) * 0.85);
+  });
+
+  it('gives a split camp the better coaching of its second room', () => {
+    const sharpnessWith = (secondGymId: string | null) => {
+      const f = newCareer(9208);
+      const me = playerOf(f.save);
+      const camp = createCamp(f.save, me, setupFor(f.save, me, addDays(f.save.date, 63), 8, { campType: 'split', secondGymId }));
+      f.save.camps[camp.id] = camp;
+      camp.weeksCompleted = 8;
+      return finalizeCamp(f.save, camp, new Rng(7)).sharpness;
+    };
+    const f = newCareer(9208);
+    const me = playerOf(f.save);
+    const coaching = (id: string) => {
+      const staff = f.save.gyms[id].staffIds.map((s) => f.save.staff[s]).filter(Boolean);
+      return staff.length > 0 ? staff.reduce((t, s) => t + s.quality, 0) / staff.length : 40;
+    };
+    const best = Object.keys(f.save.gyms)
+      .filter((id) => id !== me.gymId)
+      .sort((a, b) => coaching(b) - coaching(a))[0];
+    expect(coaching(best)).toBeGreaterThan(coaching(me.gymId!));
+    expect(sharpnessWith(best)).toBeGreaterThan(sharpnessWith(null));
   });
 });
 

@@ -1,4 +1,5 @@
 import { DIFFICULTY } from '../config/calibration';
+import { isMainResult, mainRosterFighters } from './circuit';
 import { clamp, Rng } from '../rng';
 import { addDays, ageOn, daysBetween, type IsoDate } from '../types/common';
 import { isChampionshipBout, isFinish, type FightResult } from '../types/fight';
@@ -6,7 +7,7 @@ import { PROMOTION_NAME } from '../config/branding';
 import type { Fighter } from '../types/fighter';
 import type { Contract, ContractOffer, ContractTerms, NegotiationRound } from '../types/world';
 import type { SaveGame } from '../types/save';
-import { record } from './finance';
+import { managerFor, purseMultiplierFrom, record } from './finance';
 
 /**
  * Money, leverage and popularity.
@@ -137,7 +138,7 @@ export function generateContract(
     exclusive: true,
   };
 
-  const id = `contract-${fighter.id}-${save.date}`;
+  const id = freeContractId(save, `contract-${fighter.id}-${save.date}`);
   return {
     id,
     fighterId: fighter.id,
@@ -165,19 +166,64 @@ export function generateContract(
  * Builds a negotiable offer with a hidden reservation range. The promotion will not
  * accept every counter, and repeated aggressive counters exhaust its patience.
  */
+/**
+ * Leverage the promotion needs before it puts each extra term on the table at all. Shared with the
+ * contract screen, which says which terms are available rather than letting a counter ask for one
+ * that has no budget behind it.
+ */
+export const SIGNING_BONUS_MIN_LEVERAGE = 55;
+export const PPV_POINTS_MIN_LEVERAGE = 80;
+/** The band of fight counts the promotion signs deals for. */
+export const CONTRACT_FIGHTS_MIN = 2;
+export const CONTRACT_FIGHTS_MAX = 6;
+
+/**
+ * How the last deal went, for a renewal. Only bouts on the main promotion's cards after the deal
+ * was signed count: a streak alone would credit wins from an earlier deal, or from the circuit.
+ */
+function recordSince(save: SaveGame, fighter: Fighter, since: IsoDate): { wins: number; losses: number } {
+  let wins = 0;
+  let losses = 0;
+  for (const id of fighter.boutIds) {
+    const r = save.history.results[id];
+    if (!r || r.date < since || !isMainResult(save, r)) continue;
+    if (r.winnerId === fighter.id) wins++;
+    else if (r.loserId === fighter.id) losses++;
+  }
+  return { wins, losses };
+}
+
 export function createContractOffer(fighter: Fighter, save: SaveGame, rng: Rng): ContractOffer {
   const leverage = computeLeverage(fighter, save);
   const diff = DIFFICULTY[save.settings.difficulty];
   const table = save.rankings[fighter.divisionId];
   const isChampion = table.championId === fighter.id;
-  const opening = baseShowPay(leverage.score, isChampion, false, diff.payScale);
+  // A manager earns their commission here. The multiplier is applied to the opening figure, so the
+  // first offer and everything the promotion is prepared to go to (the reservation below) move
+  // together. Applying it once, at the offer, is what keeps it from compounding into every purse.
+  const opening = baseShowPay(leverage.score, isChampion, false, diff.payScale) * purseMultiplierFrom(managerFor(save, fighter.id));
 
   // The opening offer sits below what the promotion will actually pay.
   const openingDiscount = clamp(0.72 + (leverage.score / 100) * 0.12, 0.6, 0.9);
+  // A renewal opens from the deal it replaces. It used to be priced from the market alone, so a
+  // player who had won on the last deal was offered about a fifth less than they were already
+  // being paid. Pay steps up after a clear winning run and down after a losing one. A release is
+  // not a renewal, and neither is a call up from a regional deal, so neither is anchored.
+  const prev = fighter.contractId ? save.contracts[fighter.contractId] : null;
+  const anchored = prev && prev.status === 'expired' && prev.endCondition !== 'released' && prev.promotion === PROMOTION_NAME ? prev : null;
+  let step = 1;
+  if (anchored) {
+    const run = recordSince(save, fighter, anchored.signedOn);
+    const net = run.wins - run.losses;
+    step = net >= 2 ? 1.1 : net < 0 ? 0.9 : 1;
+  }
+  const marketOpening = Math.round(opening * openingDiscount);
+  const openShow = Math.max(marketOpening, anchored ? Math.round(anchored.terms.showPay * step) : 0);
+  const openWin = Math.max(marketOpening, anchored ? Math.round(anchored.terms.winBonus * step) : 0);
   const terms: ContractTerms = {
     fights: isChampion ? 4 : rng.int(3, 4),
-    showPay: Math.round(opening * openingDiscount),
-    winBonus: Math.round(opening * openingDiscount),
+    showPay: openShow,
+    winBonus: openWin,
     signingBonus: 0,
     ppvPoints: 0,
     championEscalator: isChampion ? Math.round(opening * 0.2) : 0,
@@ -191,16 +237,17 @@ export function createContractOffer(fighter: Fighter, save: SaveGame, rng: Rng):
   // Reservation values scale with leverage and with the difficulty setting.
   const headroom = (1 + (leverage.score / 100) * 0.75) * diff.negotiationScale;
   return {
-    id: `coffer-${fighter.id}-${save.date}`,
+    id: save.contractOffers[`coffer-${fighter.id}-${save.date}`] ? `coffer-${fighter.id}-${save.date}-${Object.keys(save.contractOffers).length}` : `coffer-${fighter.id}-${save.date}`,
     fighterId: fighter.id,
     terms,
     createdOn: save.date,
     deadline: addDays(save.date, 14),
     reservation: {
-      maxShowPay: Math.round(opening * clamp(headroom, 0.85, 2.1)),
-      maxWinBonus: Math.round(opening * clamp(headroom * 0.95, 0.8, 2.0)),
-      maxSigningBonus: leverage.score > 55 ? Math.round(opening * 0.5 * diff.negotiationScale) : 0,
-      maxPpvPoints: isChampion || leverage.score > 80 ? Math.round(3500 * diff.negotiationScale) : 0,
+      // Always some room above the opening, which an anchored renewal can otherwise sit above.
+      maxShowPay: Math.max(Math.round(opening * clamp(headroom, 0.85, 2.1)), Math.round(openShow * 1.15)),
+      maxWinBonus: Math.max(Math.round(opening * clamp(headroom * 0.95, 0.8, 2.0)), Math.round(openWin * 1.15)),
+      maxSigningBonus: leverage.score > SIGNING_BONUS_MIN_LEVERAGE ? Math.round(opening * 0.5 * diff.negotiationScale) : 0,
+      maxPpvPoints: isChampion || leverage.score > PPV_POINTS_MIN_LEVERAGE ? Math.round(3500 * diff.negotiationScale) : 0,
       patience: clamp(2 + Math.round(leverage.score / 26), 2, 6),
     },
     roundsUsed: 0,
@@ -212,7 +259,6 @@ export function createContractOffer(fighter: Fighter, save: SaveGame, rng: Rng):
 export type NegotiationAction =
   | { kind: 'accept' }
   | { kind: 'reject' }
-  | { kind: 'walk-away' }
   | { kind: 'counter'; terms: Partial<ContractTerms> };
 
 export interface NegotiationResponse {
@@ -246,7 +292,7 @@ export function respondToCounter(
     offer.status = 'accepted';
     return { outcome: 'accepted', offer, message: 'Terms agreed.', round: mk(true, 'Terms agreed.') };
   }
-  if (action.kind === 'reject' || action.kind === 'walk-away') {
+  if (action.kind === 'reject') {
     offer.status = 'rejected';
     return {
       outcome: 'rejected',
@@ -259,18 +305,32 @@ export function respondToCounter(
   offer.roundsUsed++;
   const want = action.terms;
   const res = offer.reservation;
+  const before = { ...offer.terms };
+  const notes: string[] = [];
 
   // How aggressive is the ask relative to what the promotion will pay.
   const askShow = want.showPay ?? offer.terms.showPay;
   const askWin = want.winBonus ?? offer.terms.winBonus;
   const askSign = want.signingBonus ?? offer.terms.signingBonus;
   const askPpv = want.ppvPoints ?? offer.terms.ppvPoints;
+  const askGuarantee = want.guaranteedMinimum ?? offer.terms.guaranteedMinimum;
 
+  // A term the promotion has no budget for is set aside and said so, not counted against the ask.
+  // It used to be measured against a ceiling of one dollar, so a modest signing bonus request made
+  // the whole counter "well beyond" and wrecked a reasonable show pay ask sent with it.
+  if (res.maxSigningBonus <= 0 && (want.signingBonus ?? 0) > 0) notes.push('A signing bonus is not on the table at this stage.');
+  if (res.maxPpvPoints <= 0 && (want.ppvPoints ?? 0) > 0) notes.push('Pay per view points are not on the table at this stage.');
+
+  // The guaranteed show money is show pay that is paid win or lose, so it is measured against the
+  // show pay ceiling and conceded the same way. It used to be granted free up to most of the
+  // ceiling, which once the guarantee actually paid would have been a free raise.
   const overreach =
     Math.max(0, askShow / Math.max(1, res.maxShowPay) - 1) +
     Math.max(0, askWin / Math.max(1, res.maxWinBonus) - 1) +
-    Math.max(0, askSign / Math.max(1, res.maxSigningBonus || 1) - 1) * 0.4 +
-    Math.max(0, askPpv / Math.max(1, res.maxPpvPoints || 1) - 1) * 0.4;
+    (res.maxSigningBonus > 0 ? Math.max(0, askSign / res.maxSigningBonus - 1) * 0.4 : 0) +
+    (res.maxPpvPoints > 0 ? Math.max(0, askPpv / res.maxPpvPoints - 1) * 0.4 : 0) +
+    Math.max(0, askGuarantee / Math.max(1, res.maxShowPay) - 1);
+  const withNotes = (message: string) => [message, ...notes].join(' ');
 
   if (offer.roundsUsed > res.patience) {
     offer.status = 'withdrawn';
@@ -289,7 +349,7 @@ export function respondToCounter(
     return {
       outcome: 'countered',
       offer,
-      message: 'That is well beyond what they are prepared to do. They restate their position with a token increase.',
+      message: withNotes('That is well beyond what they are prepared to do. They restate their position with a token increase.'),
       round: mk(null, 'Counter rejected as unrealistic.'),
     };
   }
@@ -306,23 +366,42 @@ export function respondToCounter(
   offer.terms.winBonus = move(offer.terms.winBonus, askWin, res.maxWinBonus);
   offer.terms.signingBonus = move(offer.terms.signingBonus, askSign, res.maxSigningBonus);
   offer.terms.ppvPoints = move(offer.terms.ppvPoints, askPpv, res.maxPpvPoints);
-  if (want.fights !== undefined) {
-    // Fight count is cheap to concede within a band.
-    offer.terms.fights = clamp(want.fights, 2, 6);
-  }
-  if (want.guaranteedMinimum !== undefined && want.guaranteedMinimum <= res.maxShowPay * 0.8) {
-    offer.terms.guaranteedMinimum = want.guaranteedMinimum;
+  offer.terms.guaranteedMinimum = move(offer.terms.guaranteedMinimum, askGuarantee, res.maxShowPay);
+  if (want.fights !== undefined && want.fights !== offer.terms.fights) {
+    // Fight count is cheap to concede within the band. Outside it the count stays as it was and
+    // the reply says so; it used to be clamped silently, so asking for none signed two.
+    if (Number.isInteger(want.fights) && want.fights >= CONTRACT_FIGHTS_MIN && want.fights <= CONTRACT_FIGHTS_MAX) {
+      offer.terms.fights = want.fights;
+    } else {
+      notes.push(`The deal stays at ${offer.terms.fights} fights. They sign deals of ${CONTRACT_FIGHTS_MIN} to ${CONTRACT_FIGHTS_MAX}.`);
+    }
   }
 
+  // The reply says what actually moved. It used to say they came up even when nothing had.
+  const moneyMoved =
+    offer.terms.showPay !== before.showPay ||
+    offer.terms.winBonus !== before.winBonus ||
+    offer.terms.signingBonus !== before.signingBonus ||
+    offer.terms.ppvPoints !== before.ppvPoints ||
+    offer.terms.guaranteedMinimum !== before.guaranteedMinimum;
+  const fightsMoved = offer.terms.fights !== before.fights;
   const closed =
     offer.terms.showPay >= res.maxShowPay * 0.97 && offer.terms.winBonus >= res.maxWinBonus * 0.97;
+
+  const message = moneyMoved
+    ? closed
+      ? 'They have come up to their ceiling. There is nothing left to move.'
+      : 'They come up, but not all the way.'
+    : closed
+      ? 'They are at their ceiling already. There is nothing left to move.'
+      : fightsMoved
+        ? `They agree to ${offer.terms.fights} fights. The money stays where it was.`
+        : 'They hold their position.';
 
   return {
     outcome: 'countered',
     offer,
-    message: closed
-      ? 'They have come up to their ceiling. There is nothing left to move.'
-      : 'They come up, but not all the way.',
+    message: withNotes(fightsMoved && moneyMoved ? `${message} The deal is now ${offer.terms.fights} fights.` : message),
     round: mk(null, 'Counter offer issued.'),
   };
 }
@@ -337,17 +416,19 @@ export function purseForBout(
   const diff = DIFFICULTY[save.settings.difficulty];
   if (!contract) {
     const leverage = computeLeverage(fighter, save).score;
-    const show = baseShowPay(leverage, false, opts.isMainEvent, diff.payScale);
+    // Without a contract each fight is negotiated on its own, so the manager's work shows here.
+    // With one, it is already in the contract's terms and must not be counted twice.
+    const show = Math.round(baseShowPay(leverage, false, opts.isMainEvent, diff.payScale) * purseMultiplierFrom(managerFor(save, fighter.id)));
     return { show, win: show };
   }
-  let show = contract.terms.showPay;
-  let win = contract.terms.winBonus;
+  // The guarantee is a floor on the show money, which is paid win or lose. It used to apply only
+  // when it exceeded show plus win, a sum paid only on a win, so it almost never changed a purse
+  // and a loss paid less than the guarantee the contract named. NPC contracts carry no guarantee.
+  let show = Math.max(contract.terms.showPay, contract.terms.guaranteedMinimum ?? 0);
+  const win = contract.terms.winBonus;
   if (opts.isMainEvent) show += contract.terms.mainEventBonus;
   if (opts.isTitleFight) show += contract.terms.championEscalator;
   if (opts.shortNotice) show += contract.terms.shortNoticeBonus;
-  if (contract.terms.guaranteedMinimum > show + win) {
-    show = contract.terms.guaranteedMinimum - win;
-  }
   return { show: Math.round(show), win: Math.round(win) };
 }
 
@@ -528,10 +609,11 @@ export interface BonusRecord {
 
 /** Career bonus leaders, derived from the awards recorded on each fighter. */
 export function bonusLeaders(save: SaveGame, bonusAmount = 50000): BonusRecord[] {
-  return Object.values(save.fighters)
+  return mainRosterFighters(save)
     .map((f) => {
       const bonuses = f.awards.filter((a) => a.includes('of the Night')).length;
-      const fights = f.boutIds.filter((id) => save.history.results[id]).length;
+      // Bonuses are only paid on the promotion's cards, so the rate is over those fights alone.
+      const fights = f.boutIds.filter((id) => save.history.results[id] && isMainResult(save, save.history.results[id])).length;
       return {
         fighterId: f.id,
         name: f.name,
@@ -560,10 +642,22 @@ export function nextContractDate(c: Contract, from: IsoDate): IsoDate {
  * could reach it. A fighter with no active contract is refused by every offer path, so a
  * player who never completes this step is quietly frozen out of the sport.
  */
+/**
+ * A contract id that is free in this save. Ids were the fighter and the date alone, so signing a
+ * second deal on the day the first was issued (a renegotiation, or a call up the day the regional
+ * deal renewed) overwrote the first record and lost its history.
+ */
+function freeContractId(save: SaveGame, base: string): string {
+  if (!save.contracts[base]) return base;
+  let n = 2;
+  while (save.contracts[`${base}-${n}`]) n++;
+  return `${base}-${n}`;
+}
+
 export function signContractOffer(save: SaveGame, fighter: Fighter, offer: ContractOffer, round: NegotiationRound | null): Contract {
   const current = fighter.contractId ? save.contracts[fighter.contractId] : null;
   const next: Contract = {
-    id: `contract-${fighter.id}-${save.date}`,
+    id: freeContractId(save, `contract-${fighter.id}-${save.date}`),
     fighterId: fighter.id,
     promotion: PROMOTION_NAME,
     startDate: save.date,

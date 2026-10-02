@@ -1,5 +1,5 @@
 import { formatClock } from '../types/common';
-import { isFinish, METHOD_LABEL, type FightEvent, type FightResult, type RoundStatLine } from '../types/fight';
+import { isFinish, METHOD_LABEL, METHOD_PHRASE, type FightEvent, type FightResult, type RoundStatLine } from '../types/fight';
 
 /**
  * Fight playback.
@@ -175,7 +175,7 @@ export function summarizeRound(result: FightResult, round: number, nameA: string
     return {
       round,
       completedNormally: false,
-      headline: `${winnerName} wins by ${METHOD_LABEL[result.method].toLowerCase()} at ${formatClock(result.endTimeSeconds)} of round ${round}`,
+      headline: `${winnerName} wins by ${METHOD_PHRASE[result.method]} at ${formatClock(result.endTimeSeconds)} of round ${round}`,
       lines: [
         `${winnerName} finished ${loserName} with ${describeAction(finishing)} from ${positionLabel(finishing?.stateBefore ?? 'the exchange')}.`,
         officialNote ?? `The official time is ${formatClock(result.endTimeSeconds)} of round ${round}.`,
@@ -298,8 +298,11 @@ export function holdFor(event: FightEvent | undefined, baseMs: number): number {
 export function stateForIndex(result: FightResult | null, index: number, running: boolean): PlaybackState {
   if (!result) return 'preparing';
   const end = playbackEndIndex(result);
+  // A decision is read out the moment playback reaches the end; the cards are on screen beside it.
+  // Returning 'scoring' here left the tag saying the scorecards were still being collected next to
+  // the announced result.
   if (index >= end) {
-    return isFinish(result.method) ? 'fight-finished' : 'scoring';
+    return isFinish(result.method) ? 'fight-finished' : 'announcing';
   }
   return running ? 'round-active' : 'round-paused';
 }
@@ -342,8 +345,6 @@ export interface FightVisibility {
   maxSummarizedRound: number;
   /** Rounds whose statistics may be shown. */
   visibleRounds: number[];
-  /** True during the scorecard reveal, before the winner is named. */
-  collectingScorecards: boolean;
   state: PlaybackState;
 }
 
@@ -374,7 +375,6 @@ export function fightVisibility(input: VisibilityInput): FightVisibility {
       showPostFightTasks: false,
       maxSummarizedRound: 0,
       visibleRounds: [],
-      collectingScorecards: false,
       state: 'preparing',
     };
   }
@@ -396,9 +396,6 @@ export function fightVisibility(input: VisibilityInput): FightVisibility {
   }
   maxSummarized = Math.max(0, Math.min(maxSummarized, result.endRound));
 
-  const decision = !isFinish(result.method);
-  const collecting = concluded && decision;
-
   return {
     hasResult: true,
     concluded,
@@ -413,11 +410,10 @@ export function fightVisibility(input: VisibilityInput): FightVisibility {
     showPostFightTasks: concluded,
     maxSummarizedRound: maxSummarized,
     visibleRounds: Array.from({ length: maxSummarized }, (_, i) => i + 1),
-    collectingScorecards: collecting,
     state: concluded
       ? isFinish(result.method)
         ? 'fight-finished'
-        : 'scoring'
+        : 'announcing'
       : mode === 'live'
         ? 'round-active'
         : 'round-paused',

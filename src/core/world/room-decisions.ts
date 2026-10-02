@@ -3,10 +3,12 @@ import { Rng } from '../rng';
 import type { InboxMessage } from '../types/world';
 import type { SaveGame } from '../types/save';
 import { cancelBout } from './matchmaking';
-import { moveFighterToGym } from './gyms';
-import { DIVISIONS, DIVISION_BY_ID } from '../config/divisions';
+import { carryGymDebt, coverGymShortfall, GYM_DEBT_CHOICES, moveFighterToGym } from './gyms';
+import { DIVISION_BY_ID } from '../config/divisions';
+import { ageOn } from '../types/common';
 import type { Fighter } from '../types/fighter';
-import { carriedWalkingWeight, frameFitsDivision } from './weightclass';
+import { hasLiveBooking } from './availability';
+import { adjacentDivisions, commitMove, explore, frameFitsDivision, planStore } from './weightclass';
 
 /** The room choices that act on one named fighter, and so need that fighter to still be here. */
 const ROOM_CHOICES_ABOUT_A_FIGHTER = new Set([
@@ -155,10 +157,13 @@ export function applyRoomChoice(save: SaveGame, message: InboxMessage, choiceKey
         f.relationships.player = clamp(f.relationships.player + 8, 0, 100);
         // Backing it means it happens. Both answers used to be text and the fighter stayed
         // exactly where they were either way.
-        const moved = moveFighterDivision(save, f, 'up');
-        resolution = moved
-          ? `Backed the move, and ${f.name} is now at ${DIVISION_BY_ID[f.divisionId].name}.`
-          : `Backed the move, but there is nowhere for ${f.name} to go.`;
+        const move = moveGymFighterUp(save, f);
+        resolution =
+          move === 'moved'
+            ? `Backed the move, and ${f.name} is now at ${DIVISION_BY_ID[f.divisionId].name}.`
+            : move === 'booked'
+              ? 'Backed the move. It happens after the booked fight.'
+              : `Backed the move, but there is nowhere for ${f.name} to go.`;
       }
       break;
     }
@@ -168,11 +173,24 @@ export function applyRoomChoice(save: SaveGame, message: InboxMessage, choiceKey
         // The fighter has autonomy and may go ahead regardless.
         const goesAnyway = rng.chance(0.45);
         f.relationships.player = clamp(f.relationships.player - 6, 0, 100);
-        const moved = goesAnyway && moveFighterDivision(save, f, 'up');
-        resolution = moved
-          ? `${f.name} moved up to ${DIVISION_BY_ID[f.divisionId].name} regardless of the advice.`
-          : `${f.name} has agreed to stay in the division.`;
+        const move = goesAnyway ? moveGymFighterUp(save, f) : 'stayed';
+        resolution =
+          move === 'moved'
+            ? `${f.name} moved up to ${DIVISION_BY_ID[f.divisionId].name} regardless of the advice.`
+            : move === 'booked'
+              ? `${f.name} intends to move up regardless of the advice, once the booked fight is over.`
+              : `${f.name} has agreed to stay in the division.`;
       }
+      break;
+    }
+    case GYM_DEBT_CHOICES.cover: {
+      const gym = save.player.gymId ? save.gyms[save.player.gymId] : null;
+      resolution = gym ? coverGymShortfall(save, gym) : 'There is no gym to cover.';
+      break;
+    }
+    case GYM_DEBT_CHOICES.carry: {
+      const gym = save.player.gymId ? save.gyms[save.player.gymId] : null;
+      resolution = gym ? carryGymDebt(gym) : 'There is no gym to carry the debt.';
       break;
     }
     case 'accept-replacement': {
@@ -206,29 +224,27 @@ export function applyRoomChoice(save: SaveGame, message: InboxMessage, choiceKey
 }
 
 /**
- * Moves a fighter one division in the given direction, if there is one they can compete in.
+ * Moves a gym fighter up one division through the same transaction a player's own move uses.
  *
- * Same rule as the automatic move in health.ts: the next division of the same gender that is
- * still contested, rather than the next one by order, which runs straight through both genders
- * and past retired divisions.
+ * This used to hand roll the move: it took the ranking entry and changed the division, and left the
+ * belt, the open reign, the booked bout, any contender claim, the division spell and the old
+ * division's offers behind, so a champion could be listed at the new weight while still holding the
+ * old title. Now the coach's backing stands in for the promotion's approval and commitMove does the
+ * rest, vacating any title outright. A booked fighter is not moved: the fight comes first.
  */
-function moveFighterDivision(save: SaveGame, fighter: Fighter, direction: 'up' | 'down'): boolean {
-  const from = DIVISION_BY_ID[fighter.divisionId];
-  const candidates = DIVISIONS.filter(
-    (d) => d.gender === from.gender && d.activeUntil === null && (direction === 'up' ? d.order > from.order : d.order < from.order)
-  ).sort((a, b) => (direction === 'up' ? a.order - b.order : b.order - a.order));
-  const to = candidates[0];
-  if (!to) return false;
-  // Only a body that fits the destination goes anywhere.
-  if (!frameFitsDivision(fighter, to, 28).ok) return false;
-  const table = save.rankings[from.id];
-  if (table) table.entries = table.entries.filter((e) => e.fighterId !== fighter.id);
-  fighter.divisionId = to.id;
-  fighter.ranking = null;
-  fighter.previousRanking = null;
-  fighter.weeksRanked = 0;
-  fighter.weightMisses = 0;
-  fighter.walkingWeightLb = carriedWalkingWeight(fighter);
-  if (!fighter.eligibleDivisions.includes(to.id)) fighter.eligibleDivisions.push(to.id);
-  return true;
+function moveGymFighterUp(save: SaveGame, fighter: Fighter): 'moved' | 'booked' | 'nowhere' {
+  if (hasLiveBooking(save, fighter)) return 'booked';
+  // The next contested division of the same gender, and only if the body fits it.
+  const { up } = adjacentDivisions(fighter);
+  if (!up) return 'nowhere';
+  const age = ageOn(fighter.birthDate, save.date) ?? fighter.ageAtSnapshot ?? 28;
+  if (!frameFitsDivision(fighter, up, age).ok) return 'nowhere';
+  const plan = explore(save, fighter, up, 'permanent', 'vacate-now');
+  plan.status = 'approved';
+  plan.decidedOn = save.date;
+  plan.promotionResponse = `The promotion accepts the move to ${up.name}.`;
+  const outcome = commitMove(save, fighter, true);
+  // The plan was only the vehicle for the move. Left behind, it would read as a move in progress.
+  delete planStore(save)[fighter.id];
+  return outcome.moved ? 'moved' : 'nowhere';
 }

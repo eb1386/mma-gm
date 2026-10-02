@@ -6,6 +6,7 @@ import type { Fighter } from '../types/fighter';
 import type { FightHype, HypeMoment, Rivalry, RivalryType } from '../types/identity';
 import { computeDrawingPower, totalFollowersOf } from './identity-utils';
 import type { SaveGame } from '../types/save';
+import { meetingsBetween } from './indexes';
 
 /**
  * Fight hype.
@@ -97,12 +98,9 @@ export function decayRivalries(save: SaveGame): number {
   return removed;
 }
 
+/** Read from the fighters' own bout lists, because this runs for every booked bout every week. */
 function priorMeetingCount(save: SaveGame, aId: string, bId: string): number {
-  let n = 0;
-  for (const r of Object.values(save.history.results)) {
-    if ((r.fighterAId === aId && r.fighterBId === bId) || (r.fighterAId === bId && r.fighterBId === aId)) n++;
-  }
-  return n;
+  return meetingsBetween(save, aId, bId).length;
 }
 
 /**

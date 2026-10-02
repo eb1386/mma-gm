@@ -21,6 +21,8 @@ export default defineConfig({
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
     { name: 'mobile', use: { ...devices['Pixel 5'], viewport: { width: 390, height: 844 } } },
+    // The iPhone engine. The iPhone app runs the same build in WebKit, so the suite runs there too.
+    { name: 'iphone', use: { ...devices['iPhone 15'] } },
   ],
   webServer: {
     // The preview server serves the prebuilt dist. Without building first the browser suite can

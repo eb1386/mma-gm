@@ -6,7 +6,7 @@ import type { RatingKey } from './fighter';
 // Events and cards
 // ---------------------------------------------------------------------------
 
-export type EventTier = 'numbered-ppv' | 'fight-night' | 'apex' | 'international';
+export type EventTier = 'numbered-ppv' | 'fight-night' | 'apex' | 'international' | 'regional';
 
 export interface FightCardEvent {
   id: EventId;
@@ -40,6 +40,12 @@ export interface FightCardEvent {
   weighInBoutIds: BoutId[];
   contestedBoutIds: BoutId[];
   canceledBoutIds: BoutId[];
+  /**
+   * The regional promotion running this card. Absent for the main promotion, which is every card
+   * written before the regional circuit existed, so no migration is needed. The main promotion's
+   * calendar, matchmaking and business never read a card that carries one.
+   */
+  promotionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +113,11 @@ export interface ContractOffer {
   roundsUsed: number;
   status: 'open' | 'accepted' | 'rejected' | 'withdrawn' | 'expired';
   leverageSummary: string;
+  /**
+   * A first contract with the main promotion for a fighter on the regional circuit. Signing it is
+   * the call up: the fighter leaves the circuit and joins the main roster.
+   */
+  callUp?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +165,18 @@ export interface FightOffer {
   status: 'open' | 'accepted' | 'declined' | 'expired' | 'withdrawn';
   /** Counter requests already used, to limit endless haggling. */
   requestsUsed: number;
+  /**
+   * The show pay the offer opened at, before any request moved it. A money request is capped
+   * against this rather than the current figure, so two asks cannot compound. Optional so older
+   * saves still load: absent means the current show pay is the base.
+   */
+  baseShowPay?: number;
+  /** Set once a money request has been granted. One raise per offer. */
+  moneyGranted?: boolean;
+  /** An amateur bout on the regional circuit. */
+  isAmateur?: boolean;
+  /** A regional championship. */
+  regionalTitle?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +215,11 @@ export interface TrainingCamp {
   focus: CampFocus;
   gymId: GymId | null;
   campType: 'home' | 'visiting' | 'split' | 'solo' | 'near-event';
+  /**
+   * The second room of a split camp. Optional so camps saved before a split camp named its second
+   * gym keep loading; absent means the old single room split.
+   */
+  secondGymId?: GymId | null;
   specialistHired: string | null;
   gamePlan: GamePlanKey[];
   arriveEarlyDays: number;
@@ -204,6 +232,11 @@ export interface TrainingCamp {
   resultingGains: Partial<Record<RatingKey, number>> | null;
   overtrained: boolean;
   cost: number;
+  /**
+   * The part of `cost` paid once when the camp is booked, the specialist and the early arrival.
+   * Optional so older camps keep loading; absent means the whole cost is spread across the weeks.
+   */
+  upfrontCost?: number;
   /**
    * How much of a base the fighter built in the gym between camps, 0 to 1.
    *
@@ -284,6 +317,13 @@ export interface Gym {
   isReal: boolean;
   note: string;
   recentResults: { wins: number; losses: number };
+  /**
+   * When each fighter last turned down this gym's recruiting pitch, keyed by fighter id.
+   *
+   * A refusal used to leave no trace, so a pitch could be repeated until the dice landed and the
+   * shown chance meant nothing. Optional, so older saves load with no refusals on record.
+   */
+  pitchRefusals?: Record<FighterId, IsoDate>;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +418,11 @@ export interface InboxMessage {
   decisionKey?: string;
   linkedInjuryId?: string;
   linkedSponsorId?: string;
+  /**
+   * The sponsor an item is about when it is not a sponsor offer, such as a campaign request.
+   * Separate from linkedSponsorId, which ties the item's life to an offer still being open.
+   */
+  aboutSponsorId?: string;
   linkedSocialId?: string;
   linkedCalloutId?: string;
   decisionCreatedOn?: IsoDate;

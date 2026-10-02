@@ -11,23 +11,30 @@ import {
   offeredCareer,
   planCamp,
 } from './testing/fixtures';
-import { advance, simulatePlayerBout } from './world/tick';
+import { advance, prepareSide, simulatePlayerBout } from './world/tick';
 import { createFightOffer, respondToOffer } from './world/offers';
 import {
   acceptSponsor,
   applyFightPurse,
   applyMonthlyExpenses,
+  applyPpvPoints,
+  canSignSponsor,
   conflictsOfInterest,
   generateManager,
   generateSponsorOffer,
   hireManager,
   ledger,
   paySponsorsForFight,
+  PURSE_TAX_RATE,
   record,
+  searchForManager,
   summarize,
+  type Sponsor,
 } from './world/finance';
+import { createContractOffer } from './world/economy';
+import { getBusiness } from './world/business';
 import { appealSanction, clearExpiredSuspensions, dopingState, runAntiDopingWeek, setPosture } from './world/antidoping';
-import type { SaveGame } from './types/save';
+import { DEFAULT_FEATURE_FLAGS, type SaveGame } from './types/save';
 import type { Fighter } from './types/fighter';
 import type { FightCardEvent } from './types/world';
 import { checkBookingInvariants, hasLiveBooking, offerBlockReason, openOffersFor } from './world/availability';
@@ -35,7 +42,9 @@ import { applyInjuryDecision, classifyInjury, choicesFor } from './world/injury-
 import { careerStatus, isValidTransition } from './world/career';
 import { blockingStage, ensureFightWeekTasks, pendingStages, tasksForBout } from './world/fightweek';
 import { answerQuestion, createSession, presserRng } from './world/presser';
-import { beginWeighIn, stepWeighIn, applySecondAttempt } from './world/weighin';
+import { acceptOpponentMiss, beginWeighIn, stepWeighIn, applySecondAttempt, resolveOpponentDecision, cutContext, forecast, type WeighInReading } from './world/weighin';
+import { manageWalkingWeight } from './world/health';
+import { resolvePlayerDecision } from './world/decisions';
 import { generateSocialItems, replyToSocialItem, socialRng } from './world/social';
 import { finishingEventIndex, playbackEndIndex, roundEndedByFinish, summarizeRound } from './world/playback';
 
@@ -284,6 +293,31 @@ describe('fight week', () => {
     expect(blocking!.mandatory).toBe(true);
   });
 
+  it('refuses to fight a booked bout before its date', () => {
+    const { save, boutId } = bookedCareer(4036, { daysOut: 60 });
+    const event = save.events[save.bouts[boutId].eventId];
+    expect(() => simulatePlayerBout(save, boutId, ['pressure'])).toThrow(/Fight night is/);
+    expect(save.bouts[boutId].status).toBe('scheduled');
+    expect(save.bouts[boutId].resultId).toBeNull();
+    expect(event.status).toBe('announced');
+  });
+
+  it('closes final clearance and fight night when the fight happens, and schedules no post fight stages', () => {
+    const { save, boutId } = fightWeekCareer(4037, { isTitleFight: true, daysOut: 0 });
+    const stages = tasksForBout(save, boutId).map((t) => t.stage);
+    expect(stages).not.toContain('post-fight-interview');
+    expect(stages).not.toContain('post-fight-press');
+    const before = { ...save.fighters[save.bouts[boutId].fighterAId].record };
+    simulatePlayerBout(save, boutId, ['pressure']);
+    const open = tasksForBout(save, boutId).filter((t) => t.status !== 'complete' && t.status !== 'skipped');
+    expect(open.map((t) => t.stage)).not.toContain('final-clearance');
+    expect(open.map((t) => t.stage)).not.toContain('fight-night');
+    const night = tasksForBout(save, boutId).find((t) => t.stage === 'fight-night')!;
+    expect(night.resolvedOn).toBe(save.bouts[boutId].date);
+    // The pre fight snapshot keeps the record as it was before the result applied.
+    expect(save.bouts[boutId].preFight?.recordA).toEqual({ ...before });
+  });
+
   it('generates press conference questions once and records answers once', () => {
     const { save, boutId } = fightWeekCareer(4034, { isTitleFight: true, daysOut: 2 });
     const session = createSession(save, boutId, 'press-conference', presserRng(save, boutId, 'press-conference'))!;
@@ -348,14 +382,21 @@ describe('weigh in', () => {
     for (let i = 0; i < 8 && save.weighIns![boutId].stage !== 'complete'; i++) {
       const state = save.weighIns![boutId];
       if (state.stage === 'second-attempt-decision') applySecondAttempt(save, boutId, 'accept-miss');
+      else if (state.stage === 'catchweight-negotiation') resolveOpponentDecision(save, boutId, new Rng(4042 + i));
       else if (state.stage === 'opponent-decision') break;
       else stepWeighIn(save, boutId);
     }
     const state = save.weighIns![boutId];
     if (state.stage === 'complete') {
       expect(state.rulingText).toBeTruthy();
-      const task = tasksForBout(save, boutId).find((t) => t.stage === 'official-weigh-in');
-      expect(task?.status).toBe('complete');
+      if (state.boutStatus === 'canceled') {
+        // The other camp refused the catchweight: the bout itself is off and its tasks go with it.
+        expect(save.bouts[boutId].status).toBe('canceled');
+        expect(tasksForBout(save, boutId)).toHaveLength(0);
+      } else {
+        const task = tasksForBout(save, boutId).find((t) => t.stage === 'official-weigh-in');
+        expect(task?.status).toBe('complete');
+      }
     }
   });
 
@@ -369,6 +410,165 @@ describe('weigh in', () => {
     stepWeighIn(save, boutId);
     expect(save.weighIns![boutId].stage).toBe('second-attempt-decision');
     expect(save.weighIns![boutId].secondAttemptOffered).toBe(true);
+  });
+
+  /** A weigh in forced to the point where the player has missed and the opponent has not. */
+  function forcedMiss(seed: number, overBy: number, cutQuality = 0.4) {
+    const { save, boutId } = fightWeekCareer(seed, { daysOut: 1 });
+    const state = beginWeighIn(save, boutId)!;
+    const bout = save.bouts[boutId];
+    const opponentId = bout.fighterAId === save.player.fighterId ? bout.fighterBId : bout.fighterAId;
+    state.stage = 'opponent-revealed';
+    state.player = { fighterId: save.player.fighterId!, weightLb: state.limitLb + overBy, madeWeight: false, overBy, cutQuality, attempt: 1 };
+    state.opponent = { fighterId: opponentId, weightLb: state.limitLb, madeWeight: true, overBy: 0, cutQuality: 0.8, attempt: 1 };
+    return { save, boutId, state };
+  }
+
+  it('never brings a second attempt back heavier or fresher than the first', () => {
+    let made = 0;
+    for (let seed = 4100; seed < 4140; seed++) {
+      const { save, boutId } = forcedMiss(seed, 1, 0.3 + (seed % 5) * 0.05);
+      stepWeighIn(save, boutId);
+      const first = { ...save.weighIns![boutId].player! } as WeighInReading;
+      applySecondAttempt(save, boutId, 'try-again');
+      const second = save.weighIns![boutId].player!;
+      expect(second.weightLb).toBeLessThanOrEqual(first.weightLb);
+      expect(second.cutQuality).toBeLessThanOrEqual(first.cutQuality);
+      expect(second.attempt).toBe(2);
+      if (second.madeWeight) made++;
+      // A made retry goes to the ruling, a failed one to the other camp.
+      expect(save.weighIns![boutId].stage).toBe(second.madeWeight ? 'ruling' : 'catchweight-negotiation');
+      // The task is closed with the decision rather than left open after the ruling.
+      expect(tasksForBout(save, boutId).find((t) => t.stage === 'second-weigh-in-attempt')?.status).toBe('complete');
+    }
+    // One more hour on a pound is usually enough.
+    expect(made).toBeGreaterThan(20);
+  });
+
+  it('puts a large miss, and stopping the cut, to the other camp', () => {
+    const big = forcedMiss(4150, 3);
+    stepWeighIn(big.save, big.boutId);
+    expect(big.save.weighIns![big.boutId].stage).toBe('catchweight-negotiation');
+    expect(big.save.weighIns![big.boutId].purseForfeitPct).toBe(25);
+    expect(big.save.weighIns![big.boutId].catchweightLb).toBe(Math.ceil(big.state.limitLb + 3));
+
+    const stop = forcedMiss(4151, 2);
+    stepWeighIn(stop.save, stop.boutId);
+    expect(stop.save.weighIns![stop.boutId].stage).toBe('second-attempt-decision');
+    applySecondAttempt(stop.save, stop.boutId, 'stop-cutting');
+    expect(stop.save.weighIns![stop.boutId].stage).toBe('catchweight-negotiation');
+    expect(stop.save.weighIns![stop.boutId].purseForfeitPct).toBe(25);
+
+    // The other camp can actually say no.
+    let canceled = 0;
+    for (let i = 0; i < 40; i++) {
+      const run = forcedMiss(4160 + i, 3);
+      stepWeighIn(run.save, run.boutId);
+      resolveOpponentDecision(run.save, run.boutId, new Rng(i));
+      stepWeighIn(run.save, run.boutId);
+      if (run.save.weighIns![run.boutId].boutStatus === 'canceled') {
+        canceled++;
+        expect(run.save.bouts[run.boutId].status).toBe('canceled');
+      } else {
+        expect(run.save.bouts[run.boutId].contractedWeightLb).toBe(Math.ceil(run.state.limitLb + 3));
+      }
+    }
+    expect(canceled).toBeGreaterThan(0);
+  });
+
+  it('charges fight night the wear of the official cut, not of a fresh roll', () => {
+    for (let seed = 4180; seed < 4186; seed++) {
+      const { save, boutId } = forcedMiss(seed, 0);
+      const state = save.weighIns![boutId];
+      state.player = { ...state.player!, madeWeight: true, overBy: 0, cutQuality: 0.95, outcome: 'comfortable', wear: { weightCut: 0.4, recovery: 0.3 } };
+      const me = save.fighters[save.player.fighterId!];
+      // A walking weight no cut could make, so the fresh roll is a severe miss every time.
+      me.walkingWeightLb = state.limitLb + 60;
+      const before = me.wear.weightCut;
+      prepareSide(save, save.bouts[boutId], me, new Rng(seed));
+      const scale = 1 / Math.min(1.4, Math.max(0.6, me.development.resilience));
+      expect(me.wear.weightCut - before).toBeCloseTo(0.4 * scale, 5);
+      expect(save.bouts[boutId].isCatchweight).toBeFalsy();
+    }
+  });
+
+  it('cuts a short notice bout with no camp as the short notice cut it is', () => {
+    const { save, boutId } = bookedCareer(4190, { daysOut: 2 });
+    const bout = save.bouts[boutId];
+    const me = save.fighters[save.player.fighterId!];
+    for (const id of Object.keys(save.camps)) if (save.camps[id].boutId === boutId) delete save.camps[id];
+    bout.bookedOn = addDays(bout.date, -60);
+    const full = cutContext(save, bout, me);
+    expect(full).toMatchObject({ shortNotice: false, campWeeks: 7 });
+    bout.bookedOn = addDays(bout.date, -10);
+    const short = cutContext(save, bout, me);
+    expect(short).toMatchObject({ shortNotice: true, campWeeks: 2 });
+    // The forecast reads the same conditions, so it can only get harder.
+    const order = ['routine', 'manageable', 'hard', 'severe', 'not realistic'];
+    me.walkingWeightLb = bout.contractedWeightLb + 14;
+    bout.bookedOn = addDays(bout.date, -60);
+    const easy = forecast(save, boutId)!.difficulty;
+    bout.bookedOn = addDays(bout.date, -10);
+    const hard = forecast(save, boutId)!.difficulty;
+    expect(order.indexOf(hard)).toBeGreaterThan(order.indexOf(easy));
+  });
+
+  it('sorts the second attempt straight after the weigh in it repeats', () => {
+    const { save, boutId } = forcedMiss(4152, 1);
+    ensureFightWeekTasks(save, boutId);
+    stepWeighIn(save, boutId);
+    const stages = tasksForBout(save, boutId).map((t) => t.stage);
+    expect(stages.indexOf('second-weigh-in-attempt')).toBe(stages.indexOf('official-weigh-in') + 1);
+  });
+});
+
+describe('division moves', () => {
+  it('never moves the player, booked or not, and asks when they are free', () => {
+    const booked = bookedCareer(4170, { daysOut: 40 });
+    const me = booked.save.fighters[booked.save.player.fighterId!];
+    const division = me.divisionId;
+    me.weightMisses = 3;
+    advance(booked.save, { mode: 'week', stopOnDecision: false });
+    expect(me.divisionId).toBe(division);
+    expect(me.weightMisses).toBeGreaterThanOrEqual(3);
+    expect(booked.save.bouts[booked.boutId].status).toBe('scheduled');
+
+    const free = newCareer(4171);
+    const you = free.save.fighters[free.save.player.fighterId!];
+    const before = you.divisionId;
+    you.weightMisses = 3;
+    advance(free.save, { mode: 'week', stopOnDecision: false });
+    expect(you.divisionId).toBe(before);
+    expect(you.weightMisses).toBeGreaterThanOrEqual(3);
+    const asked = free.save.inbox.find((m) => m.decisionKey === `weight-forced-move|${you.id}`);
+    expect(asked?.choices.map((c) => c.key)).toEqual(['weight-move-up', 'weight-keep-cutting']);
+
+    // Not asked again while the first is open.
+    advance(free.save, { mode: 'week', stopOnDecision: false });
+    expect(free.save.inbox.filter((m) => m.decisionKey === `weight-forced-move|${you.id}`)).toHaveLength(1);
+
+    // Moving up goes through the plan: asked of the promotion, then committed.
+    const result = resolvePlayerDecision(free.save, { messageId: asked!.id, choiceKey: 'weight-move-up' }, new Rng(4171));
+    expect(result.ok).toBe(true);
+    const plan = free.save.weightClassPlans?.[you.id];
+    expect(plan?.fromDivisionId).toBe(before);
+    if (plan?.status === 'completed') {
+      expect(you.divisionId).toBe(plan.toDivisionId);
+      expect(you.ranking).toBeNull();
+    } else {
+      expect(you.divisionId).toBe(before);
+    }
+  });
+
+  it('does not move a booked fighter in the weight pass', () => {
+    const { save, boutId } = bookedCareer(4172, { daysOut: 40 });
+    const bout = save.bouts[boutId];
+    const npc = save.fighters[bout.fighterAId === save.player.fighterId ? bout.fighterBId : bout.fighterAId];
+    npc.weightMisses = 3;
+    const division = npc.divisionId;
+    expect(manageWalkingWeight(npc, save.date, false).movedUp).toBeNull();
+    expect(npc.divisionId).toBe(division);
+    expect(manageWalkingWeight(npc, save.date, true).movedUp).toBeTruthy();
   });
 });
 
@@ -490,13 +690,17 @@ describe('fight playback', () => {
 describe('money, sponsors and management', () => {
   it('derives every balance from the ledger', () => {
     const { save, playerId } = bookedCareer(4110);
+    // A career opens with savings, which are cash but never earnings.
+    const opening = save.finance!.cash;
+    expect(opening).toBeGreaterThan(0);
+    expect(save.finance!.careerEarnings).toBe(0);
     record(save, playerId, 'in', 'show-pay', 50000, 'Test purse');
     record(save, playerId, 'out', 'taxes', 16000, 'Test tax');
     const summary = summarize(save, playerId);
     expect(summary.careerEarnings).toBe(50000);
     expect(summary.careerExpenses).toBe(16000);
-    expect(summary.cash).toBe(34000);
-    expect(save.player.balance).toBe(34000);
+    expect(summary.cash).toBe(opening + 34000);
+    expect(save.player.balance).toBe(opening + 34000);
   });
 
   it('takes manager commission, gym percentage and tax off a purse exactly once', () => {
@@ -544,6 +748,158 @@ describe('money, sponsors and management', () => {
     hireManager(save, opponentId, manager.id);
     const conflicts = conflictsOfInterest(save, playerId);
     expect(conflicts.map((f) => f.id)).toContain(opponentId);
+  });
+
+  it('shows a missed weight forfeit and the share paid to the side that made weight', () => {
+    const { save, playerId, opponentId, boutId } = bookedCareer(4116);
+    const bout = save.bouts[boutId];
+    const meIsA = bout.fighterAId === playerId;
+    // The fallback weigh in: the opponent missed and forfeited 10,000, which went to the player.
+    if (meIsA) {
+      bout.forfeitB = 10000;
+      bout.weighInA = { madeWeight: true, weightLb: 155, cutQuality: 70 };
+      bout.weighInB = { madeWeight: false, weightLb: 158, cutQuality: 30 };
+    } else {
+      bout.forfeitA = 10000;
+      bout.weighInB = { madeWeight: true, weightLb: 155, cutQuality: 70 };
+      bout.weighInA = { madeWeight: false, weightLb: 158, cutQuality: 30 };
+    }
+    void opponentId;
+    const me = save.fighters[playerId];
+    const split = applyFightPurse(save, me, boutId, { show: 60000, win: 50000, bonuses: 0 }, false);
+    const lines = ledger(save).filter((e) => e.boutId === boutId);
+    expect(lines.find((e) => e.kind === 'show-pay')?.amount).toBe(50000);
+    expect(lines.find((e) => e.kind === 'forfeit-received')?.amount).toBe(10000);
+    expect(lines.some((e) => e.kind === 'purse-forfeit')).toBe(false);
+    // The commission base is the show money actually paid, as before.
+    expect(split.gross).toBe(60000);
+    expect(lines.find((e) => e.kind === 'taxes')?.amount).toBe(Math.round(60000 * PURSE_TAX_RATE));
+  });
+
+  it('records the forfeit of a player who missed weight as its own line', () => {
+    const { save, playerId, boutId } = bookedCareer(4117);
+    const bout = save.bouts[boutId];
+    const meIsA = bout.fighterAId === playerId;
+    if (meIsA) {
+      bout.forfeitA = 10000;
+      bout.weighInA = { madeWeight: false, weightLb: 158, cutQuality: 30 };
+      bout.weighInB = { madeWeight: true, weightLb: 155, cutQuality: 70 };
+    } else {
+      bout.forfeitB = 10000;
+      bout.weighInB = { madeWeight: false, weightLb: 158, cutQuality: 30 };
+      bout.weighInA = { madeWeight: true, weightLb: 155, cutQuality: 70 };
+    }
+    const cashBefore = save.finance!.cash;
+    const split = applyFightPurse(save, save.fighters[playerId], boutId, { show: 40000, win: 50000, bonuses: 0 }, false);
+    const lines = ledger(save).filter((e) => e.boutId === boutId);
+    expect(lines.find((e) => e.kind === 'show-pay')?.amount).toBe(50000);
+    expect(lines.find((e) => e.kind === 'purse-forfeit')?.amount).toBe(10000);
+    expect(lines.some((e) => e.kind === 'forfeit-received')).toBe(false);
+    // The lines net to the same cash as the show money paid.
+    expect(save.finance!.cash - cashBefore).toBe(split.net);
+  });
+
+  it('takes commission, gym share and tax off pay per view points', () => {
+    const { save, playerId, boutId } = bookedCareer(4118);
+    const manager = generateManager(save, new Rng(33));
+    hireManager(save, playerId, manager.id);
+    const me = save.fighters[playerId];
+    const net = applyPpvPoints(save, me, boutId, 100000);
+    const lines = ledger(save).filter((e) => e.boutId === boutId);
+    expect(lines.find((e) => e.kind === 'ppv-points')?.amount).toBe(100000);
+    expect(lines.find((e) => e.kind === 'manager-commission')?.amount).toBe(Math.round(100000 * manager.commissionPct / 100));
+    expect(lines.find((e) => e.kind === 'taxes')?.amount).toBe(Math.round(100000 * PURSE_TAX_RATE));
+    expect(lines.some((e) => e.kind === 'travel')).toBe(false);
+    expect(net).toBeLessThan(100000);
+  });
+
+  it('pays pay per view points from the card buys, with business depth on and off', () => {
+    const paid: number[] = [];
+    let buys = 0;
+    for (const depth of [true, false]) {
+      const { save, playerId, boutId } = bookedCareer(4119, { daysOut: 1 });
+      save.settings.featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...save.settings.featureFlags, businessDepth: depth };
+      const me = save.fighters[playerId];
+      const contract = save.contracts[me.contractId!];
+      contract.terms.ppvPoints = 2500;
+      const event = save.events[save.bouts[boutId].eventId];
+      expect(event.tier).toBe('numbered-ppv');
+      save.date = save.bouts[boutId].date;
+      simulatePlayerBout(save, boutId, ['pressure']);
+      if (depth) buys = getBusiness(save, event.id)?.ppvBuys ?? 0;
+      else expect(getBusiness(save, event.id)).toBeNull();
+      const line = ledger(save).find((e) => e.kind === 'ppv-points' && e.boutId === boutId);
+      paid.push(line?.amount ?? 0);
+    }
+    expect(buys).toBeGreaterThan(0);
+    // The business draw happens either way, so both runs see the same buys.
+    expect(paid[0]).toBe(Math.round((buys / 1000) * 2500));
+    expect(paid[1]).toBe(paid[0]);
+  });
+
+  it('refuses a fifth sponsor and an exclusivity clash at signing', () => {
+    const { save, playerId } = bookedCareer(4120);
+    const deal = (n: number, category: Sponsor['category'], exclusive: boolean, name: string): Sponsor => {
+      const s: Sponsor = {
+        id: `sponsor-${playerId}-2030-01-0${n}-${category}`,
+        name,
+        category,
+        perFight: 1000,
+        monthly: 0,
+        winBonus: 0,
+        championBonus: 0,
+        postsPerMonth: 0,
+        appearancesPerYear: 0,
+        exclusiveCategory: exclusive,
+        moralityClause: false,
+        startedOn: save.date,
+        endsOn: addDays(save.date, 300),
+        status: 'offered',
+        satisfaction: 60,
+        note: '',
+      };
+      save.sponsors = { ...(save.sponsors ?? {}), [s.id]: s };
+      return s;
+    };
+    const apparel = deal(1, 'apparel', true, 'Ironline Apparel');
+    const rival = deal(2, 'apparel', false, 'Northgate Fightwear');
+    expect(acceptSponsor(save, apparel.id)).not.toBeNull();
+    // Signing an exclusive deal withdraws the other offer in its category.
+    expect(rival.status).toBe('lapsed');
+    const clash = deal(3, 'apparel', false, 'Cordon Athletic');
+    expect(canSignSponsor(save, clash)).toMatch(/exclusive/);
+    expect(acceptSponsor(save, clash.id)).toBeNull();
+    for (const [n, c, name] of [[4, 'nutrition', 'Anchor Foods'], [5, 'gaming', 'Sixth Frame'], [6, 'local-business', 'Halland Dental']] as const) {
+      expect(acceptSponsor(save, deal(n, c, false, name).id)).not.toBeNull();
+    }
+    const fifth = deal(7, 'gym-equipment', false, 'Anvil Works');
+    expect(canSignSponsor(save, fifth)).toMatch(/4 sponsors/);
+    expect(acceptSponsor(save, fifth.id)).toBeNull();
+    expect(Object.values(save.sponsors!).filter((s) => s.status === 'active')).toHaveLength(4);
+  });
+
+  it('opens a better contract offer with a manager, on the same seed', () => {
+    const { save, playerId } = bookedCareer(4121);
+    const me = save.fighters[playerId];
+    const without = createContractOffer(me, save, new Rng(77));
+    const manager = generateManager(save, new Rng(34));
+    manager.negotiation = 80;
+    hireManager(save, playerId, manager.id);
+    const withManager = createContractOffer(me, save, new Rng(77));
+    expect(withManager.terms.fights).toBe(without.terms.fights);
+    expect(withManager.terms.showPay).toBeGreaterThan(without.terms.showPay);
+    expect(withManager.reservation.maxShowPay).toBeGreaterThan(without.reservation.maxShowPay);
+  });
+
+  it('limits asking around for a manager to once a month', () => {
+    const { save, playerId } = bookedCareer(4122);
+    // A career starts with a few managers to choose from.
+    expect(Object.keys(save.managers ?? {}).length).toBeGreaterThanOrEqual(3);
+    const me = save.fighters[playerId];
+    const first = searchForManager(save, me, new Rng(1));
+    expect(first.ok).toBe(true);
+    const second = searchForManager(save, me, new Rng(2));
+    expect(second.ok).toBe(false);
   });
 
   it('applies monthly costs at most once per calendar month', () => {
@@ -647,17 +1003,23 @@ describe('the complete career path', () => {
     expect(openOffersFor(save, me.id).length).toBe(0);
     expect(careerStatus(save).state).toBe('fight-week');
 
-    // 5. Work through every stage.
+    // 5. Work through every stage, day by day. The loop used to stop as soon as nothing was due,
+    // which at five days out is immediately, so the weigh in this test is named for never ran.
     let guard = 0;
-    while (pendingStages(save, boutId).length > 0 && guard++ < 30) {
+    while (save.date < save.bouts[boutId].date && guard++ < 30) {
       const task = pendingStages(save, boutId)[0];
+      if (!task) {
+        save.date = addDays(save.date, 1);
+        continue;
+      }
       if (task.stage === 'official-weigh-in') {
         beginWeighIn(save, boutId);
         let steps = 0;
         while (save.weighIns![boutId].stage !== 'complete' && steps++ < 10) {
           const state = save.weighIns![boutId];
           if (state.stage === 'second-attempt-decision') applySecondAttempt(save, boutId, 'accept-miss');
-          else if (state.stage === 'opponent-decision') break;
+          else if (state.stage === 'catchweight-negotiation') resolveOpponentDecision(save, boutId, new Rng(steps));
+          else if (state.stage === 'opponent-decision') acceptOpponentMiss(save, boutId, true);
           else stepWeighIn(save, boutId);
         }
         if (save.weighIns![boutId].stage !== 'complete') break;
@@ -668,8 +1030,6 @@ describe('the complete career path', () => {
         task.outcome = 'Completed by the end to end test.';
         task.resolvedOn = save.date;
       }
-      save.date = addDays(save.date, 1);
-      if (save.date > save.bouts[boutId].date) break;
     }
 
     // 6. Fight day, then the fight itself.

@@ -1,11 +1,11 @@
 import { BUILDS } from '../config/builds';
 import { DIVISION_BY_ID, type DivisionConfig, type DivisionId } from '../config/divisions';
-import { NAME_BANKS, NICKNAMES, type NameBank } from '../data/names';
+import { feminineSurname, NAME_BANKS, NICKNAMES, type NameBank } from '../data/names';
 import { clamp, Rng } from '../rng';
 import type { ActivityStatus, BuildType, Confidence, IsoDate, Stance } from '../types/common';
 import { addDays } from '../types/common';
 import { generateActivityProfile, generateFame, generatePersonality, generateSocial } from './identity';
-import { clampWalkingWeight } from './health';
+import { clampWalkingWeight, longevityFromWear } from './health';
 import {
   ovrDisplayed,
   RATING_KEYS,
@@ -165,8 +165,11 @@ export function generateRatings(rng: Rng, targetOvr: number, spread: number, bui
 export function generateFighter(rng: Rng, opts: GenerateFighterOptions): Fighter {
   const division = DIVISION_BY_ID[opts.divisionId];
   const bank = opts.countryBank ?? pickNameBank(rng);
-  const firstName = rng.pick(bank.first);
-  const lastName = rng.pick(bank.last);
+  // A women's division takes its given names from the women's list. It is still exactly
+  // one pick, so the rng sequence (and every seeded world built on it) keeps its length.
+  const women = division.gender === 'women';
+  const firstName = rng.pick(women ? bank.firstFemale : bank.first);
+  const lastName = women ? feminineSurname(bank.code, rng.pick(bank.last)) : rng.pick(bank.last);
   const build = opts.build ?? rng.pick(Object.keys(BUILDS) as BuildType[]);
   const phys = generatePhysicals(rng, division, build);
   const age = opts.age ?? Math.round(clamp(rng.normal(27, 3.6), 20, 40));
@@ -213,7 +216,10 @@ export function generateFighter(rng: Rng, opts: GenerateFighterOptions): Fighter
     ratingConfidence: uniformConfidence('medium'),
     pot: 0,
     potConfidence: 'low',
-    longevity: clamp(Math.round(rng.normal(88 - Math.max(0, age - 28) * 2.4, 5)), 30, 100),
+    // Set from the wear below. Longevity used to be drawn here on its own, and the first weekly
+    // health pass replaced it with the value the wear implies, so it moved for no reason. The
+    // draw is still taken so the world's random sequence is unchanged.
+    longevity: rng.normal(0, 1) * 0,
     wear: {
       neurological: clamp(rng.normal(Math.max(0, age - 24) * 1.4, 3), 0, 60),
       facial: clamp(rng.normal(Math.max(0, age - 24) * 1.1, 3), 0, 60),
@@ -236,7 +242,8 @@ export function generateFighter(rng: Rng, opts: GenerateFighterOptions): Fighter
       decLosses: Math.max(0, losses - Math.round(losses * 0.35) - Math.round(losses * 0.22)),
     },
     boutIds: [],
-    winStreak: Math.max(0, Math.round(rng.normal(2, 2))),
+    // Never longer than the wins on the record: a 0-2 fighter on a three fight win streak is impossible.
+    winStreak: Math.min(wins, Math.max(0, Math.round(rng.normal(2, 2)))),
     lossStreak: 0,
     lastFightDate: addDays(opts.today, -rng.int(60, 400)),
     nextBoutId: null,
@@ -285,6 +292,7 @@ export function generateFighter(rng: Rng, opts: GenerateFighterOptions): Fighter
     acceptedShortNotice: 0,
     createdBy: 'generated',
   } as Fighter;
+  shell.longevity = longevityFromWear(shell.wear);
 
   // Identity is generated after the shell so it can read the fighter's own attributes.
   shell.personality = generatePersonality(rng);
@@ -308,6 +316,16 @@ export interface CreationPreset {
   ageRange: [number, number];
   startingRecord: { wins: number; losses: number };
   potBias: number;
+  /**
+   * The mean hidden ceiling a fighter made from this preset is drawn around, on the Ovr scale.
+   *
+   * Absolute rather than an offset from the starting Ovr. A created fighter starts deliberately
+   * low, and an offset from that left every preset but the veteran peaking below the roster's
+   * tenth percentile: the raw prospect, promised the highest ceiling, had the lowest. Growth slows
+   * as a rating nears the ceiling, so a well run career peaks about ten below it. Absent for the
+   * sandbox, which keeps the offset rule.
+   */
+  ceilingMean?: number;
 }
 
 export const CREATION_PRESETS: CreationPreset[] = [
@@ -320,6 +338,7 @@ export const CREATION_PRESETS: CreationPreset[] = [
     ageRange: [20, 23],
     startingRecord: { wins: 4, losses: 0 },
     potBias: 12,
+    ceilingMean: 90,
   },
   {
     key: 'balanced-prospect',
@@ -330,6 +349,7 @@ export const CREATION_PRESETS: CreationPreset[] = [
     ageRange: [23, 26],
     startingRecord: { wins: 8, losses: 1 },
     potBias: 7,
+    ceilingMean: 86,
   },
   {
     key: 'specialist',
@@ -340,6 +360,7 @@ export const CREATION_PRESETS: CreationPreset[] = [
     ageRange: [24, 28],
     startingRecord: { wins: 9, losses: 2 },
     potBias: 5,
+    ceilingMean: 85,
   },
   {
     key: 'experienced-signing',
@@ -350,6 +371,7 @@ export const CREATION_PRESETS: CreationPreset[] = [
     ageRange: [27, 31],
     startingRecord: { wins: 15, losses: 3 },
     potBias: 2,
+    ceilingMean: 82,
   },
   {
     key: 'late-veteran',
@@ -360,6 +382,7 @@ export const CREATION_PRESETS: CreationPreset[] = [
     ageRange: [33, 37],
     startingRecord: { wins: 24, losses: 8 },
     potBias: -2,
+    ceilingMean: 76,
   },
   {
     key: 'sandbox',

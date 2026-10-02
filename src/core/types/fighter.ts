@@ -64,6 +64,18 @@ export function ovrRaw(r: Ratings): number {
   return (r.striking + r.grappling + r.wrestling + r.submissions + r.cardio + r.durability) / 6;
 }
 
+/**
+ * Ratings as stored in a rating history snapshot: two decimals. The history only feeds the fighter
+ * page's chart and table, which show whole numbers, and full precision floats made it about a fifth
+ * of every fighter record. Rounding at the moment of writing keeps a saved world identical to the
+ * same world reloaded.
+ */
+export function historyRatings(r: Ratings): Ratings {
+  const out = { ...r };
+  for (const k of Object.keys(out) as (keyof Ratings)[]) out[k] = Math.round(out[k] * 100) / 100;
+  return out;
+}
+
 export function ovrDisplayed(r: Ratings): number {
   return Math.round(ovrRaw(r));
 }
@@ -197,6 +209,40 @@ export interface DevelopmentProfile {
   resilience: number;
 }
 
+/**
+ * The real fighter's official career statistics, exactly as the athlete profile published them when
+ * the snapshot was built. They are history, not the simulation: nothing in a save changes them, and
+ * they are shown beside the simulated career rather than merged into it. Absent for fictional fighters.
+ */
+export interface OfficialStats {
+  sigStrLandedPerMin: number | null;
+  sigStrAbsorbedPerMin: number | null;
+  sigStrAccuracyPct: number | null;
+  sigStrDefensePct: number | null;
+  takedownAvgPer15: number | null;
+  takedownAccuracyPct: number | null;
+  takedownDefensePct: number | null;
+  submissionAvgPer15: number | null;
+  knockdownAvgPer15: number | null;
+  avgFightTime: string | null;
+  firstRoundFinishes: number | null;
+  strikeTarget: { head: number; body: number; leg: number } | null;
+  strikePosition: { standing: number; clinch: number; ground: number } | null;
+  winMethod: { ko: number; sub: number; dec: number } | null;
+  fightingStyle: string | null;
+  trainsAt: string | null;
+  placeOfBirth: string | null;
+  /** The last card the fighter competed on, on or before the snapshot date. */
+  lastEventDate: string | null;
+  /**
+   * A card the fighter was booked on after the snapshot date. Kept apart from lastEventDate because
+   * the save never runs that card. Absent on snapshots built before the split.
+   */
+  nextEventDate?: string | null;
+  sourceUrl: string;
+  fetchedAt: string;
+}
+
 export interface Fighter {
   id: FighterId;
 
@@ -216,6 +262,11 @@ export interface Fighter {
 
   // Physicals
   birthDate: IsoDate | null;
+  /**
+   * Set when birthDate was estimated from the published age rather than published itself. The
+   * estimate keeps the fighter aging; the interface shows the date of birth as not published.
+   */
+  birthDateEstimated?: boolean;
   /** Populated when the source gave an age but not a date of birth. */
   ageAtSnapshot: number | null;
   heightIn: number | null;
@@ -338,7 +389,31 @@ export interface Fighter {
   /** When the last refusal happened, so the penalty for refusing can fade with time. */
   lastDeclineOn?: IsoDate | null;
   acceptedShortNotice: number;
-  createdBy: 'real-snapshot' | 'generated' | 'user';
+  /**
+   * Set when the fighter volunteers for short notice work, until the date the offer lapses. The
+   * replacement search prefers a fighter who asked to be on the list. Optional so older saves
+   * still load: absent means the fighter never volunteered.
+   */
+  volunteeredShortNoticeUntil?: IsoDate | null;
+  createdBy:'real-snapshot' | 'generated' | 'user';
+
+  /**
+   * The regional promotion this fighter competes for, by id. Absent or null means the fighter
+   * belongs to the main promotion's world, which is every fighter written before the regional
+   * circuit existed. A fighter with a circuit is invisible to the main promotion's rankings,
+   * matchmaking, titles and record books until they are called up.
+   */
+  circuit?: string | null;
+  /** Amateur bouts, kept apart from the professional record the way the sport keeps them. */
+  amateurRecord?: FightRecord;
+  /**
+   * The regional promotion a Proving Ground tryout opponent was drawn from, so a winner who is
+   * signed is credited to the circuit they actually fought on. Absent for everyone else, and for
+   * tryout opponents in saves written before it existed.
+   */
+  originPromotionId?: string;
+  /** Official career statistics for a real fighter, as published. */
+  officialStats?: OfficialStats | null;
 }
 
 export interface FighterRatingEstimate {

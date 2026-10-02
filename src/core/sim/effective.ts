@@ -22,9 +22,12 @@ export type Domain =
   | 'recovery';
 
 const BLEND: Record<Domain, Partial<Record<keyof SideState['base'], number>>> = {
-  'strike-offense': { striking: 0.86, cardio: 0.08, wrestling: 0.06 },
-  'strike-defense': { striking: 0.7, durability: 0.14, cardio: 0.1, grappling: 0.06 },
-  power: { striking: 0.74, durability: 0.16, wrestling: 0.1 },
+  'strike-offense': { striking: 0.7, cardio: 0.14, wrestling: 0.08, durability: 0.08 },
+  // Striking used to carry about three quarters of offense, defense and power at once, so one
+  // rating decided landing, avoiding and knockdowns while the three grappling ratings, half of
+  // Ovr, barely moved a fight. Defense and power now lean on the frame and the gas tank too.
+  'strike-defense': { striking: 0.5, durability: 0.2, cardio: 0.15, wrestling: 0.15 },
+  power: { striking: 0.6, durability: 0.25, wrestling: 0.15 },
   'takedown-offense': { wrestling: 0.78, grappling: 0.14, cardio: 0.08 },
   'takedown-defense': { wrestling: 0.66, grappling: 0.2, durability: 0.08, cardio: 0.06 },
   'ground-offense': { grappling: 0.72, wrestling: 0.16, submissions: 0.12 },
@@ -123,13 +126,18 @@ function positionModifier(st: FightState, side: SideState, domain: Domain): numb
       return signed * 14;
     case 'submission-offense':
       // The back and mount are where submissions actually happen.
-      return signed * (pos.ground === 'back' || pos.ground === 'mount' ? 30 : 16);
+      return signed * (pos.ground === 'back' || pos.ground === 'mount' ? C.submission.dominantPositionEdge : C.submission.positionEdge);
     case 'submission-defense':
       return signed * 12;
+    // Strikes are different from the rest of the ground game. The top fighter has gravity and
+    // posture in every position, including inside the guard, where the bottom fighter is a
+    // submission threat but a poor striker. Using the same signed value as the grappling domains
+    // made the top fighter in guard the worse striker, so a takedown usually cost the fighter
+    // who scored it.
     case 'strike-offense':
-      return signed * 20;
+      return isController ? C.grappling.topStrikeBase + value * C.grappling.topStrikeScale : -(C.grappling.topStrikeBase + value * C.grappling.topStrikeScale);
     case 'strike-defense':
-      return signed * 10;
+      return isController ? value * 6 : -value * 8;
     default:
       return 0;
   }

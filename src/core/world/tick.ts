@@ -4,19 +4,30 @@ import { narrateResult } from '../narrative/render';
 import { applyDetail, detailForBout, shouldNarrate, shouldSummarizeRounds, type DetailContext, type SimDetail } from './detail';
 import { clamp, Rng } from '../rng';
 import { simulateFight, type FightSimOptions } from '../sim/engine';
+import { planFit } from '../sim/plan';
 import type { GamePlanKey, FightCardEvent } from '../types/world';
-import { addDays, ageOn, dayOfWeek, daysBetween, formatDate, yearOf, type BoutId, type IsoDate } from '../types/common';
-import { isChampionshipBout, isFinish, type Bout, type FightResult } from '../types/fight';
-import { ovrDisplayed, type Fighter } from '../types/fighter';
+import { addDays, ageOn, dayOfWeek, daysBetween, formatDate, formatMoney, joinSentence, yearOf, type BoutId, type FighterId, type IsoDate } from '../types/common';
+import { isChampionshipBout, isFinish, METHOD_LABEL, type Bout, type FightResult } from '../types/fight';
+import { ovrDisplayed, ovrRaw, RATING_KEYS, type Fighter, type RatingKey, historyRatings } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { autoCampFor, finalizeCamp, runCampWeek } from './camp';
+import { compactSave } from './compaction';
+import { liveCampOf, withLiveCampIndex } from './indexes';
 import { applyPopularity, assignEventBonuses, computeLeverage, createContractOffer, decayPopularity, generateContract, popularityFromResult, purseForBout } from './economy';
 import { applyDeltas, developWeek, evenFocus, notePeakOvr, potConfidenceFor, retirementChance } from './development';
 import { invalidatePot, prunePotCache, refreshPotForAll, updatePot } from './pot';
-import { moveFighterToGym, rollFighterAutonomy, runGymMonth, updateHappiness } from './gyms';
+import {
+  GYM_DEBT_CHOICES,
+  GYM_DEBT_REPUTATION_LOSS,
+  GYM_RUNWAY_WARNING_MONTHS,
+  moveFighterToGym,
+  rollFighterAutonomy,
+  runGymMonth,
+  updateHappiness,
+} from './gyms';
+import { mayNotify } from './decisions';
 import { computeSeasonAwards, newsForResult, pushNews, runHallOfFameVote } from './history';
 import {
-  activeInjuries,
   canCompete,
   injuriesFromFight,
   manageWalkingWeight,
@@ -28,32 +39,34 @@ import {
   wearFromFight,
   applyWear,
 } from './health';
-import { applyReplacement, bookEvent, cancelBout, CHAMPION_TURNAROUND_DAYS, findReplacement, isAvailable, openOfferFighterIds, regionOfFighter, scheduleEvents, shouldCreateInterimTitle } from './matchmaking';
+import { applyReplacement, bookEvent, cancelBout, CHAMPION_TURNAROUND_DAYS, findReplacement, findTitleReplacement, isAvailable, openOfferFighterIds, orderCard, regionOfFighter, scheduleEvents, TITLE_REBOOK_NOTICE_DAYS, titleBoutRoom } from './matchmaking';
 import { inCampFighterIds } from './availability';
-import { applyFightPurse, paySponsorsForFight, record, runFinanceWeek } from './finance';
+import { applyFightPurse, applyPpvPoints, creditWeightForfeits, paySponsorsForFight, runFinanceWeek } from './finance';
 import { clearDopingState, clearExpiredSuspensions, runAntiDopingWeek } from './antidoping';
 import { recordSocialHistory } from './identity';
 import { bookBout, FIGHT_WEEK_DAYS, hasLiveBooking, releaseBooking } from './availability';
 import { checkPlayerInjuries } from './injury-flow';
-import { ensureFightWeekTasks, pruneFightWeek } from './fightweek';
+import { cutContext } from './weighin';
+import { closeFightWeek, ensureFightWeekTasks, pendingStages, pruneFightWeek, stageLabel, tasksForBout } from './fightweek';
 import { generateSocialItems, pruneSocial, socialRng } from './social';
 import { campLifeRng, generateCampLife, seedGymRelationships } from './camp-life';
 import { decayRelationships, openCallouts, pruneCallouts, recordFightBetween, resolveCallout } from './relationships';
-import { enforceAbsentChampions, maybeSuggestMove, settleOneFightMoves } from './weightclass';
+import { enforceAbsentChampions, maybeSuggestMove, raiseForcedMoveDecision, settleOneFightMoves } from './weightclass';
 import { assignOfficials, judgePersonasFor, recordOfficialOutcome, refereeTendencyFor } from './officials';
 import { applyResultToContenders, fulfilContenderStatus, reviewContenderClaims } from './contender';
 import { evaluateAllInterests, pruneMatchupInterests } from './matchup-interest';
 import { runMatchupInterestPass } from './matchup-pass';
+import { ensurePlayerDebut } from './debut';
 import { existingTitleOffer, interimTitleJustification, rankChallengers, titleShotEligibility, unificationDue } from './title-eligibility';
 import { cancelStaleDivisionBouts, enforceDivisionInvariant, runNpcCallouts, runNpcWeightClassMoves } from './npc-behaviour';
 import { pruneGamePlans } from './gameplan-memory';
 import { syncCareerState, recordAchievements, retireFighter } from './career';
 import './decision-handlers';
-import { PROMOTION_CONTRACTS } from '../config/branding';
+import { PROMOTION_CONTRACTS, PROMOTION_NAME } from '../config/branding';
 import { applyResultToRankings, applyTitleOutcome, reconcileChampionFlags, recomputeDivision, recomputePfp, seedDeposedChampion } from './rankings';
 import { generateFighter } from './generator';
 import { closeCompetingOffers, createFightOffer, expireOffers } from './offers';
-import { addInboxMessage, messageNeedsAction, reconcileInbox } from './inbox';
+import { addInboxMessage, messageNeedsAction, reconcileInbox, resolveMessagesForBout } from './inbox';
 import { VENUE_CITIES } from './venues';
 import { addHypeMoment, computeHype, escalateRivalry, pruneHype, updateAllHype, decayRivalries } from './hype';
 import { businessStore, computeEventBusiness } from './business';
@@ -70,6 +83,9 @@ import {
 import { ROSTER_TARGET_SCALE } from '../config/matchmaking';
 import { featureEnabled } from '../types/save';
 import { MATCHMAKING } from '../config/matchmaking';
+import { mainRosterFighters, popularityScaleFor } from './circuit';
+import { applyRegionalResult, promotionConfig, runRegionalWeek } from './regional';
+import { REGIONAL_LEVELS } from '../config/regional';
 import { applyBonusAward } from './finance';
 
 /**
@@ -85,7 +101,10 @@ export type AdvanceMode = 'day' | 'week' | 'next-message' | 'next-event' | 'to-f
 export interface AdvanceOptions {
   mode: AdvanceMode;
   maxDays?: number;
-  /** Stop as soon as an inbox item needs an answer. */
+  /**
+   * Stop as soon as an inbox item needs an answer. Defaults to the player's setting. Passing false
+   * explicitly also turns off the fight week stops, for callers that drive the world headless.
+   */
   stopOnDecision?: boolean;
 }
 
@@ -105,6 +124,11 @@ export interface AdvanceReport {
    * they happened to be on with no indication of why nothing was moving.
    */
   inboxWaiting: boolean;
+  /**
+   * Advancement stopped for the player's fight week: it began, or a mandatory stage such as the
+   * official weigh in came due. The caller takes the player to that fight week.
+   */
+  fightWeekBoutId?: BoutId | null;
 }
 
 function rngOf(save: SaveGame): Rng {
@@ -131,7 +155,12 @@ function gamePlanForAi(fighter: Fighter, rng: Rng): GamePlanKey[] {
   if (fighter.tendencies.pace > 0.7 && fighter.ratings.cardio > 70) plans.push('high-pace');
   else if (fighter.ratings.cardio < 58) plans.push('conservative-pace');
   if (plans.length === 0) plans.push(rng.pick(['pressure', 'counter', 'outside-range'] as GamePlanKey[]));
-  return plans.slice(0, 3);
+  const chosen = plans.slice(0, 3);
+  // A plan's effect now scales with how well it suits the fighter, so a habit alone is not a
+  // reason to pick it: a striker who likes to shoot still does better without a wrestling plan.
+  // Filtering after the choice keeps the rng draws exactly as they were.
+  const fitting = chosen.filter((p) => planFit(p, fighter.ratings) >= 0.6);
+  return fitting.length > 0 ? fitting : chosen;
 }
 
 export interface BoutPreparation {
@@ -157,24 +186,32 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
     familiarity = finished.tacticalFamiliarity;
   }
   if (sharpness === null) {
-    sharpness = shortNotice ? clamp(rng.normal(0.35, 0.1), 0.1, 0.6) : clamp(rng.normal(0.62, 0.13), 0.2, 0.95);
+    // For a computer fighter with no camp record, the regional circuit's fighters above all, this
+    // stands in for preparation the game does not model. The player's own fighter without a camp
+    // skipped one, and that has to come out below any camp they could have set at the same notice:
+    // at 0.62 it beat every camp under six weeks, for free. The draws are the same either way.
+    const skipped = fighter.id === save.player.fighterId;
+    const longMean = skipped ? 0.45 : 0.62;
+    const shortMean = skipped ? 0.3 : 0.35;
+    sharpness = shortNotice ? clamp(rng.normal(shortMean, 0.1), 0.1, 0.6) : clamp(rng.normal(longMean, 0.13), 0.2, 0.95);
     familiarity = shortNotice ? clamp(rng.normal(0.25, 0.1), 0.05, 0.5) : clamp(rng.normal(0.5, 0.13), 0.1, 0.85);
   }
 
+  // The same conditions the official weigh in rolls under, from the one shared definition.
+  const ctx = cutContext(save, bout, fighter);
   const cut = simulateWeightCut(
     fighter,
     {
       divisionId: bout.divisionId,
       isTitleFight: bout.isTitleFight,
-      campWeeks: camp?.weeksCompleted ?? (shortNotice ? 2 : 7),
-      nutritionSupport: fighter.gymId && save.gyms[fighter.gymId]?.staffIds.some((id) => save.staff[id]?.role === 'nutrition') ? 0.9 : 0.5,
-      shortNotice,
+      campWeeks: ctx.campWeeks,
+      nutritionSupport: ctx.nutritionSupport,
+      shortNotice: ctx.shortNotice,
       aggressiveness: 0.5,
     },
     save.date,
     rng
   );
-  applyWear(fighter, cut.wear, fighter.development.resilience);
 
   const isA = bout.fighterAId === fighter.id;
 
@@ -192,6 +229,10 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
   const madeWeight = officialReading ? officialReading.madeWeight : cut.madeWeight;
   const weightLb = officialReading ? officialReading.weightLb : cut.weightLb;
   const cutQuality = officialReading ? officialReading.cutQuality : cut.cutQuality;
+  // The roll above always happens, so the world rng draws the same values either way, but the wear
+  // is the official cut's. Charging the fresh roll's wear billed a comfortable official cut as a
+  // severe one, or the reverse. Readings saved before the wear was stored fall back to the roll.
+  applyWear(fighter, officialReading?.wear ?? cut.wear, fighter.development.resilience);
 
   fighter.lastWeightCutQuality = cutQuality;
   const weighIn = { madeWeight, weightLb, cutQuality };
@@ -213,7 +254,11 @@ export function prepareSide(save: SaveGame, bout: Bout, fighter: Fighter, rng: R
     const forfeit = Math.round((purse.show * cut.purseForfeitPct) / 100);
     if (isA) bout.purseA = { ...purse, show: purse.show - forfeit };
     else bout.purseB = { ...purse, show: purse.show - forfeit };
-    pushNews(save, {
+    // Kept on the bout so the ledger can show it, and so the side that made weight is paid it
+    // once both have weighed in (creditWeightForfeits, after both sides are prepared).
+    if (isA) bout.forfeitA = forfeit;
+    else bout.forfeitB = forfeit;
+    if (!save.events[bout.eventId]?.promotionId || fighter.id === save.player.fighterId) pushNews(save, {
       date: save.date,
       headline: `${fighter.name} misses weight`,
       body: `${cut.headline}. ${cut.detail}`,
@@ -249,17 +294,20 @@ export function resolveBout(
   // derived from the bout id rather than the simulation rng, so it cannot shift the result.
   // With persistent officials disabled the engine draws anonymous judges as it always did, which
   // is the cheaper path for a lower performance save.
-  const assignment = featureEnabled(save.settings, 'persistentOfficials')
+  const regional = Boolean(save.events[bout.eventId]?.promotionId);
+  // Regional cards are worked by local officials, not the main promotion's persistent roster.
+  const assignment = featureEnabled(save.settings, 'persistentOfficials') && !regional
     ? assignOfficials(save, bout)
     : { judgeIds: [], refereeId: null };
   const hostEvent = save.events[bout.eventId];
   // A partisan crowd only exists when one fighter is at home and the other is not.
   const aHome = Boolean(hostEvent && a.country === hostEvent.country);
   const bHome = Boolean(hostEvent && b.country === hostEvent.country);
-  const homeAdvantage = aHome === bHome ? 0 : aHome ? 0.12 : -0.12;
+  const homeSide: -1 | 0 | 1 = aHome === bHome ? 0 : aHome ? 1 : -1;
 
   const prepA = prepareSide(save, bout, a, rng, save.player.fighterId === a.id ? playerPlan : undefined);
   const prepB = prepareSide(save, bout, b, rng, save.player.fighterId === b.id ? playerPlan : undefined);
+  creditWeightForfeits(bout);
 
   const opts: FightSimOptions = {
     boutId: bout.id,
@@ -273,7 +321,9 @@ export function resolveBout(
     contractedWeightLb: bout.contractedWeightLb,
     settings: save.settings,
     seed: rng.nextUint32(),
-    judges: judgePersonasFor(save, assignment, homeAdvantage),
+    judges: judgePersonasFor(save, assignment, homeSide, bout.id),
+    // Used by anonymous judges on a regional card or with persistent officials off.
+    homeSide,
     refereeTendency: refereeTendencyFor(save, assignment) ?? undefined,
     a: { fighter: a, gamePlan: prepA.gamePlan, sharpness: prepA.sharpness, tacticalFamiliarity: prepA.tacticalFamiliarity, cutQuality: prepA.cutQuality, campQuality: prepA.campQuality, shortNotice: prepA.shortNotice },
     b: { fighter: b, gamePlan: prepB.gamePlan, sharpness: prepB.sharpness, tacticalFamiliarity: prepB.tacticalFamiliarity, cutQuality: prepB.cutQuality, campQuality: prepB.campQuality, shortNotice: prepB.shortNotice },
@@ -289,18 +339,78 @@ export function resolveBout(
   );
   applyDetail(result, detail);
 
+  // Who held the belts going in. applyResult installs a new champion before the headline is
+  // written, so a headline that read the live table called every new champion's win a defence.
+  const beltsBefore = {
+    championId: save.rankings[bout.divisionId]?.championId ?? null,
+    interimChampionId: save.rankings[bout.divisionId]?.interimChampionId ?? null,
+  };
   applyResult(save, bout, result, rng, prepA.shortNotice, prepB.shortNotice);
   // What the officials did is recorded against them, so a judge builds a history.
-  recordOfficialOutcome(save, bout, result);
-  if (event) newsForResult(save, result, event.name);
+  if (!regional) recordOfficialOutcome(save, bout, result);
+  // A regional result is news only when it is the player's.
+  const playerInvolved = bout.fighterAId === save.player.fighterId || bout.fighterBId === save.player.fighterId;
+  if (event && (!regional || playerInvolved)) newsForResult(save, result, event.name, beltsBefore);
   return result;
 }
 
+/**
+ * Rating gains from having fought. Per rating, about a third of a point for a twenty two year old
+ * who beats an equal opponent, up to around two thirds against a clearly better one, falling to
+ * almost nothing past thirty, and to nothing at all for a rating already at the ceiling.
+ */
+export function fightExperience(fighter: Fighter, opponent: Fighter, won: boolean, drew: boolean, amateur: boolean, on: IsoDate): Partial<Record<RatingKey, number>> {
+  const age = ageOn(fighter.birthDate, on) ?? fighter.ageAtSnapshot ?? 28;
+  const youth = clamp((30 - age) / 10, 0, 1);
+  const quality = clamp((ovrRaw(opponent.ratings) - ovrRaw(fighter.ratings) + 10) / 20, 0.2, 1.2);
+  const outcome = won ? 1 : drew ? 0.8 : 0.65;
+  const base = 0.55 * outcome * (0.35 + youth) * quality * (amateur ? 0.7 : 1);
+  const out: Partial<Record<RatingKey, number>> = {};
+  for (const key of RATING_KEYS) {
+    const room = clamp((fighter.development.hiddenCeiling - fighter.ratings[key]) / 22, 0, 1.25);
+    const gain = base * room;
+    if (gain > 0.001) out[key] = gain;
+  }
+  return out;
+}
+
 /** Applies a completed result to both fighters, the rankings and the history. */
+/**
+ * The player's Pot after a fight.
+ *
+ * Pot was otherwise recomputed only in the year end pass, so a teenager gaining five Ovr a season
+ * read a Pot a whole season stale, and could sit below Ovr. The player's own fighter is the one
+ * whose Pot the player plans around, so it is refreshed after every fight and on each birthday.
+ * Not for every fighter: the annual pass is the budget for the rest of the world. The projection
+ * draws from its own seeded rng, so the world sequence is untouched.
+ */
+function refreshPlayerPotAfterFight(save: SaveGame, a: Fighter, b: Fighter): void {
+  for (const f of [a, b]) if (f.id === save.player.fighterId) updatePot(save, f);
+}
+
+function isLeapYearOf(date: IsoDate): boolean {
+  const y = yearOf(date);
+  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+}
+
 export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng: Rng, shortNoticeA: boolean, shortNoticeB: boolean): void {
   const a = save.fighters[result.fighterAId];
   const b = save.fighters[result.fighterBId];
   const event = save.events[bout.eventId];
+  // A regional bout counts on the professional record but never on the main promotion's, and an
+  // amateur bout counts only on the amateur record.
+  const regional = Boolean(event?.promotionId);
+  const amateur = Boolean(bout.isAmateur);
+
+  // The ranks both sides held going in, read before anything below moves the table, so the
+  // upset record measures the gap that stood that night rather than where the two ended up.
+  if (!regional) {
+    const table = save.rankings[result.divisionId];
+    const rankAt = (id: FighterId): number | null =>
+      !table ? null : table.championId === id ? 0 : table.interimChampionId === id ? 1 : table.entries.find((e) => e.fighterId === id)?.rank ?? null;
+    result.rankA = rankAt(result.fighterAId);
+    result.rankB = rankAt(result.fighterBId);
+  }
 
   save.history.results[result.boutId] = result;
   bout.status = 'completed';
@@ -316,10 +426,27 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
     fighter.boutIds.push(result.boutId);
     fighter.nextBoutId = null;
     fighter.lastFightDate = result.date;
+    if (!regional && !fighter.octagonDebut) fighter.octagonDebut = result.date;
+    const rec = amateur ? (fighter.amateurRecord ??= { wins: 0, losses: 0, draws: 0, noContests: 0 }) : fighter.record;
+    const promo = regional ? { wins: 0, losses: 0, draws: 0, noContests: 0 } : fighter.ufcRecord;
 
-    if (won) {
-      fighter.record.wins++;
-      fighter.ufcRecord.wins++;
+    if (amateur) {
+      if (won) {
+        rec.wins++;
+        fighter.winStreak++;
+        fighter.lossStreak = 0;
+      } else if (drew) {
+        rec.draws++;
+        fighter.winStreak = 0;
+      } else {
+        rec.losses++;
+        fighter.lossStreak++;
+        fighter.winStreak = 0;
+      }
+      fighter.momentum = clamp(fighter.momentum + (won ? 6 : drew ? 0 : -6), 0, 100);
+    } else if (won) {
+      rec.wins++;
+      promo.wins++;
       fighter.winStreak++;
       fighter.lossStreak = 0;
       // A doctor, corner or retirement stoppage is a stoppage win, which `isFinish` has always
@@ -342,12 +469,12 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
       fighter.momentum = clamp(fighter.momentum + 12, 0, 100);
       fighter.morale = clamp(fighter.morale + 8, 0, 100);
     } else if (drew) {
-      fighter.record.draws++;
-      fighter.ufcRecord.draws++;
+      rec.draws++;
+      promo.draws++;
       fighter.winStreak = 0;
     } else {
-      fighter.record.losses++;
-      fighter.ufcRecord.losses++;
+      rec.losses++;
+      promo.losses++;
       fighter.lossStreak++;
       fighter.winStreak = 0;
       // The loss side classifies exactly as the win side does, so a fight cannot be a stoppage
@@ -372,18 +499,12 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
 
     // Pay. For the player every movement goes through the ledger, so manager commission,
     // the gym percentage, tax, travel and sponsorship are all visible and applied once.
-    //
-    // Points on the gate are part of the deal. They are negotiated on the contract screen, shown
-    // on the contract, and used to be paid to nobody at all, so a fighter who bargained hard for
-    // them earned exactly what a fighter who did not earned.
-    const ppv = ppvPointsEarned(save, fighter, result);
-    const earned = purse.show + (won ? purse.win : 0) + ppv;
+    // Pay per view points are not known yet: the card's buys are only worked out once every bout
+    // on it is over, so resolveEvent pays them (payPpvPoints).
+    const earned = purse.show + (won ? purse.win : 0);
     fighter.careerEarnings += earned;
     fighter.lastPurse = earned;
     if (save.player.fighterId === fighter.id) {
-      if (ppv > 0) {
-        record(save, fighter.id, 'in', 'ppv-points', ppv, 'Pay per view points', result.boutId);
-      }
       const split = applyFightPurse(save, fighter, result.boutId, { show: purse.show, win: purse.win, bonuses: 0 }, won);
       paySponsorsForFight(save, fighter, result.boutId, won, fighter.isChampion);
       void split;
@@ -395,6 +516,13 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
       contract.fightsRemaining = Math.max(0, contract.fightsRemaining - 1);
       if (contract.fightsRemaining === 0) contract.status = 'expired';
     }
+
+    // Experience. A fight teaches what a camp cannot, most of all to a young fighter and most of all
+    // against somebody better. Ratings used to move only through training, so a player who won fight
+    // after fight barely improved and kept meeting opponents rated well above them, which is the
+    // complaint players made most often. The gain is bounded by the fighter's hidden ceiling, so it
+    // speeds a career toward its Pot rather than past it, and it draws nothing from the world rng.
+    fighter.ratings = applyDeltas(fighter.ratings, fightExperience(fighter, opponent, won, drew, amateur, save.date));
 
     // Health.
     applyWear(fighter, wearFromFight(fighter, result, save), fighter.development.resilience);
@@ -416,6 +544,12 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
       eventRegion,
       homeRegion: regionOfFighter(fighter),
     });
+    // A win on a local card is not noticed the way a main promotion win is.
+    const scale = popularityScaleFor(save, bout);
+    if (scale !== 1) {
+      change.delta *= scale;
+      for (const k of Object.keys(change.regional)) change.regional[k] *= scale;
+    }
     applyPopularity(fighter, change);
     applyFameChange(fighter, fameFromResult(fighter, result, bout.isMainEvent));
     applyFollowerChange(fighter, socialFromResult(fighter, result, bout.isMainEvent));
@@ -447,6 +581,25 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
   // The fight itself moves the relationship between the two fighters.
   recordFightBetween(save, a.id, b.id, result.boutId, result.winnerId, result.fightQuality > 70);
 
+  if (regional) {
+    // The regional circuit settles its own standings and belt. None of the main promotion's
+    // rankings, titles or contender claims are touched by a regional bout.
+    applyRegionalResult(save, bout, result, rng);
+    refreshPlayerPotAfterFight(save, a, b);
+    for (const f of [a, b]) {
+      f.ratingHistory.push({
+        date: result.date,
+        ratings: historyRatings(f.ratings),
+        ovr: ovrDisplayed(historyRatings(f.ratings)),
+        pot: f.pot,
+        longevity: f.longevity,
+        reason: `after ${result.winnerId === f.id ? 'beating' : result.winnerId === null ? 'drawing with' : 'losing to'} ${f.id === a.id ? b.name : a.name}${amateur ? ' as an amateur' : ''}`,
+      });
+      notePeakOvr(f, result.date);
+    }
+    return;
+  }
+
   // Rankings and titles.
   applyResultToRankings(save, result, shortNoticeA, shortNoticeB);
   // Read before the title outcome is applied, so a gym can be credited for crowning a champion
@@ -455,18 +608,34 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
   const titleNotes = applyTitleOutcome(save, result);
   // Winning an eliminator earns the number one contender position, and the standing contender
   // losing gives it up. Without this an eliminator was a label that meant nothing.
+  // Published here only, with the division tag and below title-change importance. They used to
+  // go into titleNotes as well, so every contender headline appeared twice and the second copy
+  // was weighted like a change of champion.
   for (const note of applyResultToContenders(save, bout, result)) {
-    titleNotes.push(note);
     pushNews(save, {
-      date: save.date,
+      date: result.date,
       headline: note,
-      body: note,
+      body: result.narrativeSummary,
       tags: ['title', bout.divisionId],
       fighterIds: [bout.fighterAId, bout.fighterBId],
       importance: 3,
     });
   }
+  // When the belt settles the ordinary way, the result headline already says who defended or
+  // took it, so the matching plain note would be the same story twice at the same importance.
+  // Notes that add something (a missed weight, a vacancy, an interim belt folded in) still run.
+  const winnerName = result.winnerId ? save.fighters[result.winnerId]?.name : undefined;
+  const headlined =
+    event && (result.titleIneligibleFighterIds ?? []).length === 0 && winnerName
+      ? new Set([
+          `${winnerName} defends the title.`,
+          `${winnerName} is the new champion.`,
+          `${winnerName} defends the interim title.`,
+          `${winnerName} wins the interim title.`,
+        ])
+      : new Set<string>();
   for (const note of titleNotes) {
+    if (headlined.has(note)) continue;
     pushNews(save, { date: result.date, headline: note, body: result.narrativeSummary, tags: ['title'], fighterIds: [a.id, b.id], importance: 5 });
   }
   if (result.isTitleFight && result.winnerId && result.winnerId !== championBefore) {
@@ -480,12 +649,13 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
     }
   }
 
+  refreshPlayerPotAfterFight(save, a, b);
   // Rating history entry so a fighter page can show the shape of a career.
   for (const f of [a, b]) {
     f.ratingHistory.push({
       date: result.date,
-      ratings: { ...f.ratings },
-      ovr: ovrDisplayed(f.ratings),
+      ratings: historyRatings(f.ratings),
+      ovr: ovrDisplayed(historyRatings(f.ratings)),
       pot: f.pot,
       longevity: f.longevity,
       reason: `after ${result.winnerId === f.id ? 'beating' : result.winnerId === null ? 'drawing with' : 'losing to'} ${f.id === a.id ? b.name : a.name}`,
@@ -500,14 +670,36 @@ export function applyResult(save: SaveGame, bout: Bout, result: FightResult, rng
  * Contract terms express points as dollars per thousand buys, which is only meaningful on a card
  * that sells pay per view. A fight night pays none, and a contract without points pays none.
  */
-function ppvPointsEarned(save: SaveGame, fighter: Fighter, result: FightResult): number {
+function ppvPointsEarned(save: SaveGame, fighter: Fighter, buys: number | null): number {
   const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
   const rate = contract?.terms.ppvPoints ?? 0;
   if (rate <= 0) return 0;
-  const business = businessStore(save)[result.eventId];
-  const buys = business?.ppvBuys ?? null;
   if (!buys || buys <= 0) return 0;
   return Math.round((buys / 1000) * rate);
+}
+
+/**
+ * Pays every fighter on the card their points on the gate.
+ *
+ * Points used to be read while each bout was settled, before the card's buys existed, so they
+ * were always zero: a champion who negotiated points earned exactly what one who did not earned.
+ * The buys are passed in from the business figures just computed rather than read back from the
+ * store, which is emptied when business depth is switched off. No rng is drawn here.
+ */
+function payPpvPoints(save: SaveGame, results: FightResult[], buys: number | null): void {
+  if (!buys || buys <= 0) return;
+  for (const r of results) {
+    for (const fid of [r.fighterAId, r.fighterBId]) {
+      const f = save.fighters[fid];
+      if (!f) continue;
+      const points = ppvPointsEarned(save, f, buys);
+      if (points <= 0) continue;
+      f.careerEarnings += points;
+      f.lastPurse = (f.lastPurse ?? 0) + points;
+      // The player's points pay commission, the gym's share and tax like the rest of the purse.
+      if (save.player.fighterId === fid) applyPpvPoints(save, f, r.boutId, points);
+    }
+  }
 }
 
 /** Resolves every remaining bout on an event and closes it out. */
@@ -553,6 +745,17 @@ export function resolveEvent(
   }
 
   event.contestedBoutIds = results.map((r) => r.boutId);
+  if (event.promotionId) {
+    // A regional card has no bonuses, no pay per view and no main promotion business. The crowd is
+    // what the promotion's level draws.
+    const promotion = promotionConfig(event.promotionId);
+    const band = promotion ? REGIONAL_LEVELS[promotion.level].attendance : ([400, 1500] as [number, number]);
+    const draw = results.reduce((sum, r) => sum + ((save.fighters[r.fighterAId]?.popularity ?? 0) + (save.fighters[r.fighterBId]?.popularity ?? 0)) / 2, 0) / Math.max(1, results.length);
+    event.drawScore = Math.round(draw);
+    event.attendance = Math.round(band[0] + (band[1] - band[0]) * clamp(draw / 25, 0.15, 1));
+    event.status = 'completed';
+    return results;
+  }
   const bonuses = assignEventBonuses(results, event.bonusAmount, rng);
   event.fightOfTheNightBoutId = bonuses.fightOfTheNightBoutId;
   event.performanceBonusFighterIds = bonuses.performanceFighterIds;
@@ -608,6 +811,7 @@ export function resolveEvent(
   // a settings toggle shift every later draw and change the whole world, which is the determinism
   // rule this codebase has broken three times. The flag decides whether the figures are kept.
   const business = computeEventBusiness(save, event, rng);
+  payPpvPoints(save, results, business.ppvBuys);
   if (!featureEnabled(save.settings, 'businessDepth')) {
     delete businessStore(save)[event.id];
   }
@@ -634,14 +838,23 @@ export function resolveEvent(
  *
  * Full play by play for every fight ever contested is the single largest thing a save
  * stores. Recent fights and every fight the player was involved in keep their complete
- * event stream. Older fights keep their totals, scorecards, round summaries and result,
+ * event stream. Older fights keep their totals, scorecards, round scores and result,
  * which is everything the record books, fighter pages and history pages actually read.
+ *
+ * The tiers, counted back from the newest fight:
+ * - up to 40: everything;
+ * - 41 to 220: the closing ten events of the play by play, and every round statistic;
+ * - 221 to 400: the closing ten events, with the round by round statistics dropped;
+ * - beyond 400: no play by play, and the round notes and full precision damage readings go
+ *   too. What is left is the result, totals, scorecards, round scores and recap.
  */
 const KEEP_FULL_EVENTS_FIGHTS = 40;
 /** Fights that keep their round by round statistics. */
 const KEEP_ROUND_STATS_FIGHTS = 220;
 /** Fights that keep a trimmed closing sequence. Beyond this the event stream is dropped. */
 const KEEP_CLOSING_EVENTS_FIGHTS = 400;
+/** Events kept from the end of a trimmed fight. */
+const CLOSING_EVENTS = 10;
 
 /**
  * How long the promotion waits before approaching a fighter it released.
@@ -653,21 +866,32 @@ const KEEP_CLOSING_EVENTS_FIGHTS = 400;
  */
 export const RELEASE_RETURN_DAYS = 300;
 
-export function pruneHistory(save: SaveGame): { prunedEvents: number; prunedRounds: number } {
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
+}
+
+export function pruneHistory(save: SaveGame): { prunedEvents: number; prunedRounds: number; archived: number } {
   const results = Object.values(save.history.results).sort((a, b) => (a.date < b.date ? 1 : -1));
   let prunedEvents = 0;
   let prunedRounds = 0;
+  let archived = 0;
   const playerId = save.player.fighterId;
 
   results.forEach((r, index) => {
     const playerFight = playerId !== null && (r.fighterAId === playerId || r.fighterBId === playerId);
     if (playerFight) return;
     if (index < KEEP_FULL_EVENTS_FIGHTS) return;
-    if (r.events.length > 0) {
-      // The closing sequence is kept so a finish can still be described accurately, then
-      // dropped entirely once the fight is far enough into the past. The recap, totals,
-      // scorecards and result survive either way.
-      r.events = index > KEEP_CLOSING_EVENTS_FIGHTS ? [] : r.events.slice(-10);
+    // The closing sequence is kept so a finish can still be described accurately, then
+    // dropped entirely once the fight is far enough into the past. The recap, totals,
+    // scorecards and result survive either way. Counted only when something changes, so a
+    // fight trimmed on an earlier pass is not counted again every week.
+    if (index > KEEP_CLOSING_EVENTS_FIGHTS) {
+      if (r.events.length > 0) {
+        r.events = [];
+        prunedEvents++;
+      }
+    } else if (r.events.length > CLOSING_EVENTS) {
+      r.events = r.events.slice(-CLOSING_EVENTS);
       prunedEvents++;
     }
     if (index > KEEP_ROUND_STATS_FIGHTS) {
@@ -683,13 +907,75 @@ export function pruneHistory(save: SaveGame): { prunedEvents: number; prunedRoun
         delete round.staminaEndB;
         prunedRounds++;
       }
-      if (r.events.length > 0) r.events = [];
+    }
+    if (index > KEEP_CLOSING_EVENTS_FIGHTS && r.rounds.some((round) => round.summary !== '' || round.keyMomentSeq !== null)) {
+      // The cold tier. A round note is only ever shown beside the play by play, which is gone by
+      // now, and the key moment points into that same stream. The round scores stay, because
+      // title rematch decisions read who won each round. The final damage and cost readings are
+      // shown rounded on the fight page and are read by nothing else after the fight.
+      for (const round of r.rounds) {
+        round.summary = '';
+        round.keyMomentSeq = null;
+      }
+      for (const d of [r.finalDamageA, r.finalDamageB]) {
+        if (!d) continue;
+        for (const k of Object.keys(d) as (keyof typeof d)[]) if (typeof d[k] === 'number') d[k] = round1(d[k]);
+      }
+      if (typeof r.finalStaminaA === 'number') r.finalStaminaA = round1(r.finalStaminaA);
+      if (typeof r.finalStaminaB === 'number') r.finalStaminaB = round1(r.finalStaminaB);
+      if (typeof r.longevityCostA === 'number') r.longevityCostA = round1(r.longevityCostA);
+      if (typeof r.longevityCostB === 'number') r.longevityCostB = round1(r.longevityCostB);
+      archived++;
     }
   });
-  return { prunedEvents, prunedRounds };
+  return { prunedEvents, prunedRounds, archived };
 }
 
+/**
+ * Whether a new injury takes a fighter other than the player out of a booked bout.
+ *
+ * The player is never withdrawn here. Their injury becomes a decision with the booking attached,
+ * raised by checkPlayerInjuries in the same weekly pass; withdrawing them first took the fight away
+ * in silence and left the doctor saying no fight was booked. Other fighters are withdrawn only when
+ * the injury will not clear at least a week before the bout. Any blocking injury used to be enough,
+ * so a five week rib injury cost a fighter a booking four months away.
+ */
+function injuryForcesWithdrawal(injury: { blocksCompetition: boolean; expectedReturn: IsoDate }, bout: Bout): boolean {
+  if (!injury.blocksCompetition) return false;
+  return injury.expectedReturn > addDays(bout.date, -7);
+}
+
+/**
+ * The last health check before a card. A fighter booked with an injury expected to clear in time
+ * keeps the booking, so one whose recovery slipped, or who was hurt again, is withdrawn here rather
+ * than walking out hurt. The player is not: their injury is a decision, and a medically contingent
+ * booking of theirs is enforced when fight week begins.
+ */
+function fightWeekHealthCheck(save: SaveGame, rng: Rng, headlines: string[]): void {
+  const playerFighterId = save.player.fighterId;
+  for (const bout of Object.values(save.bouts)) {
+    if (bout.status !== 'scheduled') continue;
+    const days = daysBetween(save.date, bout.date);
+    if (days <= 0 || days > FIGHT_WEEK_DAYS + 1) continue;
+    for (const id of [bout.fighterAId, bout.fighterBId]) {
+      if (id === playerFighterId) continue;
+      const f = save.fighters[id];
+      if (!f || f.retired || canCompete(f, bout.date).ok) continue;
+      withdrawFromBout(save, bout, id, 'an injury that did not clear in time', rng, headlines);
+      break;
+    }
+  }
+}
+
+/**
+ * The weekly pass runs with the live camp index in place, because it asks every fighter which camp
+ * they are in, and several of the checks it calls ask again.
+ */
 function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void {
+  withLiveCampIndex(save, () => runWeeklyMaintenance(save, rng, headlines));
+}
+
+function runWeeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void {
   const diff = DIFFICULTY[save.settings.difficulty];
   const playerFighterId = save.player.fighterId;
 
@@ -728,17 +1014,17 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     }
 
     // Camps.
-    const camp = Object.values(save.camps).find((c) => c.fighterId === fighter.id && (c.status === 'planned' || c.status === 'running'));
+    const camp = liveCampOf(save, fighter.id);
     if (camp && camp.startDate <= save.date && camp.endDate > save.date) {
       const week = runCampWeek(save, camp, rng);
       if (fighter.id === playerFighterId) {
         for (const o of week.outcomes) headlines.push(`Camp: ${o.headline}.`);
       }
-      if (week.injured && fighter.nextBoutId) {
-        // A camp injury can force a withdrawal.
+      if (week.injured && fighter.nextBoutId && fighter.id !== playerFighterId) {
+        // A camp injury can force a withdrawal, judged on the injury this week added.
         const bout = save.bouts[fighter.nextBoutId];
-        const blocking = activeInjuries(fighter, save.date).some((i) => i.blocksCompetition);
-        if (bout && blocking) withdrawFromBout(save, bout, fighter.id, 'injured in camp', rng, headlines);
+        const fresh = fighter.injuries[fighter.injuries.length - 1];
+        if (bout && fresh && injuryForcesWithdrawal(fresh, bout)) withdrawFromBout(save, bout, fighter.id, 'injured in camp', rng, headlines);
       }
     } else if (camp && camp.endDate <= save.date && camp.status !== 'complete') {
       finalizeCamp(save, camp, rng);
@@ -751,7 +1037,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
         fighter,
         save.date,
         {
-          trainingQuality: 0.42 * capacity,
+          // Capacity is applied once, by developWeek through trainingCapacity. Folding it in here
+          // as well squared every injury's restriction.
+          trainingQuality: 0.42,
           focus: evenFocus(),
           coaching: coachQuality,
           partners: gym ? gym.trainingPartners : { striking: 25, grappling: 25, wrestling: 25, submissions: 25, cardio: 25, durability: 25 },
@@ -785,9 +1073,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
           fighter.injuries.push(injury);
           if (injury.severity >= 4) invalidatePot(save, fighter.id, 'major-injury');
           if (fighter.id === playerFighterId) headlines.push(`${injury.type} picked up in training.`);
-          if (fighter.nextBoutId && injury.blocksCompetition) {
+          if (fighter.nextBoutId && fighter.id !== playerFighterId) {
             const bout = save.bouts[fighter.nextBoutId];
-            if (bout) withdrawFromBout(save, bout, fighter.id, 'injured in training', rng, headlines);
+            if (bout && injuryForcesWithdrawal(injury, bout)) withdrawFromBout(save, bout, fighter.id, 'injured in training', rng, headlines);
           }
         }
       }
@@ -803,7 +1091,21 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     updateHappiness(save, fighter);
 
     const previousDivision = fighter.divisionId;
-    const weight = manageWalkingWeight(fighter, save.date);
+    // A regional fighter other than the player keeps to the division the circuit runs. Their walking
+    // weight is still managed; the division move, with its main promotion news, is not theirs to make.
+    const isPlayer = fighter.id === playerFighterId;
+    // Nobody changes division under a booked bout, which was cancelled later the same week for it,
+    // and the player is never moved at all: their team asks them instead.
+    const weight =
+      fighter.circuit && !isPlayer
+        ? { movedUp: null, wantsMove: null }
+        : manageWalkingWeight(fighter, save.date, !isPlayer && !hasLiveBooking(save, fighter));
+    if (isPlayer && weight.wantsMove) {
+      const note = raiseForcedMoveDecision(save, fighter, weight.wantsMove);
+      if (note) headlines.push(note);
+    }
+    // The vacate and table bookkeeping below is for the automatic move, which only an NPC makes.
+    // The player's move goes through commitMove, which does its own.
     if (weight.movedUp) {
       const to = DIVISIONS.find((d) => d.id === weight.movedUp)!;
       // A champion who leaves the division vacates the title rather than holding it in a
@@ -840,7 +1142,6 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
         fighterIds: [fighter.id],
         importance: 2,
       });
-      if (fighter.id === playerFighterId) headlines.push(`Moved up to ${to.name}.`);
     }
   }
 
@@ -909,11 +1210,15 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   save.pfp = recomputePfp(save);
 
   // Career milestones, checked once a week against what the career has actually done.
+  // The headline carries the name because the item sits in the world feed beside everyone else's
+  // news, where a bare "First finish" read as nobody's. The stored label stays bare for the
+  // achievements list, which is already the player's own.
+  const milestoneName = save.player.fighterId ? save.fighters[save.player.fighterId]?.name : undefined;
   for (const label of recordAchievements(save)) {
     pushNews(save, {
       date: save.date,
-      headline: label,
-      body: `A career milestone: ${label.toLowerCase()}.`,
+      headline: milestoneName ? `${milestoneName}: ${label}` : label,
+      body: `A career milestone: ${label.charAt(0).toLowerCase()}${label.slice(1)}.`,
       tags: ['career'],
       fighterIds: save.player.fighterId ? [save.player.fighterId] : [],
       importance: 2,
@@ -1050,7 +1355,7 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
           if (b.status !== 'scheduled' || b.divisionId !== d.id || !b.isInterimTitleFight) continue;
           b.isInterimTitleFight = false;
           b.isTitleFight = true;
-          b.bookingReason = `${b.bookingReason}. Upgraded to an undisputed title bout after the championship was vacated.`;
+          b.bookingReason = joinSentence(b.bookingReason, 'Upgraded to an undisputed title bout after the championship was vacated.');
         }
         // An open interim offer has to be upgraded with the bouts. Leaving it alone let the player
         // accept an interim championship for a division that no longer had a champion to stand in
@@ -1078,8 +1383,12 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   // Interim titles when a champion is unavailable for a long time. The condition holds for
   // months at a stretch, so the announcement is made once, when the interim bout is not
   // yet on the books, rather than every weekly pass.
+  // The rule is the one the booking pass uses. A separate looser rule used to drive this news,
+  // so it could announce an interim title the matchmaker would never make, or stay silent when
+  // one was booked because the champion was suspended or campaigning elsewhere.
   for (const d of DIVISIONS) {
-    if (!shouldCreateInterimTitle(save, d.id)) continue;
+    const justification = interimTitleJustification(save, d.id);
+    if (!justification.justified) continue;
     const alreadyAnnounced = save.history.news.some(
       (n) => n.tags.includes(d.id) && n.headline === `${d.name} interim title in play` && daysBetween(n.date, save.date) < 240
     );
@@ -1087,16 +1396,16 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     pushNews(save, {
       date: save.date,
       headline: `${d.name} interim title in play`,
-      body: `With the champion inactive, the next top contender bout in the ${d.name} division will be for an interim title.`,
+      body: `${justification.explanation} The next top contender bout in the division will be for the interim belt.`,
       tags: ['title', d.id],
       fighterIds: [],
       importance: 4,
     });
   }
 
-  // Contract expiry and renewal.
+  // Contract expiry and renewal. The regional circuit renews its own deals.
   for (const fighter of Object.values(save.fighters)) {
-    if (fighter.retired) continue;
+    if (fighter.retired || fighter.circuit) continue;
     const contract = fighter.contractId ? save.contracts[fighter.contractId] : null;
     // A released fighter is out of contract just as much as one whose deal ran out. Only the
     // expired case was handled, so a player released for refusing fights was never approached
@@ -1115,8 +1424,39 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       if (existing.some((o) => o.status === 'open')) continue;
       const latest = existing.sort((x, y) => (x.createdOn > y.createdOn ? -1 : 1))[0];
       if (latest && daysBetween(latest.createdOn, save.date) < 28) continue;
-      // Being let go is not the same as a deal running its course. The promotion takes longer to
-      // come back, and comes back at all only for somebody the division still has a use for.
+      // A deal that ran out on a losing run is not renewed. The player used to be re-signed after
+      // any record, so an 0-4 run ended in a fresh four fight deal while an NPC with the same
+      // results was cut. The test is the NPC one with a margin, so one bad night does not end a
+      // career: no leverage, no current win streak and at least two straight losses.
+      if (!released && computeLeverage(fighter, save).score <= 22 && fighter.winStreak === 0 && fighter.lossStreak >= 2) {
+        contract.status = 'released';
+        contract.endCondition = 'released';
+        // The release date is what the wait before any new approach is counted from. Without it
+        // the next weekly pass would read the wait as served and re-offer at once.
+        contract.endDate = save.date;
+        fighter.activityStatus = 'released';
+        addInboxMessage(save, {
+          sender: 'contract-rep',
+          senderName: PROMOTION_CONTRACTS,
+          subject: 'Contract not renewed',
+          body: `The current deal is complete and ${PROMOTION_NAME} is not renewing it. After ${fighter.lossStreak} straight losses, ${fighter.name} is released. The promotion does look again at fighters it has let go, but not for most of a year.`,
+          category: 'contract',
+          requiresAction: false,
+          choices: [{ key: 'ack', label: 'Acknowledge' }],
+          linkedFighterId: fighter.id,
+        });
+        pushNews(save, {
+          date: save.date,
+          headline: `${fighter.name} is released`,
+          body: `${fighter.name} has been let go after ${fighter.lossStreak} straight losses.`,
+          tags: ['roster'],
+          fighterIds: [fighter.id],
+          importance: 2,
+        });
+        continue;
+      }
+      // Being let go is not the same as a deal running its course. The promotion takes most of a
+      // year to come back.
       if (released) {
         const since = contract.endDate ? daysBetween(contract.endDate, save.date) : RELEASE_RETURN_DAYS;
         if (since < RELEASE_RETURN_DAYS) continue;
@@ -1151,7 +1491,11 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
         pushNews(save, {
           date: save.date,
           headline: `${fighter.name} is released`,
-          body: `${fighter.name} has been let go after ${fighter.lossStreak} straight losses.`,
+          // A release follows any run without a win, so the streak can be one loss or none at all
+          // (a draw or a no contest resets it), and "after 1 straight losses" read badly.
+          body: `${fighter.name} has been let go ${
+            fighter.lossStreak >= 2 ? `after ${fighter.lossStreak} straight losses` : fighter.lossStreak === 1 ? 'after a loss' : 'when the contract ran out'
+          }.`,
           tags: ['roster'],
           fighterIds: [fighter.id],
           importance: 1,
@@ -1170,6 +1514,8 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     for (const fighter of Object.values(save.fighters)) {
       if (fighter.retired || fighter.id === playerFighterId) continue;
       if (fighter.nextBoutId) continue;
+      // The circuit handles its own departures, without main promotion retirement news.
+      if (fighter.circuit) continue;
       const weekly = retirementChance(fighter, save.date) / 52;
       const retires = rng.chance(weekly);
       if (retires && retirementsOn) {
@@ -1184,14 +1530,14 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   }
 
   // New prospects entering the roster.
-  const activeCount = Object.values(save.fighters).filter((f) => !f.retired && f.activityStatus === 'active').length;
+  const activeCount = mainRosterFighters(save).filter((f) => !f.retired && f.activityStatus === 'active').length;
   // The roster is scaled against what the calendar can actually give people to do. See
   // ROSTER_TARGET_SCALE for the arithmetic that ties it to the activity bands.
   const divisionTarget = (d: { targetRosterSize: number }) => Math.round(d.targetRosterSize * ROSTER_TARGET_SCALE);
   const targetCount = DIVISIONS.reduce((s, d) => s + divisionTarget(d), 0);
   if (activeCount < targetCount && rng.chance(0.55)) {
     const shortDivisions = DIVISIONS.filter(
-      (d) => Object.values(save.fighters).filter((f) => f.divisionId === d.id && !f.retired && f.activityStatus === 'active').length < divisionTarget(d)
+      (d) => mainRosterFighters(save).filter((f) => f.divisionId === d.id && !f.retired && f.activityStatus === 'active').length < divisionTarget(d)
     );
     if (shortDivisions.length > 0) {
       const d = rng.pick(shortDivisions);
@@ -1215,7 +1561,7 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       pushNews(save, {
         date: save.date,
         headline: `${prospect.name} signs with the promotion`,
-        body: `${prospect.name}, ${prospect.ageAtSnapshot} years old out of ${prospect.country}, has been ${rng.pick(pathways)}. Record ${prospect.record.wins}-${prospect.record.losses}.`,
+        body: `${prospect.name}, ${ageOn(prospect.birthDate, save.date) ?? prospect.ageAtSnapshot} years old out of ${prospect.country}, has been ${rng.pick(pathways)}. Record ${prospect.record.wins}-${prospect.record.losses}.`,
         tags: ['roster', d.id],
         fighterIds: [prospect.id],
         importance: 1,
@@ -1256,18 +1602,24 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
 
   // Keep the calendar populated and book cards that need bouts.
   scheduleEvents(save, rng, 200);
+  // The regional circuit runs its own calendar, cards and call up review. Absent for every save
+  // that did not start on it, so nothing here touches their random sequence.
+  if (save.regional) runRegionalWeek(save, rng, headlines);
 
   // Championship bouts are made before anything else. Without this, the top contenders
   // get absorbed into ordinary matchups on nearer cards and the title picture never
   // resolves.
   bookTitleFights(save, rng, headlines);
   const upcoming = Object.values(save.events)
-    .filter((e) => e.status === 'announced' && e.date > save.date && daysBetween(save.date, e.date) < 120)
+    .filter((e) => !e.promotionId && e.status === 'announced' && e.date > save.date && daysBetween(save.date, e.date) < 120)
     .sort((x, y) => (x.date < y.date ? -1 : 1));
   for (const ev of upcoming) {
     const bookedBouts = ev.boutIds.filter((id) => save.bouts[id]?.status === 'scheduled').length;
     const daysOut = daysBetween(save.date, ev.date);
-    const targetBooked = daysOut > 90 ? 2 : daysOut > 60 ? 6 : daysOut > 35 ? 10 : 12;
+    // Booking ramps toward the card's own announced size. It stopped at twelve before, so a card
+    // announced with thirteen or fourteen bouts was never filled past twelve.
+    const full = ev.plannedBouts > 0 ? ev.plannedBouts : 12;
+    const targetBooked = daysOut > 90 ? 2 : daysOut > 60 ? Math.round(full * 0.5) : daysOut > 35 ? Math.round(full * 0.83) : full;
     if (bookedBouts < targetBooked) {
       const booking = bookEvent(save, ev, rng);
       for (const b of booking.bouts) {
@@ -1312,6 +1664,11 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   updateAllHype(save, save.date);
   pruneHype(save);
   pruneHistory(save);
+  // Once a month, on the same week the gym's books are run. Nothing here draws from the rng or
+  // removes anything a later pass reads.
+  if (Number(save.date.slice(8, 10)) <= 7) compactSave(save);
+
+  fightWeekHealthCheck(save, rng, headlines);
 
   // Player facing flow. An injury with a fight booked becomes a decision that stops the
   // calendar, fight week tasks are generated once per bout, and social items arrive within
@@ -1319,11 +1676,13 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
   if (playerFighterId) {
     const me = save.fighters[playerFighterId];
     if (me && !me.retired) {
-      checkPlayerInjuries(save);
+      // Fight week first, so a contingent booking that is withdrawn does not get an injury
+      // decision raised against it a moment before it goes.
       const booked = hasLiveBooking(save, me);
       if (booked && daysBetween(save.date, booked.date) <= FIGHT_WEEK_DAYS + 2) {
-        ensureFightWeekTasks(save, booked.id);
+        startFightWeek(save, me, booked, rng, headlines);
       }
+      checkPlayerInjuries(save);
       // Separate budgets. Sponsor and compliance items used to consume the whole allowance,
       // which is why social interactions almost never appeared.
       const social = featureEnabled(save.settings, 'mediaDepth')
@@ -1342,6 +1701,9 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
           linkedFighterId: item.sourceFighterId,
         });
         message.linkedSocialId = item.id;
+        // Tied to the bout as well, so the inbox closes a pre fight item once the fight is over
+        // rather than leaving it answerable after the event.
+        if (item.boutId) message.linkedBoutId = item.boutId;
         message.notificationSignature = `social|${item.signature}|${item.sourceFighterId ?? 'none'}`;
         message.decisionKey = message.notificationSignature;
         message.decisionCreatedOn = save.date;
@@ -1353,9 +1715,12 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       for (const note of runFinanceWeek(save, me)) headlines.push(note);
       // The pass always runs, because it draws from the shared world rng. Skipping the call would
       // shift every later draw and make a settings toggle change fight results. The flag decides
-      // whether anything it produces reaches the player.
-      const dopingNotes = runAntiDopingWeek(save, me, rng);
-      if (featureEnabled(save.settings, 'antiDoping')) {
+      // whether it applies anything: with it off the draws happen and nothing else does. Undoing
+      // the consequences afterwards was not enough, because a finding had already suspended the
+      // fighter, cancelled the bout and fined them, and the suspension was never lifted.
+      const antiDoping = featureEnabled(save.settings, 'antiDoping');
+      const dopingNotes = runAntiDopingWeek(save, me, rng, { apply: antiDoping });
+      if (antiDoping) {
         for (const note of dopingNotes) headlines.push(note);
       } else {
         clearDopingState(save, me.id);
@@ -1370,12 +1735,21 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
       pruneCallouts(save);
       // Live matchmaking interest. A callout that went well, a rivalry the fans want and a
       // division debut all become real offers here rather than expiring unmentioned.
-      const matchupPass = runMatchupInterestPass(save, me, rng);
+      // A fighter still on the regional circuit is not on the main promotion's radar for callout
+      // fights, and main roster fighters do not call out somebody they have never heard of.
+      const onCircuit = Boolean(me.circuit);
+      const matchupPass = onCircuit ? { headlines: [] as string[] } : runMatchupInterestPass(save, me, rng);
       for (const note of matchupPass.headlines) headlines.push(note);
+      // A debutant the card seeding has found nobody for gets the debut made directly. It uses its
+      // own rng, so the world's sequence is unchanged.
+      if (!onCircuit) {
+        const debut = ensurePlayerDebut(save, me);
+        if (debut) headlines.push(debut);
+      }
       pruneMatchupInterests(save);
       pruneGamePlans(save);
       // Other fighters act too: they call the player out and occasionally change division.
-      for (const note of runNpcCallouts(save, rng)) headlines.push(note);
+      if (!onCircuit) for (const note of runNpcCallouts(save, rng)) headlines.push(note);
       // Any callout that has been sitting open long enough gets an answer.
       for (const callout of openCallouts(save)) {
         if (callout.fromId !== me.id) continue;
@@ -1431,15 +1805,51 @@ function weeklyMaintenance(save: SaveGame, rng: Rng, headlines: string[]): void 
     const gym = save.gyms[save.player.gymId];
     if (gym) {
       const month = runGymMonth(save, gym);
-      addInboxMessage(save, {
-        sender: 'gym-owner',
-        senderName: 'Gym finances',
-        subject: `Monthly finances: ${month.net >= 0 ? 'surplus' : 'shortfall'}`,
-        body: `${month.lines.join('. ')}. Net ${month.net >= 0 ? 'surplus' : 'shortfall'} of ${Math.abs(month.net)}. Balance is now ${Math.round(gym.balance)}.`,
-        category: 'gym',
-        requiresAction: false,
-        choices: [{ key: 'ack', label: 'Acknowledge' }],
-      });
+      // A month already closed by hand has nothing new to report.
+      const settled = month.income !== 0 || month.costs !== 0;
+      // Under two months of costs in the bank is worth a read, not just a line in the inbox.
+      const lowRunway = settled && gym.balance >= 0 && gym.balance < month.costs * GYM_RUNWAY_WARNING_MONTHS;
+      if (settled && gym.balance < 0) {
+        // A gym in the red used to keep trading forever with nothing to show for it beyond a
+        // number, which reached minus a million and a half in a three year coach save. Debt now
+        // costs standing every month it lasts, and the owner is asked what to do about it.
+        gym.reputation = Math.max(0, gym.reputation - GYM_DEBT_REPUTATION_LOSS);
+      }
+      if (settled) {
+        const message = addInboxMessage(save, {
+          sender: 'gym-owner',
+          senderName: 'Gym finances',
+          subject: `Monthly finances: ${month.net >= 0 ? 'surplus' : 'shortfall'}${lowRunway ? ', under two months of costs left' : ''}`,
+          body: `${month.lines.join('. ')}. Net ${month.net >= 0 ? 'surplus' : 'shortfall'} of ${formatMoney(Math.abs(month.net))}. Balance is now ${formatMoney(gym.balance)}.${
+            lowRunway ? ' At this rate the gym runs out of money within two months. More fighters, a lower payroll or a lower overhead would turn it around.' : ''
+          }`,
+          category: 'gym',
+          requiresAction: lowRunway,
+          choices: [{ key: 'ack', label: 'Acknowledge' }],
+        });
+        // A warning, not a reason to stop the calendar.
+        if (lowRunway) message.mandatory = false;
+      }
+      const signature = `gym-debt|${gym.id}`;
+      if (settled && gym.balance < 0 && mayNotify(save, { signature, cooldownDays: 60 })) {
+        const own = save.finance?.cash ?? save.player.balance;
+        const debt = addInboxMessage(save, {
+          sender: 'gym-owner',
+          senderName: 'Gym finances',
+          subject: `${gym.name} is in debt`,
+          body: `The gym closed the month ${formatMoney(-gym.balance)} in the red. Until the balance is back above zero, upgrades and hiring are frozen, the fighters feel the instability, and every month in debt costs the gym standing. You have ${formatMoney(Math.max(0, own))} of your own.`,
+          category: 'gym',
+          requiresAction: true,
+          deadline: addDays(save.date, 30),
+          choices: [
+            { key: GYM_DEBT_CHOICES.cover, label: 'Cover it from your own money', hint: 'As far as your own money goes' },
+            { key: GYM_DEBT_CHOICES.carry, label: 'Let the gym carry the debt', hint: 'Upgrades and hiring stay frozen, and the gym loses standing' },
+          ],
+        });
+        debt.notificationSignature = signature;
+        debt.decisionKey = signature;
+        debt.decisionCreatedOn = save.date;
+      }
     }
   }
 }
@@ -1459,7 +1869,7 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
   const offerIds = openOfferFighterIds(save);
   const campIds = inCampFighterIds(save);
   const upcoming = Object.values(save.events)
-    .filter((e) => e.status === 'announced')
+    .filter((e) => e.status === 'announced' && !e.promotionId)
     .filter((e) => daysBetween(save.date, e.date) >= 40 && daysBetween(save.date, e.date) <= 160)
     .sort((a, b) => (a.date < b.date ? -1 : 1));
   const bigCards = upcoming.filter((e) => e.tier === 'numbered-ppv' || e.tier === 'international');
@@ -1497,6 +1907,9 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
       // A championship bout still has to fit on the card. A full card is passed over in
       // favour of the next suitable one rather than being stretched beyond its shape.
       if (card.plannedBouts > 0 && scheduledOnCard >= card.plannedBouts) continue;
+      // Nor is one card handed every belt in the promotion. Each division that finds this card
+      // already carrying its share of championship bouts moves on to a later one.
+      if (titleBoutRoom(save, card) <= 0) continue;
       // A championship booking outranks a routine offer, so a contender holding an ordinary
       // offer is still considered rather than being passed over for another six months.
       const ctx = {
@@ -1585,6 +1998,9 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
       if (lastMeeting && daysBetween(lastMeeting, card.date) < TITLE_REMATCH_MIN_GAP_DAYS) continue;
       if (!selectionReason) selectionReason = challengerCheck.selectionReason;
 
+      // A card has one main event. A second championship bout goes in as the co-main, and the
+      // card is ordered properly once the bout stands.
+      const cardHasMain = card.boutIds.some((id) => save.bouts[id]?.status === 'scheduled' && save.bouts[id].isMainEvent);
       const boutId = `bout-${++save.counters.bout}`;
       const bout: Bout = {
         id: boutId,
@@ -1598,8 +2014,8 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
         isTitleFight: !interimBout,
         isInterimTitleFight: interimBout,
         titleIneligibleFighterIds: [],
-        isMainEvent: true,
-        isCoMain: false,
+        isMainEvent: !cardHasMain,
+        isCoMain: cardHasMain,
         cardSegment: 'main',
         boutOrder: 99,
         isCatchweight: false,
@@ -1648,7 +2064,7 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
         bout.status = 'canceled';
         bout.cancelReason = 'converted into an offer for the player';
         card.boutIds = card.boutIds.filter((id) => id !== boutId);
-        createFightOffer(save, self, opp, card, rng, {
+        const offer = createFightOffer(save, self, opp, card, rng, {
           isMainEvent: true,
           isTitleFight: !interimBout,
           isInterimTitleFight: interimBout,
@@ -1657,21 +2073,25 @@ function bookTitleFights(save: SaveGame, rng: Rng, headlines: string[]): void {
           isReplacementSlot: false,
           bookingKind: bout.bookingKind,
         });
+        // Nothing is booked until the player answers, so nothing is announced as booked. The
+        // news used to say the bout was set even when the offer was later declined, or was never
+        // created at all.
+        if (offer) headlines.push(`${d.name} ${interimBout ? 'interim ' : ''}title shot offered to ${self.name} against ${opp.name}.`);
       } else {
         // The bout stands, so the claim is honoured now.
         fulfilContenderStatus(save, d.id, sideB.id, boutId);
         for (const f of [sideA, sideB]) autoCampFor(save, f, boutId, card.date, rng);
+        orderCard(save, card);
+        pushNews(save, {
+          date: save.date,
+          headline: `${sideA.name} against ${sideB.name} set for ${card.name}`,
+          body: `The ${d.name} ${interimBout ? 'interim ' : ''}title will be on the line at ${card.name} in ${card.city} on ${formatDate(card.date)}.`,
+          tags: ['title', d.id],
+          fighterIds: [sideA.id, sideB.id],
+          importance: 4,
+        });
+        headlines.push(`${d.name} title bout booked: ${sideA.name} against ${sideB.name}.`);
       }
-
-      pushNews(save, {
-        date: save.date,
-        headline: `${sideA.name} against ${sideB.name} set for ${card.name}`,
-        body: `The ${d.name} ${interimBout ? 'interim ' : ''}title will be on the line at ${card.name} in ${card.city} on ${card.date}.`,
-        tags: ['title', d.id],
-        fighterIds: [sideA.id, sideB.id],
-        importance: 4,
-      });
-      headlines.push(`${d.name} title bout booked: ${sideA.name} against ${sideB.name}.`);
       break;
     }
   }
@@ -1734,10 +2154,47 @@ function choicesForAutonomy(kind: string) {
 }
 
 export function withdrawFromBout(save: SaveGame, bout: Bout, fighterId: string, reason: string, rng: Rng, headlines: string[]): void {
-  const replacement = findReplacement(save, bout, fighterId, rng);
   const withdrawn = save.fighters[fighterId];
-  if (replacement) {
-    applyReplacement(save, bout, fighterId, replacement.fighter, replacement.reason);
+  const table = save.rankings[bout.divisionId];
+  const wasChampionship = isChampionshipBout(bout);
+  const holderWithdrew = table?.championId === fighterId || table?.interimChampionId === fighterId;
+  // A challenger pulling out of a title bout is not filled the way any other bout is. The ordinary
+  // replacement finder picked by ranking gap, so the champion was handed an unranked opponent on
+  // months of notice and the belt came off the line, spending a defense slot on a prelim. With time
+  // in hand the bout is called off and the title pass books a real challenger; close to the card
+  // only somebody who passes the title gate on short notice may step in.
+  const challengerWithdrew = wasChampionship && !holderWithdrew;
+  if (challengerWithdrew && daysBetween(save.date, bout.date) > TITLE_REBOOK_NOTICE_DAYS) {
+    const division = DIVISION_BY_ID[bout.divisionId];
+    const remainingId = bout.fighterAId === fighterId ? bout.fighterBId : bout.fighterAId;
+    const remaining = save.fighters[remainingId];
+    cancelBout(save, bout, `${withdrawn?.name ?? 'The challenger'} withdrew: ${reason}. The title bout will be rebooked with a new challenger.`);
+    pushNews(save, {
+      date: save.date,
+      headline: `${withdrawn?.name ?? 'The challenger'} out of the ${division.name} title bout`,
+      body: `${withdrawn?.name ?? 'The challenger'} is out with ${reason}. With time before ${remaining?.name ?? 'the champion'} was due to fight, the promotion will rebook the title against a new challenger rather than fill the slot late.`,
+      tags: ['title', bout.divisionId],
+      fighterIds: [fighterId, remainingId],
+      importance: 3,
+    });
+    headlines.push(`${division.name} title bout off: ${withdrawn?.name ?? 'the challenger'} withdrew.`);
+    if (remainingId === save.player.fighterId) {
+      addInboxMessage(save, {
+        sender: 'replacement-coordinator',
+        senderName: 'Matchmaking',
+        subject: 'Title bout off',
+        body: `${withdrawn?.name ?? 'The scheduled opponent'} is out with ${reason}. There is enough time to find a proper challenger, so this bout is off and the title will be rebooked against a new one.`,
+        category: 'offer',
+        requiresAction: false,
+        choices: [{ key: 'ack', label: 'Acknowledge' }],
+      });
+    }
+    return;
+  }
+  const replacement = challengerWithdrew ? findTitleReplacement(save, bout, fighterId) : findReplacement(save, bout, fighterId, rng);
+  if (replacement && applyReplacement(save, bout, fighterId, replacement.fighter, replacement.reason)) {
+    // A standing contender stepping in takes the shot their claim was for.
+    if (isChampionshipBout(bout)) fulfilContenderStatus(save, bout.divisionId, replacement.fighter.id, bout.id);
     autoCampFor(save, replacement.fighter, bout.id, bout.date, rng);
     replacement.fighter.acceptedShortNotice++;
     addHypeMoment(save, bout.id, `${withdrawn?.name ?? 'A fighter'} withdrew and was replaced`, -12);
@@ -1753,11 +2210,12 @@ export function withdrawFromBout(save: SaveGame, bout: Bout, fighterId: string, 
 
     const remainingId = bout.fighterAId === replacement.fighter.id ? bout.fighterBId : bout.fighterAId;
     if (remainingId === save.player.fighterId) {
+      const beltOff = wasChampionship && !isChampionshipBout(bout) ? ' The championship is no longer on the line.' : '';
       addInboxMessage(save, {
         sender: 'replacement-coordinator',
         senderName: 'Matchmaking',
         subject: 'Opponent change',
-        body: `${withdrawn?.name ?? 'The scheduled opponent'} is out with ${reason}. ${replacement.fighter.name} has accepted the bout, ${replacement.reason}.`,
+        body: `${withdrawn?.name ?? 'The scheduled opponent'} is out with ${reason}. ${replacement.fighter.name} has accepted the bout, ${replacement.reason}.${beltOff}`,
         category: 'offer',
         requiresAction: true,
         choices: [
@@ -1786,6 +2244,39 @@ export function withdrawFromBout(save: SaveGame, bout: Bout, fighterId: string, 
   }
 }
 
+/**
+ * Opens fight week for the player's bout, enforcing a medically contingent booking first.
+ *
+ * A contingent offer says it is withdrawn automatically if the fighter is not cleared, and nothing
+ * enforced that, so a fighter who never healed walked into fight week hurt. When the injury will
+ * still be there on fight night, the player is withdrawn here and told so. Returns the fight week
+ * tasks created, which is empty when they already existed or the bout was withdrawn.
+ */
+function startFightWeek(save: SaveGame, me: Fighter, bout: Bout, rng: Rng, headlines: string[]) {
+  if (bout.medicallyContingent && tasksForBout(save, bout.id).length === 0 && !canCompete(me, bout.date).ok) {
+    const event = save.events[bout.eventId];
+    const reason = canCompete(me, bout.date).reason ?? 'not medically cleared';
+    withdrawFromBout(save, bout, me.id, 'an injury that has not cleared', rng, headlines);
+    resolveMessagesForBout(save, bout.id, `${me.name} was withdrawn: not medically cleared in time.`);
+    for (const camp of Object.values(save.camps)) {
+      if (camp.fighterId === me.id && (camp.status === 'planned' || camp.status === 'running')) camp.status = 'abandoned';
+    }
+    addInboxMessage(save, {
+      sender: 'commission',
+      senderName: 'Athletic commission',
+      subject: 'Withdrawn: not medically cleared',
+      body: `The bout at ${event?.name ?? 'the event'} on ${formatDate(bout.date)} was accepted on condition of medical clearance. You have not been cleared (${reason}), so you are withdrawn from it. Nothing is held against you for this.`,
+      category: 'medical',
+      requiresAction: false,
+      choices: [],
+      linkedEventId: event?.id ?? null,
+    });
+    headlines.push(`${me.name} is withdrawn from ${event?.name ?? 'the bout'}: not medically cleared.`);
+    return [];
+  }
+  return ensureFightWeekTasks(save, bout.id);
+}
+
 // ---------------------------------------------------------------------------
 // Advance
 // ---------------------------------------------------------------------------
@@ -1806,7 +2297,40 @@ export function pendingDecisions(save: SaveGame): number {
   return n;
 }
 
+/**
+ * Decisions that are allowed to stop the clock: the same filter careerStatus uses. Optional items
+ * such as a fan request or a sponsor post need an answer too, but counting them stopped a month
+ * advance every week and threw the player onto the inbox for things that could wait. Fight offers
+ * and treatment questions leave `mandatory` unset, so they still count.
+ */
+export function mandatoryDecisions(save: SaveGame): number {
+  let n = 0;
+  for (const m of save.inbox) if (m.mandatory !== false && messageNeedsAction(save, m)) n++;
+  return n;
+}
+
 export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
+  const steps = advanceSteps(save, opts);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/** The phrase every cancelled advance stops with, so the interface can tell it from a real stop. */
+export const STOPPED_AT_REQUEST = 'Stopped at your request.';
+
+/**
+ * The advance loop, one simulated day at a time.
+ *
+ * It yields the new date after each day, so a caller can hand the main thread back to the browser
+ * between days. A year advance late in a career is tens of seconds of simulation, and run in one
+ * piece the page could not paint its progress or answer a tap until it ended. `advance` drains it
+ * in one go, so the synchronous path, and every test, behaves exactly as it always has.
+ *
+ * `shouldCancel` is asked after each day. A day always finishes, so a cancelled advance leaves the
+ * world exactly as a shorter advance would have.
+ */
+export function* advanceSteps(save: SaveGame, opts: AdvanceOptions, shouldCancel?: () => boolean): Generator<IsoDate, AdvanceReport, void> {
   const rng = rngOf(save);
   const from = save.date;
   const headlines: string[] = [];
@@ -1825,9 +2349,22 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
     year: 366,
   };
   const maxDays = opts.maxDays ?? limits[opts.mode];
-  const startingDecisions = pendingDecisions(save);
-  const startingInbox = save.inbox.length;
+  const startingDecisions = mandatoryDecisions(save);
+  // The message counter, not the inbox length. The inbox is capped, so once it was full its
+  // length never grew again and nothing new could ever stop the clock.
+  const startingMessages = save.counters.message ?? 0;
   let inboxWaiting = false;
+  let fightWeekBoutId: BoutId | null = null;
+  // A long advance stops at the start of fight week and at every mandatory stage. A single day
+  // needs neither, because it stops anyway. These stops do not follow the player's inbox setting,
+  // since a weigh in is not a message. A caller that passes stopOnDecision false explicitly is
+  // driving the world headless, a test harness or the day by day target loop, and handles fight
+  // week itself.
+  const longAdvance = opts.mode !== 'day' && opts.stopOnDecision !== false;
+  const stopOnDecision = opts.stopOnDecision ?? save.settings.autoAdvanceStopsOnDecision;
+  const startMe = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
+  const startBooking = startMe ? hasLiveBooking(save, startMe) : null;
+  const inFightWeekAtStart = startBooking && daysBetween(save.date, startBooking.date) <= FIGHT_WEEK_DAYS ? startBooking.id : null;
 
   for (let day = 0; day < maxDays; day++) {
     // Stop before simulating a card the player is fighting on.
@@ -1884,9 +2421,20 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
     if (playerId) {
       const me = save.fighters[playerId];
       const booked = me ? hasLiveBooking(save, me) : null;
-      if (booked && daysBetween(save.date, booked.date) <= FIGHT_WEEK_DAYS + 1) {
-        const created = ensureFightWeekTasks(save, booked.id);
+      if (me && booked && daysBetween(save.date, booked.date) <= FIGHT_WEEK_DAYS + 1) {
+        const created = startFightWeek(save, me, booked, rng, headlines);
         if (created.length > 0) headlines.push('Fight Week Begins.');
+      }
+    }
+
+    // The player's Pot on their birthday, when the projection's age input moves. A 29 February
+    // birthday is kept on the 28th in the years that have no 29th.
+    if (playerId) {
+      const me = save.fighters[playerId];
+      const birthday = me?.birthDate?.slice(5);
+      const today = save.date.slice(5);
+      if (me && !me.retired && birthday && (birthday === today || (birthday === '02-29' && today === '02-28' && !isLeapYearOf(save.date)))) {
+        updatePot(save, me);
       }
     }
 
@@ -1908,22 +2456,52 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
     save.date = addDays(save.date, 1);
 
     // Stop conditions.
-    const decisionsNow = pendingDecisions(save);
-    if ((opts.stopOnDecision ?? save.settings.autoAdvanceStopsOnDecision) && decisionsNow > startingDecisions) {
+
+    // Fight week. A week or a month press used to walk straight through it, past the official
+    // weigh in, and land on fight night with the weight never made. These stops are not tied to
+    // the inbox setting: a mandatory stage is not a message, and a player who turned message stops
+    // off still has to weigh in. Fight day itself is left to the player bout stop above.
+    if (longAdvance && playerId) {
+      const me = save.fighters[playerId];
+      const booked = me ? hasLiveBooking(save, me) : null;
+      const daysOut = booked ? daysBetween(save.date, booked.date) : null;
+      if (booked && daysOut !== null && daysOut > 0 && daysOut <= FIGHT_WEEK_DAYS) {
+        const due = pendingStages(save, booked.id).find((t) => t.mandatory && t.dueOn <= save.date);
+        if (due) {
+          stoppedBecause = `${stageLabel(due.stage)} is due.`;
+          fightWeekBoutId = booked.id;
+          break;
+        }
+        // The day fight week begins, judged by the same window careerStatus uses. The tasks can
+        // be created by the weekly pass or the daily check, so their creation is not the signal.
+        const calendarSpan = opts.mode === 'week' || opts.mode === 'month' || opts.mode === 'year';
+        if (calendarSpan && booked.id !== inFightWeekAtStart) {
+          stoppedBecause = 'Fight week begins.';
+          fightWeekBoutId = booked.id;
+          break;
+        }
+      }
+    }
+
+    const decisionsNow = mandatoryDecisions(save);
+    if (stopOnDecision && decisionsNow > startingDecisions) {
       stoppedBecause = 'A decision needs an answer in the inbox.';
       inboxWaiting = true;
       break;
     }
-    // Anything new in the inbox stops the clock, not only the items that demand an answer. A camp
-    // report, a fight week stage opening or a matchmaker note used to arrive silently while the
-    // weeks kept rolling past, so the player found out about it later or not at all.
-    const inboxNow = save.inbox.length;
-    if ((opts.stopOnDecision ?? save.settings.autoAdvanceStopsOnDecision) && inboxNow > startingInbox) {
+    // Anything new in the inbox stops a short advance, not only the items that demand an answer.
+    // A camp report or a matchmaker note used to arrive silently while the days rolled past. A
+    // week, a month or a year does not stop for it: optional and passive items stopped a month
+    // advance every few days, so those are counted and reported when the advance ends instead.
+    const newMessages = (save.counters.message ?? 0) - startingMessages;
+    const stopsOnAnything = opts.mode === 'day' || opts.mode === 'next-message' || opts.mode === 'to-fight';
+    // It stops without taking the player to the inbox. Anything that needs an answer stopped
+    // the clock above; this is only so a new item is seen, not a summons.
+    if (stopOnDecision && stopsOnAnything && newMessages > 0) {
       stoppedBecause = 'Something new is in the inbox.';
-      inboxWaiting = true;
       break;
     }
-    if (opts.mode === 'next-message' && decisionsNow > 0) {
+    if (opts.mode === 'next-message' && pendingDecisions(save) > 0) {
       stoppedBecause = 'There is a message waiting.';
       inboxWaiting = true;
       break;
@@ -1938,10 +2516,26 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
         }
       }
     }
+
+    if (day + 1 < maxDays) {
+      // The draw state lives in this loop until the end, so it is written back before handing over.
+      // Nothing may change the world while an advance is running, but a save written meanwhile (the
+      // page hidden mid advance) must still hold a sequence that matches its date.
+      persistRng(save, rng);
+      yield save.date;
+      if (shouldCancel?.()) {
+        stoppedBecause = STOPPED_AT_REQUEST;
+        break;
+      }
+    }
   }
 
   persistRng(save, rng);
   save.updatedAt = new Date().toISOString();
+
+  // Whatever arrived without stopping the clock is still reported, so it is not lost.
+  const arrived = (save.counters.message ?? 0) - startingMessages;
+  if (arrived > 0 && !inboxWaiting) headlines.push(`${arrived} new inbox item${arrived === 1 ? '' : 's'}.`);
 
   return {
     from,
@@ -1952,6 +2546,7 @@ export function advance(save: SaveGame, opts: AdvanceOptions): AdvanceReport {
     stoppedBecause,
     playerBoutPending,
     inboxWaiting,
+    fightWeekBoutId,
   };
 }
 
@@ -1966,6 +2561,40 @@ export function simulatePlayerBout(save: SaveGame, boutId: BoutId, playerPlan: G
   if (bout.status === 'canceled') {
     throw new Error('That bout was canceled and cannot be fought.');
   }
+  // Only a booked bout on or after its date. The fight page offered Start from the event page
+  // preview weeks out, and this ran the fight, completed the whole card and moved the career into
+  // recovery with the calendar still two months back, skipping camp and fight week entirely.
+  // The official weigh in is not checked here: headless harnesses fight on the day without one,
+  // and resolveBout simulates the cut when no official reading exists. The fight page and
+  // careerStatus both hold the player to it.
+  // A fight already on record is returned as it stands. Running it again would apply a second
+  // result to both records under the same id.
+  const existing = bout.resultId ? save.history.results[bout.resultId] : undefined;
+  if (existing) return existing;
+  if (bout.status !== 'scheduled') {
+    throw new Error('That bout is not scheduled to be fought.');
+  }
+  if (save.date < bout.date) {
+    throw new Error(`Fight night is ${formatDate(bout.date)}.`);
+  }
+  // Recorded before the result touches either fighter, so the fight page can bill the bout as it
+  // stood while the result is still being replayed.
+  const fa = save.fighters[bout.fighterAId];
+  const fb = save.fighters[bout.fighterBId];
+  if (fa && fb) {
+    bout.preFight = {
+      recordA: { ...fa.record },
+      recordB: { ...fb.record },
+      amateurRecordA: fa.amateurRecord ? { ...fa.amateurRecord } : undefined,
+      amateurRecordB: fb.amateurRecord ? { ...fb.amateurRecord } : undefined,
+      longevityA: fa.longevity,
+      longevityB: fb.longevity,
+      rankingA: fa.ranking,
+      rankingB: fb.ranking,
+      championA: fa.isChampion,
+      championB: fb.isChampion,
+    };
+  }
   const result = resolveBout(save, bout, rng, playerPlan);
   // Resolve the rest of the card around it, passing the player's result in so it is part of the
   // card for the contested list and for bonus selection.
@@ -1973,6 +2602,10 @@ export function simulatePlayerBout(save: SaveGame, boutId: BoutId, playerPlan: G
   if (event) {
     resolveEvent(save, event.id, rng, {}, [result]);
   }
+  // The fight itself is what final clearance and fight night lead to, so both close here. Nothing
+  // closed them before, and a revisited fight week page offered 'Enter fight' for a finished bout.
+  const winner = result.winnerId ? save.fighters[result.winnerId] : null;
+  closeFightWeek(save, bout.id, winner ? `${winner.name} won by ${METHOD_LABEL[result.method]}.` : `${METHOD_LABEL[result.method]}.`);
   save.pendingDecision = null;
   persistRng(save, rng);
   return result;

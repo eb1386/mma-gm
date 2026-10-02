@@ -13,6 +13,8 @@ import {
 import {
   evaluateAllInterests,
   evaluateInterest,
+  interestReason,
+  interestStatusLine,
   liveInterestBetween,
   matchupInterestsFor,
   matchupPull,
@@ -1367,3 +1369,105 @@ describe('a promotional debut is against another newcomer', () => {
   });
 });
 
+
+describe('debuts, callouts and the matchmaking gates', () => {
+  it('does not let the player\'s own activity profile veto their bookings', () => {
+    const f = newCareer(9870);
+    const me = makeAvailable(playerOf(f.save));
+    me.activityProfile = { key: 'difficult-negotiator', targetFightsPerYear: 1.5, preferredTurnaroundDays: 210, shortNoticeWillingness: 0.12, selectivity: 0.62 };
+    // Inside the profile's preferred turnaround, which would make an AI fighter say no.
+    me.lastFightDate = addDays(f.save.date, -20);
+    const ctx = { date: addDays(f.save.date, 60), bookedFighterIds: new Set<string>(), openOfferFighterIds: new Set<string>(), inCampFighterIds: new Set<string>() };
+    expect(isAvailable(f.save, me, ctx)).toBe(true);
+  });
+
+  it('refuses a debutant against a seasoned veteran even with a heated rivalry between them', () => {
+    const f = newCareer(9871);
+    runWorld(f.save, 8);
+    const divisionId = DIVISIONS[0].id;
+    const pool = Object.values(f.save.fighters).filter((x) => x.divisionId === divisionId && x.ranking === null && !x.isChampion);
+    const debutant = makeAvailable(pool[0]);
+    const veteran = makeAvailable(pool[1]);
+    debutant.ufcRecord = { wins: 0, losses: 0, draws: 0, noContests: 0 };
+    veteran.ufcRecord = { wins: 9, losses: 2, draws: 0, noContests: 0 };
+    applyRelationship(f.save, debutant.id, veteran.id, { rivalry: 60, publicHostility: 50, resentment: 30 }, 'insult', 'Bad blood.');
+    expect(matchupPull(f.save, debutant.id, veteran.id).pull).toBeGreaterThan(0.4);
+    const event = Object.values(f.save.events)
+      .filter((e) => e.status === 'announced')
+      .sort((a, b) => a.date.localeCompare(b.date))[3];
+    expect(scoreCandidate(f.save, debutant, veteran, event, new Rng(3))).toBeNull();
+    expect(scoreCandidate(f.save, veteran, debutant, event, new Rng(3))).toBeNull();
+  });
+
+  it('makes no fight for an unranked fighter at nought and two who accepted the champion and the number three', () => {
+    const f = newCareer(9872);
+    const me = makeAvailable(playerOf(f.save));
+    const table = f.save.rankings[me.divisionId];
+    table.entries = table.entries.filter((e) => e.fighterId !== me.id);
+    if (table.championId === me.id) table.championId = null;
+    me.isChampion = false;
+    me.ranking = null;
+    me.ufcRecord = { wins: 0, losses: 2, draws: 0, noContests: 0 };
+    me.winStreak = 0;
+    me.lossStreak = 2;
+    const champion = makeAvailable(f.save.fighters[table.championId!]);
+    const third = makeAvailable(f.save.fighters[table.entries.find((e) => e.rank === 3)!.fighterId]);
+    createEvent(f.save, addDays(f.save.date, 63));
+    for (const target of [champion, third]) {
+      recordMatchupInterest(f.save, {
+        source: 'callout',
+        caller: me,
+        target,
+        requestedConditions: 'Sign the fight.',
+        opponentResponse: 'accepted',
+        fanResponse: 'favourable',
+        interestScore: 90,
+      });
+    }
+    const pass = runMatchupInterestPass(f.save, me, new Rng(5));
+    expect(pass.offersCreated).toBe(0);
+    for (const target of [champion, third]) {
+      const interest = liveInterestBetween(f.save, me.id, target.id)!;
+      expect(interest.eligibility).toBe('blocked');
+      expect(interest.blockers).toContain('not-earned');
+    }
+  });
+
+  it('names the opponent, never the player, when an opponent made the callout', () => {
+    const f = newCareer(9873);
+    const me = makeAvailable(playerOf(f.save));
+    const npc = makeAvailable(
+      divisionRoster(f.save, me.divisionId).find((x) => x.id !== me.id && !x.isChampion && f.save.rankings[me.divisionId].championId !== x.id)!
+    );
+    me.ranking = 8;
+    me.isChampion = false;
+    npc.ranking = 7;
+    npc.winStreak = 2;
+    createEvent(f.save, addDays(f.save.date, 63));
+    const interest = recordMatchupInterest(f.save, {
+      source: 'callout',
+      caller: npc,
+      target: me,
+      requestedConditions: 'Sign the fight.',
+      opponentResponse: 'accepted',
+      interestScore: 85,
+    });
+    expect(interest.eligibility).toBe('eligible');
+    expect(interestReason(f.save, interest, me.id)).toContain(npc.name);
+    expect(interestReason(f.save, interest, me.id)).not.toContain(me.name);
+
+    // While the caller is booked, the player is not told that they are.
+    npc.nextBoutId = 'bout-elsewhere';
+    evaluateInterest(f.save, interest);
+    expect(interest.blockers).toContain('caller-booked');
+    expect(interestStatusLine(f.save, interest, me.id)).not.toContain('You are');
+    npc.nextBoutId = null;
+
+    const pass = runMatchupInterestPass(f.save, me, new Rng(9));
+    expect(pass.offersCreated).toBe(1);
+    expect(pass.headlines.join(' ')).toContain(`The fight with ${npc.name} has been made.`);
+    const offer = Object.values(f.save.fightOffers).find((o) => o.status === 'open' && o.opponentId === npc.id)!;
+    expect(offer.reason).toContain(npc.name);
+    expect(offer.reason).not.toContain(me.name);
+  });
+});

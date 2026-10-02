@@ -1,5 +1,5 @@
 import { clamp, Rng } from '../rng';
-import { addDays, daysBetween, type IsoDate } from '../types/common';
+import { addDays, daysBetween, formatDate, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { addInboxMessage } from './inbox';
@@ -93,13 +93,18 @@ export function recoveryBonusFor(save: SaveGame, fighterId: string): number {
  * practice. An adverse finding suspends the fighter, voids a booked bout, costs sponsors
  * and can strip a title.
  */
-export function runAntiDopingWeek(save: SaveGame, fighter: Fighter, rng: Rng): string[] {
+export function runAntiDopingWeek(save: SaveGame, fighter: Fighter, rng: Rng, opts: { apply?: boolean } = {}): string[] {
   const notes: string[] = [];
-  const state = dopingState(save, fighter.id);
+  // With the system switched off the week draws exactly the values it would draw switched on, in
+  // the same order, and changes nothing at all. The draws keep the world rng in step whatever the
+  // setting; nothing else may happen, because a suspension applied here was never lifted.
+  const apply = opts.apply ?? true;
   if (fighter.retired) return notes;
+  const state = apply ? dopingState(save, fighter.id) : null;
+  const posture = state?.posture ?? save.doping?.[fighter.id]?.posture ?? 'standard';
 
   // Reset the annual counter on the turn of the year.
-  if (state.lastTestedOn && state.lastTestedOn.slice(0, 4) !== save.date.slice(0, 4)) state.testsThisYear = 0;
+  if (state?.lastTestedOn && state.lastTestedOn.slice(0, 4) !== save.date.slice(0, 4)) state.testsThisYear = 0;
 
   const booked = hasLiveBooking(save, fighter);
   const ranked = fighter.ranking !== null || fighter.isChampion;
@@ -107,15 +112,22 @@ export function runAntiDopingWeek(save: SaveGame, fighter: Fighter, rng: Rng): s
   const weeklyTestChance = (ranked ? 0.09 : 0.03) * (booked ? 2.2 : 1) * (fighter.isChampion ? 1.4 : 1);
   if (!rng.chance(weeklyTestChance)) return notes;
 
-  state.testsThisYear++;
-  state.lastTestedOn = save.date;
+  if (state) {
+    state.testsThisYear++;
+    state.lastTestedOn = save.date;
+  }
 
-  const annualRisk = POSTURE_RISK[state.posture];
-  // Convert the annual risk into a per test chance, given how often this fighter is tested.
-  const perTest = clamp(annualRisk / Math.max(1, state.testsThisYear > 0 ? 8 : 1), 0.0005, 0.35);
+  const annualRisk = POSTURE_RISK[posture];
+  // Convert the annual risk into a per test chance, given how often this fighter is tested. The
+  // count has always just been incremented here, so the divisor is always eight.
+  const perTest = clamp(annualRisk / 8, 0.0005, 0.35);
   if (!rng.chance(perTest)) return notes;
 
   const kind = rng.chance(0.72) ? 'adverse' : rng.chance(0.5) ? 'atypical' : 'whereabouts-failure';
+  // The suspension length is drawn before anything is applied, so a switched off week stops here
+  // having drawn the same values a switched on week would.
+  const months = kind === 'atypical' ? 0 : kind === 'adverse' ? (posture === 'questionable' ? rng.int(18, 30) : rng.int(6, 18)) : rng.int(3, 9);
+  if (!state) return notes;
   state.findings.push({ on: save.date, kind, resolved: false, outcome: null });
   state.underInvestigation = true;
 
@@ -136,7 +148,6 @@ export function runAntiDopingWeek(save: SaveGame, fighter: Fighter, rng: Rng): s
   }
 
   // An adverse finding or a whereabouts failure both suspend.
-  const months = kind === 'adverse' ? (state.posture === 'questionable' ? rng.int(18, 30) : rng.int(6, 18)) : rng.int(3, 9);
   const until = addDays(save.date, months * 30);
   fighter.antiDopingSuspension = {
     until,
@@ -248,7 +259,7 @@ export function appealSanction(save: SaveGame, fighter: Fighter, rng: Rng): Appe
       finding.resolved = true;
       finding.outcome = `reduced by ${Math.round(cut / 30)} months`;
     }
-    return { message: `The panel reduced the suspension by about ${Math.round(cut / 30)} months. It now runs to ${suspension.until}.`, reducedMonths: Math.round(cut / 30), overturned: false, cost };
+    return { message: `The panel reduced the suspension by about ${Math.round(cut / 30)} months. It now runs to ${formatDate(suspension.until)}.`, reducedMonths: Math.round(cut / 30), overturned: false, cost };
   }
 
   const finding = state.findings[state.findings.length - 1];
@@ -283,6 +294,10 @@ export function clearDopingState(save: SaveGame, fighterId: string): void {
   const fighter = save.fighters[fighterId];
   if (fighter) {
     fighter.antiDopingSuspension = null;
+    // A suspension with no sanction behind it is lifted too. Nothing else would ever lift it:
+    // clearExpiredSuspensions needs the sanction to read its end date, so a fighter suspended by
+    // a finding and then cleared here stayed suspended for the rest of the career.
+    if (fighter.activityStatus === 'suspended') fighter.activityStatus = 'active';
   }
   const state = save.doping?.[fighterId];
   if (!state) return;

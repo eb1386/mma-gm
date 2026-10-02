@@ -10,6 +10,11 @@ export interface JudgePersona {
   damageLean: number;
   bias: number;
   /**
+   * Lean toward fighter A from a partisan crowd, already scaled by how susceptible this judge
+   * is. Negative leans toward B. Optional so a persona built before it existed scores the same.
+   */
+  homeBias?: number;
+  /**
    * How readily this judge scores a round 10-8. 1 is the calibrated default, so a persona
    * without the field behaves exactly as before.
    */
@@ -148,12 +153,23 @@ export function scoreRoundForJudge(
     (input.statsA.controlSeconds - input.statsB.controlSeconds) * C.judging.controlWeight;
   const damageComponent = (input.damageA - input.damageB) * C.judging.damageWeight * 0.1;
 
+  // Perception noise grows with how much happened in the round. A busy round gives a judge more
+  // to weigh and more to disagree about; a flat 2.5 against a median round margin near 28 meant
+  // judges split on about one round in twenty five and a split decision was a rarity. One draw
+  // either way, so the rng sequence does not depend on the round's content.
+  const a = input.statsA;
+  const b = input.statsB;
+  const activity =
+    a.sigStrikesLanded + b.sigStrikesLanded + 3 * (a.takedownsLanded + b.takedownsLanded) + (a.controlSeconds + b.controlSeconds) / 20;
+  const noiseSd = C.judging.judgeNoiseSd + C.judging.judgeNoisePerActivity * Math.sqrt(Math.max(0, activity));
+
   const perceived =
     trueScore +
     grapplingComponent * judge.grapplingLean +
     damageComponent * judge.damageLean +
     judge.bias +
-    rng.normal(0, C.judging.judgeNoiseSd);
+    (judge.homeBias ?? 0) +
+    rng.normal(0, noiseSd);
 
   const margin = Math.abs(perceived);
   const aWins = perceived > 0;

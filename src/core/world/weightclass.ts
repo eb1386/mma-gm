@@ -1,4 +1,5 @@
 import { DIVISIONS, DIVISION_BY_ID, type DivisionConfig, type DivisionId } from '../config/divisions';
+import { mainRosterFighters } from './circuit';
 import { clamp, Rng } from '../rng';
 import { addDays, ageOn, type FighterId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
@@ -7,6 +8,7 @@ import { canCompete, healthyCutFor } from './health';
 import { hasLiveBooking } from './availability';
 import { managerFor } from './finance';
 import { addInboxMessage } from './inbox';
+import { COOLDOWNS, mayNotify } from './decisions';
 import { resolveMessagesForOffer } from './inbox';
 import { PROMOTION_MATCHMAKING } from '../config/branding';
 import { assessTitleOpportunity } from './title-logic';
@@ -739,7 +741,9 @@ export function commitMove(save: SaveGame, fighter: Fighter, announce: boolean):
         ? ` You keep the ${from.name} championship while you attempt to hold both. The promotion will not allow that indefinitely.`
         : ` You keep the ${from.name} championship for now, but the promotion expects a defense or a decision.`;
 
-  addInboxMessage(save, {
+  // Written to the player, about the player. A gym fighter whose move the coach backed is reported
+  // in the answer to that decision instead, rather than in a letter addressed to "you".
+  if (fighter.id === save.player.fighterId) addInboxMessage(save, {
     sender: 'matchmaker',
     senderName: PROMOTION_MATCHMAKING,
     subject: `You are now a ${to.name}`,
@@ -781,7 +785,7 @@ export function pickDebutOpponent(save: SaveGame, fighter: Fighter, divisionId: 
   const band: [number, number] = leverage.score >= 62 ? [1, 6] : leverage.score >= 42 ? [4, 10] : leverage.score >= 22 ? [8, 15] : [11, 99];
 
   const table = save.rankings[divisionId];
-  const candidates = Object.values(save.fighters).filter((f) => {
+  const candidates = mainRosterFighters(save).filter((f) => {
     if (f.id === fighter.id) return false;
     if (f.divisionId !== divisionId) return false;
     if (f.retired || f.activityStatus !== 'active') return false;
@@ -826,7 +830,7 @@ export function withdrawOffersOutsideDivision(save: SaveGame, fighter: Fighter, 
  */
 export function enforceAbsentChampions(save: SaveGame): string[] {
   const notes: string[] = [];
-  for (const fighter of Object.values(save.fighters)) {
+  for (const fighter of mainRosterFighters(save)) {
     if (!fighter.heldTitleDivisionId || !fighter.titleHoldDeadline) continue;
     const held = fighter.heldTitleDivisionId as DivisionId;
     if (fighter.divisionId === held) {
@@ -873,8 +877,13 @@ export function maybeSuggestMove(save: SaveGame, fighter: Fighter, rng: Rng): st
   const { up } = adjacentDivisions(fighter);
   if (!struggling || !up) return null;
   if (!rng.chance(0.12)) return null;
+  // Once is a suggestion; every couple of months is nagging, and each copy stopped the clock. The
+  // cooldown is checked after the roll so the world rng draws the same values either way. It is
+  // keyed on the fighter, not the division, so moving up does not invite the next one at once.
+  const signature = `weight-suggestion|${fighter.id}`;
+  if (!mayNotify(save, { signature, cooldownDays: COOLDOWNS.weightClassSuggestion })) return null;
 
-  addInboxMessage(save, {
+  const message = addInboxMessage(save, {
     sender: 'head-coach',
     senderName: 'Head coach',
     subject: `Should you be fighting at ${up.name}?`,
@@ -887,5 +896,82 @@ export function maybeSuggestMove(save: SaveGame, fighter: Fighter, rng: Rng): st
     choices: [],
     linkedFighterId: fighter.id,
   });
+  message.notificationSignature = signature;
   return `Your coach has raised the idea of moving up to ${up.name}.`;
+}
+
+/** Choice keys for the decision raised when the player's body no longer makes the weight. */
+export const FORCED_MOVE_CHOICES = { moveUp: 'weight-move-up', keepCutting: 'weight-keep-cutting' } as const;
+
+/** After the player chooses to keep cutting, how long before the team raises it again. */
+const FORCED_MOVE_COOLDOWN_DAYS = 120;
+
+/**
+ * The player's frame has outgrown the division: the weekly weight pass would have moved anyone
+ * else up. The player used to be moved too, with no prompt, losing their ranking and any title,
+ * and while booked, losing the fight as well. Now the team puts it to them as a decision, and a
+ * move goes through the same plan, approval and commit as one the player starts themselves.
+ *
+ * Not raised while a plan exists, while the player is booked, or while an earlier copy is open.
+ */
+export function raiseForcedMoveDecision(save: SaveGame, fighter: Fighter, to: DivisionId): string | null {
+  // A finished or abandoned plan stays on record, and must not silence this for the rest of a career.
+  const plan = currentPlan(save, fighter.id);
+  if (plan && plan.status !== 'completed' && plan.status !== 'canceled') return null;
+  if (hasLiveBooking(save, fighter)) return null;
+  const target = DIVISION_BY_ID[to];
+  const current = DIVISION_BY_ID[fighter.divisionId];
+  if (!target || !current) return null;
+  const signature = `weight-forced-move|${fighter.id}`;
+  if (!mayNotify(save, { signature, cooldownDays: FORCED_MOVE_COOLDOWN_DAYS })) return null;
+
+  const why =
+    fighter.weightMisses >= 3
+      ? `You have missed weight ${fighter.weightMisses} times now.`
+      : `Your body can no longer take the weight off safely for ${current.name}.`;
+  const message = addInboxMessage(save, {
+    sender: 'head-coach',
+    senderName: 'Head coach',
+    subject: `Time to move up to ${target.name}?`,
+    body: `${why} The team believes the cut to ${current.name} is no longer realistic and wants you at ${target.name}. Moving starts you unranked there${
+      save.rankings[current.id]?.championId === fighter.id ? ', and the title decision is yours to make on the Career page' : ''
+    }. Staying means more hard cuts and more misses.`,
+    category: 'career',
+    requiresAction: true,
+    deadline: addDays(save.date, 30),
+    choices: [
+      { key: FORCED_MOVE_CHOICES.moveUp, label: `Move up to ${target.name}`, hint: 'The promotion is asked first. You start unranked.' },
+      { key: FORCED_MOVE_CHOICES.keepCutting, label: `Keep cutting to ${current.name}`, hint: 'Every cut from here is a real risk of missing.' },
+    ],
+    linkedFighterId: fighter.id,
+  });
+  message.notificationSignature = signature;
+  message.decisionKey = signature;
+  message.decisionCreatedOn = save.date;
+  // It matters, but it is not a reason to stop the calendar.
+  message.mandatory = false;
+  return `Your coach says the cut to ${current.name} is no longer realistic.`;
+}
+
+/**
+ * The player's answer to raiseForcedMoveDecision. Returns null for any other choice key, so the
+ * career handler can fall through to its other decisions.
+ */
+export function applyForcedMoveChoice(save: SaveGame, fighter: Fighter, choiceKey: string, rng: Rng): string | null {
+  if (choiceKey === FORCED_MOVE_CHOICES.keepCutting) return `You stay at ${DIVISION_BY_ID[fighter.divisionId].name} and keep cutting.`;
+  if (choiceKey !== FORCED_MOVE_CHOICES.moveUp) return null;
+  const { up } = adjacentDivisions(fighter);
+  if (!up) return 'There is no heavier division to move to.';
+  if (hasLiveBooking(save, fighter)) return 'You have a fight booked. The move can be made once it is over, from the Career page.';
+  const existing = currentPlan(save, fighter.id);
+  if (!existing || existing.status === 'completed' || existing.status === 'canceled') explore(save, fighter, up);
+  // A champion decides what happens to the belt, which the Career page asks properly.
+  if (save.rankings[fighter.divisionId]?.championId === fighter.id) {
+    return `The move to ${up.name} is being planned. Settle what happens to your title on the Career page.`;
+  }
+  const plan = requestApproval(save, fighter, rng);
+  if (!plan || plan.status !== 'approved') {
+    return `${plan?.promotionResponse ?? 'The promotion has not approved the move.'} The plan stays open on the Career page.`;
+  }
+  return commitMove(save, fighter, true).message;
 }

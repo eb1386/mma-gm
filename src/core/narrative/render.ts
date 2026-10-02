@@ -337,6 +337,9 @@ export class FightNarrator {
       }
       case 'point-deduction': {
         const foul = e.tags.find((t) => FOUL_NAME[t]);
+        if (e.tags.includes('disqualification')) {
+          return `${foul ? `${actor} lands ${FOUL_NAME[foul]}. ` : ''}That is one foul too many after two point deductions, and the referee disqualifies ${actor}.`;
+        }
         return `${foul ? `${actor} lands ${FOUL_NAME[foul]}. ` : ''}${this.anti.pick(this.rng, 'deduct', REFEREE_PHRASE.deduction)} ${target} gets time to recover.`;
       }
       case 'doctor-check':
@@ -372,15 +375,44 @@ export class FightNarrator {
     const leader = leadA ? aStats : bStats;
     const trailer = leadA ? bStats : aStats;
     const margin = Math.abs(round.trueScoreA);
+    const outlanded = leader.sigStrikesLanded - trailer.sigStrikesLanded;
 
     const parts: string[] = [];
 
-    // Opening clause describes the dominant mode of the round for the round winner.
+    // Opening clause describes the dominant mode of the round for the round winner. Every branch
+    // has to agree with the numbers it prints: the old fallback called a 39 to 3 round close and
+    // then added that it was a clear round.
     const groundHeavy = leader.controlSeconds > 110;
     const strikeHeavy = leader.sigStrikesLanded >= 12 && leader.controlSeconds < 90;
     const grindy = leader.sigStrikesLanded < 10 && leader.controlSeconds > 60;
+    const strikingAndPosition = leader.sigStrikesLanded >= 12 && outlanded >= 8 && leader.controlSeconds >= 90;
+    const evenRound = margin < 0.5;
+    const closeRound = margin < 8;
 
-    if (groundHeavy) {
+    if (evenRound) {
+      parts.push(
+        `There was almost nothing between them, ${this.a.lastName} ${aStats.sigStrikesLanded} and ${this.b.lastName} ${bStats.sigStrikesLanded} in significant strikes.`
+      );
+    } else if (outlanded < 0) {
+      // The round winner landed less, so something else won it. Say what.
+      const reason =
+        leader.knockdowns > trailer.knockdowns
+          ? 'on the knockdown'
+          : leader.takedownsLanded > trailer.takedownsLanded && leader.controlSeconds > trailer.controlSeconds
+            ? 'on takedowns and control'
+            : leader.takedownsLanded > trailer.takedownsLanded
+              ? 'on takedowns'
+              : leader.controlSeconds > trailer.controlSeconds + 20
+                ? 'on control'
+                : leader.submissionAttempts > trailer.submissionAttempts
+                  ? 'on the submission threat'
+                  : 'on the heavier shots';
+      parts.push(`${leaderName} won it ${reason} despite being out landed ${leader.sigStrikesLanded} to ${trailer.sigStrikesLanded}.`);
+    } else if (strikingAndPosition) {
+      parts.push(
+        `${leaderName} controlled the striking and the position, out landing ${trailerName} ${leader.sigStrikesLanded} to ${trailer.sigStrikesLanded} with ${formatClock(Math.round(leader.controlSeconds))} of control.`
+      );
+    } else if (groundHeavy) {
       parts.push(
         `${leaderName} spent ${formatClock(Math.round(leader.controlSeconds))} in control on the ground and landed ${leader.groundLanded} strikes from position.`
       );
@@ -394,8 +426,10 @@ export class FightNarrator {
       parts.push(`${leaderName} controlled the striking, ${target}, and out landed ${trailerName} ${leader.sigStrikesLanded} to ${trailer.sigStrikesLanded}.`);
     } else if (grindy) {
       parts.push(`${leaderName} won a low output round on position, holding ${formatClock(Math.round(leader.controlSeconds))} of control.`);
-    } else {
+    } else if (closeRound) {
       parts.push(`${leaderName} edged a close round ${leader.sigStrikesLanded} to ${trailer.sigStrikesLanded} in significant strikes.`);
+    } else {
+      parts.push(`${leaderName} took the round, out landing ${trailerName} ${leader.sigStrikesLanded} to ${trailer.sigStrikesLanded}.`);
     }
 
     // Most important single moment, taken from the event stream rather than invented.
@@ -430,8 +464,10 @@ export class FightNarrator {
       }
     }
 
+    // The verdict never contradicts the opening: a round described as close or even is not then
+    // called clear.
     const verdict =
-      margin < 3 ? 'It was close enough that it could go either way on the cards.' : margin > 17 ? 'That was a clear round.' : '';
+      margin < 3 ? 'It was close enough that it could go either way on the cards.' : margin > 17 && !closeRound ? 'That was a clear round.' : '';
     if (verdict) parts.push(verdict);
 
     return parts.join(' ');
@@ -459,6 +495,13 @@ export class FightNarrator {
         return `${setupNoun ? `${winner} set it up with the ${setupNoun}, then ` : `${winner} `}landed the ${noun} to ${area}. ${loser} went down and did not recover. The referee did not need a second look. Knockout at ${time}.`;
       }
       case 'tko-strikes': {
+        // A stoppage in the seconds after a knockdown is described as one: the drop, then the
+        // follow up on the floor.
+        const drop = [...tail].reverse().find((e) => e.tags.includes('knockdown') && e.actorId === result.winnerId);
+        if (drop && drop.action.kind === 'strike') {
+          const dropNoun = STRIKE_NOUN[drop.action.name][0];
+          return `${winner} dropped ${loser} with the ${dropNoun} and swarmed with follow up shots on the ground until the referee stepped in. TKO at ${time}.`;
+        }
         const noun = finisher && finisher.action.kind === 'strike' ? STRIKE_NOUN[finisher.action.name][0] : 'combination';
         return `${winner} hurt ${loser} with a ${noun} and stayed on it. ${loser} stopped answering back and covered up, and the referee stepped in. TKO at ${time}.`;
       }
@@ -480,6 +523,8 @@ export class FightNarrator {
         return `${loser}'s corner made the call and pulled their fighter before round ${result.endRound + 1}. ${winner} wins by corner stoppage.`;
       case 'retirement':
         return `${loser} could not answer the horn for round ${result.endRound + 1}. ${winner} wins by retirement.`;
+      case 'disqualification':
+        return `${loser} kept fouling after two point deductions and the referee disqualified them at ${time}. ${winner} wins by disqualification.`;
       default:
         return `The fight goes the distance and to the judges after ${result.endRound} rounds.`;
     }
@@ -497,12 +542,22 @@ export class FightNarrator {
     const oppTotals: RoundStatLine = winnerIsA ? result.totalsB : result.totalsA;
 
     if (result.method.startsWith('decision')) {
+      // Only claim the striking when the winner actually landed more. Otherwise name what did
+      // win it, so the recap never reads "out struck him 41 to 46".
       const style =
         totals.controlSeconds > oppTotals.controlSeconds + 120
           ? `controlled the grappling for ${formatClock(Math.round(totals.controlSeconds))}`
-          : `out struck ${loser} ${totals.sigStrikesLanded} to ${oppTotals.sigStrikesLanded}`;
-      const closeness = result.method === 'decision-split' ? 'in a fight that split the judges' : `over ${rounds.length} rounds`;
-      return `${winner} ${style} and took the ${result.method === 'decision-split' ? 'split' : result.method === 'decision-majority' ? 'majority' : 'unanimous'} decision ${closeness}.`;
+          : totals.sigStrikesLanded > oppTotals.sigStrikesLanded
+            ? `out struck ${loser} ${totals.sigStrikesLanded} to ${oppTotals.sigStrikesLanded}`
+            : totals.takedownsLanded > oppTotals.takedownsLanded
+              ? `won the takedown battle ${totals.takedownsLanded} to ${oppTotals.takedownsLanded}`
+              : totals.knockdowns > oppTotals.knockdowns
+                ? `scored the ${totals.knockdowns === 1 ? 'only knockdown' : 'knockdowns'}`
+                : totals.controlSeconds > oppTotals.controlSeconds
+                  ? 'held the better positions'
+                  : 'edged the rounds that mattered';
+      // The method word already says when the judges were split.
+      return `${winner} ${style} and took the ${result.method === 'decision-split' ? 'split' : result.method === 'decision-majority' ? 'majority' : 'unanimous'} decision over ${rounds.length} rounds.`;
     }
     return this.finishDescription(result, result.events);
   }

@@ -31,6 +31,8 @@ import { deriveStyleLabels, makeDevelopmentProfile, makeTendencies } from '../sr
 import { generateActivityProfile, generateFame, generatePersonality, generateSocial } from '../src/core/world/identity';
 import { NAME_BANKS } from '../src/core/data/names';
 import { estimatePot } from '../src/core/world/development';
+import { longevityFromWear } from '../src/core/world/health';
+import { canonicalCountry, cleanNickname, COUNTRY_ISO, parseGymLocation } from '../src/core/data/real-fighter';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IN_DIR = join(ROOT, 'data', 'raw-ingest');
@@ -79,6 +81,10 @@ interface RawAthlete {
   rankingDivision: string | null;
   rankingRank: number | null;
   pfpOnly: boolean;
+  firstRoundFinishes?: number | null;
+  /** Set for a fighter discovered from a fight card rather than the rankings. */
+  lastEventDate?: string | null;
+  discoveredFrom?: string | null;
   sourceUrl: string;
   fetchedAt: string;
   missingFields: string[];
@@ -119,13 +125,32 @@ function parseClock(v: string | null): number | null {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
+// The code comes from an explicit table. It used to fall back to the first two letters of the
+// country name, which turned United Kingdom into UN. A country the table does not know stops the
+// build so it is added deliberately; ZZ is kept for a fighter whose profile names no place at all.
+const unmappedCountries = new Set<string>();
 function parseCountry(placeOfBirth: string | null): { country: string; code: string; hometown: string | null } {
   if (!placeOfBirth) return { country: 'Unknown', code: 'ZZ', hometown: null };
-  const parts = placeOfBirth.split(',').map((s) => s.trim());
-  const country = parts[parts.length - 1];
+  const parts = placeOfBirth.split(',').map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return { country: 'Unknown', code: 'ZZ', hometown: null };
+  const country = canonicalCountry(parts[parts.length - 1]);
   const hometown = parts.length > 1 ? parts.slice(0, -1).join(', ') : null;
-  const bank = NAME_BANKS.find((b) => b.country.toLowerCase() === country.toLowerCase());
-  return { country, code: bank?.code ?? country.slice(0, 2).toUpperCase(), hometown };
+  const code = COUNTRY_ISO[country];
+  if (!code) {
+    unmappedCountries.add(country);
+    return { country, code: 'ZZ', hometown };
+  }
+  return { country, code, hometown };
+}
+
+function estimatePromotionalRecord(a: RawAthlete, debut: IsoDate | null, today: IsoDate) {
+  const pro = a.record ? a.record.w + a.record.l + a.record.d : 0;
+  if (!debut || !a.record || pro === 0) return { wins: 0, losses: 0, draws: 0, noContests: 0 };
+  const years = Math.max(0, (Date.parse(today) - Date.parse(debut)) / (365.25 * 86400000));
+  const fights = Math.max(1, Math.min(pro, Math.round(1 + years * 2.2)));
+  const winShare = a.record.w / pro;
+  const wins = Math.round(fights * winShare);
+  return { wins, losses: Math.max(0, fights - wins), draws: 0, noContests: 0 };
 }
 
 function parseDebut(v: string | null): IsoDate | null {
@@ -177,18 +202,25 @@ const gymNameToId: Record<string, string> = {};
 let gymCounter = 0;
 let staffCounter = 0;
 
-function gymIdFor(name: string, countryCode: string, country: string, city: string | null): string {
+// The source publishes a gym's name and nothing about where it is. A location written into the name
+// itself ("Xtreme Couture - Las Vegas, NV") is read as the gym's city. Otherwise the city stays
+// unknown: the first member's home town is where they were born, not where they train. The country
+// still falls back to that member's, because the staff name bank and the home country assignment of
+// fictional fighters read it, and the interface does not show a country without a city.
+function gymIdFor(name: string, memberCountryCode: string, memberCountry: string): string {
   const key = normalizeName(name);
   if (gymNameToId[key]) return gymNameToId[key];
   const id = `gym-real-${++gymCounter}`;
   gymNameToId[key] = id;
+  const located = parseGymLocation(name);
+  const countryCode = located?.countryCode ?? memberCountryCode;
   const reputation = clamp(Math.round(rng.normal(62, 12)), 20, 95);
   const g: Gym = {
     id,
     name,
-    country,
+    country: located?.country ?? memberCountry,
     countryCode,
-    city: city ?? 'Unknown',
+    city: located?.city ?? 'Unknown',
     reputation,
     facilities: clamp(Math.round(rng.normal(reputation, 9)), 15, 98),
     capacity: rng.int(14, 46),
@@ -256,6 +288,12 @@ function gymIdFor(name: string, countryCode: string, country: string, city: stri
   return id;
 }
 
+/** A percentage breakdown whose parts are all zero is a widget with no data behind it. */
+function nonZeroParts<T extends Record<string, number>>(parts: T | null): T | null {
+  if (!parts) return null;
+  return Object.values(parts).reduce((s, v) => s + v, 0) > 0 ? parts : null;
+}
+
 // ---------------------------------------------------------------------------
 // Fighter construction
 // ---------------------------------------------------------------------------
@@ -281,12 +319,20 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
   const activity = determineActivityStatus({
     officialStatus: a.status,
     hasCurrentRanking: Boolean(ranking) || Boolean(championOf),
-    recentFightWithinDays: null,
+    // A fighter found on a fight card carries the date of that card, which is evidence of activity
+    // the rankings cannot give for anybody below the top fifteen.
+    recentFightWithinDays: a.lastEventDate ? Math.max(0, Math.round((Date.parse(snapshotDate) - Date.parse(a.lastEventDate)) / 86400000)) : null,
     hasScheduledFight: false,
     manualOverride: (corrections[slug]?.activityStatus as never) ?? null,
   });
   if (activity.status !== 'active') {
     warnings.push(`${slug}: status ${activity.status} (${activity.reason}), excluded from the playable roster.`);
+    continue;
+  }
+  // A profile can say Active for years after a fighter's last bout. Below the rankings, the card the
+  // fighter was found on has to be recent for them to count as part of the current roster.
+  if (!ranking && !championOf && a.lastEventDate && Date.parse(snapshotDate) - Date.parse(a.lastEventDate) > 730 * 86400000) {
+    warnings.push(`${slug}: last seen on a card on ${a.lastEventDate}, excluded from the current roster.`);
     continue;
   }
 
@@ -369,7 +415,10 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
   if (a.record) provenance.record = prov('record', a);
   if (a.status) provenance.activityStatus = prov('activityStatus', a);
   if (a.trainsAt) provenance.gym = prov('gym', a);
-  if (octagonDebut) provenance.octagonDebut = prov('octagonDebut', a);
+  if (octagonDebut) {
+    provenance.octagonDebut = prov('octagonDebut', a);
+    provenance.ufcRecord = prov('octagonDebut', a, 'low', 'promotional record estimated from the debut date at about two fights a year, capped by the professional record');
+  }
   provenance.ratings = {
     source: 'derived model',
     sourceId: `ratings-pipeline@${RATING_PIPELINE_VERSION}`,
@@ -380,7 +429,7 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
   };
   provenance.ranking = prov('ranking', a, 'high', 'official rankings page');
 
-  const gymId = a.trainsAt ? gymIdFor(a.trainsAt, geo.code, geo.country, geo.hometown) : null;
+  const gymId = a.trainsAt ? gymIdFor(a.trainsAt, geo.code, geo.country) : null;
 
   // The birth date is not published on the profile, only the age. Storing a fabricated
   // birth date would be inventing data, so it stays null and the age is stored as an
@@ -390,7 +439,8 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
     firstName,
     lastName,
     name: a.name ?? slug,
-    nickname: a.nickname,
+    // The raw store keeps the quotes the profile wraps a nickname in; the interface adds its own.
+    nickname: cleanNickname(a.nickname),
     country: geo.country,
     countryCode: geo.code,
     hometown: geo.hometown,
@@ -426,7 +476,11 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
     record: a.record
       ? { wins: a.record.w, losses: a.record.l, draws: a.record.d, noContests: 0 }
       : { wins: 0, losses: 0, draws: 0, noContests: 0 },
-    ufcRecord: { wins: 0, losses: 0, draws: 0, noContests: 0 },
+    // The profile publishes the professional record, not the promotional one. Zero was used for
+    // everybody, which made every real fighter below the rankings a debutant to the matchmaker. The
+    // promotional record is estimated from the official debut date at the sport's usual activity,
+    // capped by the professional record, and labelled as an estimate in the provenance.
+    ufcRecord: estimatePromotionalRecord(a, octagonDebut, snapshotDate),
     methods: {
       koWins: a.winsByKo ?? 0,
       subWins: a.winsBySub ?? 0,
@@ -438,7 +492,45 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
     boutIds: [],
     winStreak: a.winStreak ?? 0,
     lossStreak: a.lossStreak ?? 0,
-    lastFightDate: null,
+    // The card a fighter was found on is the date of their last bout, a sourced fact. Ranked
+    // fighters have no such date in the source, and the save seeds a plausible one for them.
+    lastFightDate: a.lastEventDate && a.lastEventDate <= snapshotDate ? a.lastEventDate : null,
+    officialStats: {
+      sigStrLandedPerMin: a.sigStrLandedPerMin,
+      sigStrAbsorbedPerMin: a.sigStrAbsorbedPerMin,
+      sigStrAccuracyPct: a.sigStrLanded && a.sigStrAttempted ? Math.round((a.sigStrLanded / a.sigStrAttempted) * 100) : null,
+      sigStrDefensePct: a.sigStrDefensePct,
+      takedownAvgPer15: a.takedownAvgPer15,
+      // A profile can publish takedown attempts without the landed count. That is an unknown
+      // accuracy, not 0%, and it matches how the ratings pipeline reads the same pair.
+      takedownAccuracyPct:
+        a.takedownsAttempted && a.takedownsLanded != null ? Math.round((a.takedownsLanded / a.takedownsAttempted) * 100) : null,
+      takedownDefensePct: a.takedownDefensePct,
+      submissionAvgPer15: a.submissionAvgPer15,
+      knockdownAvgPer15: a.knockdownAvgPer15,
+      // A profile with no published fight data still renders its widgets, as a 00:00 clock and a
+      // body diagram at 0/0/0. Those are placeholders, not measurements, so they are stored as unknown.
+      avgFightTime: a.avgFightTime && !/^0+:00$/.test(a.avgFightTime) ? a.avgFightTime : null,
+      firstRoundFinishes: a.firstRoundFinishes ?? null,
+      strikeTarget: nonZeroParts(
+        a.strikeTarget ? { head: a.strikeTarget.head_percent ?? 0, body: a.strikeTarget.body_percent ?? 0, leg: a.strikeTarget.leg_percent ?? 0 } : null
+      ),
+      strikePosition: nonZeroParts(
+        a.strikePosition
+          ? { standing: a.strikePosition.standing?.percent ?? 0, clinch: a.strikePosition.clinch?.percent ?? 0, ground: a.strikePosition.ground?.percent ?? 0 }
+          : null
+      ),
+      winMethod: a.winMethod ? { ko: a.winMethod['KO/TKO']?.value ?? 0, sub: a.winMethod['SUB']?.value ?? 0, dec: a.winMethod['DEC']?.value ?? 0 } : null,
+      fightingStyle: a.fightingStyle ?? null,
+      trainsAt: a.trainsAt ?? null,
+      placeOfBirth: a.placeOfBirth ?? null,
+      // The card a fighter was found on can be one booked after the snapshot. The save never runs
+      // that card, so it is kept apart from the last one they actually fought on.
+      lastEventDate: a.lastEventDate && a.lastEventDate <= snapshotDate ? a.lastEventDate : null,
+      nextEventDate: a.lastEventDate && a.lastEventDate > snapshotDate ? a.lastEventDate : null,
+      sourceUrl: a.sourceUrl,
+      fetchedAt: a.fetchedAt,
+    },
     nextBoutId: null,
     octagonDebut,
     ranking: championOf ? null : (ranking?.rank ?? null),
@@ -493,8 +585,10 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
     weightCut: clamp(wearBase * 0.5 + buildProfile.cutDifficulty * 8 + rng.normal(0, 4), 0, 92),
     recovery: clamp(wearBase * 0.8 + Math.max(0, ageNow - 30) * 2.2 + rng.normal(0, 5), 0, 92),
   };
-  const wearMean = Object.values(fighter.wear).reduce((s, v) => s + v, 0) / 6;
-  fighter.longevity = clamp(Math.round(100 - wearMean), 5, 100);
+  // Longevity is derived from wear by the same weighting the weekly health pass uses. A plain mean
+  // here disagreed with it by several points, and the first rest week moved every real fighter's
+  // Longevity without anything having happened to them.
+  fighter.longevity = longevityFromWear(fighter.wear);
 
   const rankForPop = championOf ? 0 : (ranking?.rank ?? 16);
   const pfp = pfpRankBySlug.get(slug);
@@ -505,7 +599,7 @@ for (const [slug, rawIn] of Object.entries(athletes)) {
     5,
     100
   );
-  const bank = NAME_BANKS.find((b) => b.country === geo.country);
+  const bank = NAME_BANKS.find((b) => b.country === geo.country) ?? NAME_BANKS.find((b) => b.code === geo.code);
   if (bank) fighter.regionalPopularity[bank.region] = clamp(fighter.popularity + 14, 5, 100);
 
   // Identity is generated from a per fighter seed so it is stable across rebuilds. None
@@ -557,6 +651,18 @@ const pfpEntries = [...pfpRankBySlug.entries()]
 // Validation report and output
 // ---------------------------------------------------------------------------
 
+// The site relabelled the birthplace field once already and the country of nearly the whole roster
+// silently became Unknown. Home market logic reads the country, so the build refuses to ship that.
+if (unmappedCountries.size > 0) {
+  throw new Error(`Countries with no ISO code in src/core/data/real-fighter.ts COUNTRY_ISO: ${[...unmappedCountries].join(', ')}`);
+}
+const unknownCountries = fighters.filter((f) => f.country === 'Unknown').length;
+if (unknownCountries > fighters.length * 0.05) {
+  throw new Error(
+    `${unknownCountries} of ${fighters.length} fighters have no country. Check that tools/ingest/parse.mjs still reads the profile's birthplace label, then run tools/ingest/reparse.mjs.`
+  );
+}
+
 const fighterCountByDivision: Record<string, number> = {};
 for (const d of DIVISIONS) fighterCountByDivision[d.name] = fighters.filter((f) => f.divisionId === d.id).length;
 
@@ -603,7 +709,7 @@ const meta: SnapshotMeta = {
   },
   changeLog: ['Initial snapshot built from the official UFC rankings and athlete profiles.'],
   note:
-    'Fighter identity, physicals, official record, gym name, activity status and ranking are sourced facts from ufc.com. The six performance ratings, Pot, Longevity, wear, popularity, tendencies and every contract in the game are model derived or simulated values and are labelled as such throughout the interface. ufc.com robots.txt disallows the full athlete directory, so the real roster is the officially ranked roster: every champion plus the ranked one through fifteen in each of the eight men\'s divisions. Unranked roster depth is filled with clearly labelled fictional fighters when a save is created.',
+    'Fighter identity, physicals, official record, gym name, activity status and ranking are sourced facts from ufc.com. The six performance ratings, Pot, Longevity, wear, popularity, tendencies and every contract in the game are model derived or simulated values and are labelled as such throughout the interface. ufc.com robots.txt disallows the full athlete directory, so the real roster is built from the official rankings plus every fighter named on a recent official fight card, which the site permits crawling. Any remaining roster depth is filled with clearly labelled fictional fighters when a save is created.',
 };
 
 const snapshot: SnapshotFile = {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CALIBRATION } from './config/calibration';
 import { Rng } from './rng';
 import { addDays } from './types/common';
 import { createEvent, newCareer, runWorld } from './testing/fixtures';
@@ -186,13 +187,21 @@ describe('assigning officials to a bout', () => {
     const f = newCareer(6206);
     const bout = fixtureBout(f.save);
     const assignment = assignOfficials(f.save, bout);
-    const neutral = judgePersonasFor(f.save, assignment, 0);
-    const partisan = judgePersonasFor(f.save, assignment, 0.12);
-    // The nudge only moves a judge who is susceptible, and never by much.
+    const neutral = judgePersonasFor(f.save, assignment, 0, bout.id);
+    const partisan = judgePersonasFor(f.save, assignment, 1, bout.id);
+    const away = judgePersonasFor(f.save, assignment, -1, bout.id);
+    // The pull only moves a judge who is susceptible, toward the home fighter, and by at most the
+    // crowd's full pull on the most susceptible judge: enough to decide a close round, never a
+    // clear one. The judge's own lean on the night is untouched by where the bout is held.
     for (let i = 0; i < neutral.length; i++) {
-      const shift = Math.abs(partisan[i].bias - neutral[i].bias);
-      expect(shift).toBeLessThanOrEqual(0.12 * 0.35 + 1e-9);
+      expect(neutral[i].homeBias ?? 0).toBe(0);
+      expect(partisan[i].bias).toBe(neutral[i].bias);
+      const shift = partisan[i].homeBias ?? 0;
+      expect(shift).toBeGreaterThanOrEqual(0);
+      expect(shift).toBeLessThanOrEqual(CALIBRATION.judging.homeCrowdBias * 0.3 + 1e-9);
+      expect(away[i].homeBias ?? 0).toBeCloseTo(-shift, 9);
     }
+    expect(partisan.some((p) => (p.homeBias ?? 0) > 0.1)).toBe(true);
   });
 });
 

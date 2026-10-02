@@ -107,6 +107,18 @@ export function stagesForBout(save: SaveGame, boutId: BoutId): FightWeekStage[] 
   // correctly, but the player is never asked to choose whether to travel to their own
   // fight, which was a strange thing to put in front of somebody.
   const stages: FightWeekStage[] = ['arrival', 'medical-exam'];
+  // An amateur bout on a regional undercard has a medical, a weigh in and a fight. Nobody holds a
+  // press conference for it, and putting a sixteen year old through one read as absurd.
+  if (bout.isAmateur) return [...stages, 'official-weigh-in', 'final-clearance', 'fight-night'];
+  // A regional card is small. The press is there for its main event and its belt, not for every bout.
+  if (event?.promotionId) {
+    const headline = bout.isMainEvent || bout.regionalTitle;
+    if (headline) stages.push('press-conference');
+    stages.push('official-weigh-in');
+    if (bout.regionalTitle) stages.push('faceoff');
+    stages.push('final-clearance', 'fight-night');
+    return stages;
+  }
   if (bout.isMainEvent || title || popularity > 45) stages.push('media-day');
   if (isBigCard && (bout.cardSegment === 'main' || title)) stages.push('open-workout');
   // Every player fight gets a press interaction. A preliminary bout gets a shorter one,
@@ -120,8 +132,10 @@ export function stagesForBout(save: SaveGame, boutId: BoutId): FightWeekStage[] 
   }
   stages.push('final-clearance');
   stages.push('fight-night');
-  if (isPlayerBout || bout.isMainEvent || title || isBigCard) stages.push('post-fight-interview');
-  if (title || bout.isMainEvent) stages.push('post-fight-press');
+  // No post fight interview or post fight press conference. Both were scheduled here and shown as
+  // due on fight night, but nothing ever offered them: the fight page has no interview, and once
+  // the result lands the bout is no longer a booking, so the schedule promised obligations that
+  // could never be met. The stage names stay in the type so older saves still read.
   return stages;
 }
 
@@ -224,9 +238,20 @@ function detailFor(save: SaveGame, boutId: BoutId, stage: FightWeekStage): strin
 export function tasksForBout(save: SaveGame, boutId: BoutId): FightWeekTask[] {
   if (!save.fightWeek) return [];
   const order = stagesForBout(save, boutId);
+  // The second attempt is opened only when a fighter misses, so the planned stages never list it.
+  // Its index was -1 and it sorted above arrival. It belongs straight after the weigh in it repeats.
+  const weighIn = order.indexOf('official-weigh-in');
+  if (weighIn >= 0) order.splice(weighIn + 1, 0, 'second-weigh-in-attempt');
   return Object.values(save.fightWeek)
     .filter((t) => t.boutId === boutId)
-    .sort((a, b) => order.indexOf(a.stage) - order.indexOf(b.stage));
+    .sort((a, b) => {
+      const ia = order.indexOf(a.stage);
+      const ib = order.indexOf(b.stage);
+      if (ia >= 0 && ib >= 0) return ia - ib;
+      // A stage the plan does not list goes by its date, after the planned stages of the same day.
+      if (a.dueOn !== b.dueOn) return a.dueOn < b.dueOn ? -1 : 1;
+      return (ia < 0 ? 1 : 0) - (ib < 0 ? 1 : 0);
+    });
 }
 
 /**
@@ -242,6 +267,49 @@ export function pendingStages(save: SaveGame, boutId: BoutId): FightWeekTask[] {
 /** The next unresolved mandatory stage that would block the calendar, if any. */
 export function blockingStage(save: SaveGame, boutId: BoutId): FightWeekTask | null {
   return pendingStages(save, boutId).find((t) => t.mandatory) ?? null;
+}
+
+/** Stages completed by the fight itself rather than by anything on the fight week page. */
+const FIGHT_DAY_STAGES: FightWeekStage[] = ['final-clearance', 'fight-night'];
+
+/**
+ * The open mandatory stage that has to happen before the fight can start, if any.
+ *
+ * Unlike blockingStage this ignores final clearance and fight night. On fight day both are always
+ * due and both are closed by the fight, so counting them would refuse every fight. The official
+ * weigh in, and a second attempt after a miss, are what actually stand between the player and the
+ * cage. careerStatus applies the same rule when it routes fight day.
+ */
+export function preFightBlocker(save: SaveGame, boutId: BoutId): FightWeekTask | null {
+  return pendingStages(save, boutId).find((t) => t.mandatory && !FIGHT_DAY_STAGES.includes(t.stage)) ?? null;
+}
+
+/**
+ * Closes fight week once the bout has a result or has otherwise stopped being a booking.
+ *
+ * Final clearance and fight night are marked done on the bout's date, and any post fight stage
+ * an older build scheduled is removed. Before this nothing ever closed them, so a revisited fight
+ * week page offered 'Receive final medical clearance' and 'Enter fight' for a fight already over.
+ * Safe to call more than once.
+ */
+export function closeFightWeek(save: SaveGame, boutId: BoutId, fightNightOutcome = 'The fight took place.'): void {
+  const bout = save.bouts[boutId];
+  if (!bout || !save.fightWeek) return;
+  for (const id of Object.keys(save.fightWeek)) {
+    const task = save.fightWeek[id];
+    if (task.boutId !== boutId) continue;
+    if (task.stage === 'post-fight-interview' || task.stage === 'post-fight-press') {
+      delete save.fightWeek[id];
+      continue;
+    }
+    // Only a bout that was actually fought gets its fight night recorded. A canceled bout has
+    // its tasks cleared by cancelBout, so this is for completed bouts and stale saves.
+    if (bout.status !== 'completed' || !FIGHT_DAY_STAGES.includes(task.stage)) continue;
+    if (task.status === 'complete' || task.status === 'skipped') continue;
+    task.status = 'complete';
+    task.resolvedOn = bout.date;
+    task.outcome = task.stage === 'final-clearance' ? 'Cleared by the commission doctor.' : fightNightOutcome;
+  }
 }
 
 /** Marks a stage done, exactly once, recording what happened. */

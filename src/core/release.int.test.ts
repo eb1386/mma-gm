@@ -9,7 +9,18 @@ import './world/decision-handlers';
 import { careerStatus } from './world/career';
 import { generateCampLife, campLifeRng } from './world/camp-life';
 import { adjacentDivisions, commitMove, explore } from './world/weightclass';
-import { calloutLikelihood, enforceDivisionInvariant, moveDesire, runNpcCallouts } from './world/npc-behaviour';
+import {
+  calloutLikelihood,
+  DOWN_MOVE_THRESHOLD,
+  enforceDivisionInvariant,
+  moveDesire,
+  runNpcCallouts,
+  toneFor,
+  UP_MOVE_THRESHOLD,
+} from './world/npc-behaviour';
+import { getRelationship, makeCallout, resolveCallout, type CalloutResponse, type CalloutTone } from './world/relationships';
+import { generatePersonality } from './world/identity';
+import { DIVISION_BY_ID } from './config/divisions';
 import { assessTitleOpportunity, assessTitleRematch, fightCloseness, unbeatenRun } from './world/title-logic';
 import { stagesForBout, tasksForBout, ensureFightWeekTasks } from './world/fightweek';
 import { createSession, presserRng } from './world/presser';
@@ -258,6 +269,69 @@ describe('NPC behaviour', () => {
     me.walkingWeightLb += 18;
     const desire = moveDesire(f.save, me);
     expect(desire.up).toBeGreaterThan(0.3);
+  });
+
+  it('answers callouts in every way over many resolutions', () => {
+    // Personality dials are stored 0 to 100. Read as 0 to 1 they made every fighter a hothead with
+    // an ego, so a polite answer, a 'not yet' and silence never came back.
+    const f = newCareer(9044, { light: true });
+    const me = f.save.fighters[f.playerId];
+    const to = Object.values(f.save.fighters).find((x) => x.id !== me.id && !x.retired && x.divisionId === me.divisionId)!;
+    const tones: CalloutTone[] = ['respectful', 'confident', 'aggressive', 'personal', 'promotional'];
+    const callout = makeCallout(f.save, me.id, to.id, 'respectful', new Rng(1))!;
+    const seen = new Set<CalloutResponse>();
+    for (let i = 0; i < 500; i++) {
+      to.personality = generatePersonality(new Rng(7000 + i));
+      callout.tone = tones[i % tones.length];
+      callout.status = 'open';
+      callout.response = null;
+      callout.responseText = null;
+      seen.add(resolveCallout(f.save, callout.id, new Rng(9000 + i))!.response!);
+    }
+    const all: CalloutResponse[] = ['accept', 'reject', 'counter-callout', 'insult', 'respectful-answer', 'silence', 'future-promise'];
+    for (const r of all) expect(seen.has(r), r).toBe(true);
+  });
+
+  it('calls the player out in more than one tone across a roster', () => {
+    const f = newCareer(9045, { light: true });
+    const rng = new Rng(3);
+    const tones = new Set<CalloutTone>();
+    for (const npc of Object.values(f.save.fighters)) {
+      if (npc.id === f.playerId || npc.retired) continue;
+      tones.add(toneFor(f.save, npc, f.playerId, rng));
+    }
+    expect(tones.size).toBeGreaterThan(1);
+  });
+
+  it('a ranked fighter does not call out an unranked newcomer with no history', () => {
+    const f = newCareer(9046, { light: true });
+    const me = f.save.fighters[f.playerId];
+    me.ranking = null;
+    me.isChampion = false;
+    const table = f.save.rankings[me.divisionId];
+    for (const e of table.entries) {
+      const npc = f.save.fighters[e.fighterId];
+      if (!npc || npc.retired) continue;
+      const rel = getRelationship(f.save, npc.id, me.id);
+      if ((rel?.rivalry ?? 0) >= 45 || (rel?.fights.length ?? 0) > 0) continue;
+      expect(calloutLikelihood(f.save, npc, me)).toBe(0);
+    }
+  });
+
+  it('gives an undersized fighter outside the top ten a reason to move down', () => {
+    const f = newCareer(9043, { light: true });
+    const npc = Object.values(f.save.fighters).find(
+      (x) => x.id !== f.playerId && !x.retired && !x.isChampion && !x.nextBoutId && x.divisionId === 'welterweight'
+    )!;
+    npc.ranking = 12;
+    npc.birthDate = addDays(f.save.date, -26 * 365);
+    npc.walkingWeightLb = DIVISION_BY_ID[npc.divisionId].limitLb + 1;
+    npc.weightMisses = 0;
+    npc.lossStreak = 0;
+    const desire = moveDesire(f.save, npc);
+    expect(desire.down).toBeGreaterThan(DOWN_MOVE_THRESHOLD);
+    // A down move was unreachable when it shared the step up bar.
+    expect(DOWN_MOVE_THRESHOLD).toBeLessThan(UP_MOVE_THRESHOLD);
   });
 });
 

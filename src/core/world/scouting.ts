@@ -3,6 +3,7 @@ import { clamp, hashString, Rng } from '../rng';
 import { ovrDisplayed, ovrRaw, RATING_KEYS, type Fighter, type FighterRatingEstimate, type Ratings } from '../types/fighter';
 import type { SaveGame } from '../types/save';
 import { DIFFICULTY } from '../config/calibration';
+import { displayedPot } from './pot';
 
 /**
  * Scouting fog.
@@ -106,7 +107,9 @@ export function estimateRatings(save: SaveGame, fighter: Fighter, ctx?: Scouting
       ovr: ovrDisplayed(fighter.ratings),
       ovrLow: ovrDisplayed(fighter.ratings),
       ovrHigh: ovrDisplayed(fighter.ratings),
-      pot: fighter.pot,
+      // Clamped to Ovr like every other Pot on screen: the cached value can trail a fighter who
+      // has grown since the last projection.
+      pot: displayedPot(fighter),
       confidence: 'very-high',
       exact: true,
     };

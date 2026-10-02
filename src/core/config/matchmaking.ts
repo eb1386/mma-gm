@@ -173,6 +173,60 @@ export const MATCHMAKING = {
      * with a highlight reel, and six would still have admitted that exact fight.
      */
     debutOpponentMaxFights: 3,
+    /**
+     * A fighter this early in a promotional career is still being built. They are not matched with
+     * a long serving veteran, ranked or not: a one and oh newcomer was handed a twenty five fight
+     * veteran in their second outing, which no matchmaker books.
+     */
+    prospectWindowFights: 4,
+    prospectOpponentMaxFights: 8,
+    prospectMaxOvrGap: 8,
+    /**
+     * The widest ranking gap a callout or a feud can bridge between two ranked fighters. Past this
+     * the promotion does not make the fight however loudly it is asked for, because the lower
+     * fighter has not earned it and the higher one has nothing to gain.
+     */
+    interestMaxRankGap: 6,
+    /**
+     * A fighter ranked this high or better (the champion counts as nought) is a top contender. They
+     * are not fed a fighter ranked more than `topContenderMaxRankGap` places below them, or an
+     * unranked one, unless a callout or a rematch claim asks for it. A number two on a six fight
+     * streak was offered a thirteen, two fourteens and an unranked prospect in a row, because the
+     * gap penalty only reordered the candidates and a thin week still picked the best of the bad.
+     */
+    topContenderRank: 5,
+    topContenderMaxRankGap: 7,
+    /**
+     * How long the top contender waits for a fitting opponent before the gate lifts. Bounded so a
+     * thin division cannot leave them idle for good: past this they take what the card can offer.
+     */
+    topContenderWaitDays: 180,
+    /** Extra score taken off an unranked opponent for a top contender, past the usual step down. */
+    topContenderUnrankedPenalty: 20,
+  },
+
+  /**
+   * The most championship bouts one card carries, by card tier.
+   *
+   * Every champion clears the turnaround gate in the same week of a new save, and the title pass
+   * books each division on the first big card in range, so one event used to carry ten title
+   * fights with belts down in the early prelims, and the shared turnaround kept them stacked for
+   * the rest of the save. A numbered card headlines with a title and can carry a second; any other
+   * card carries one. A division that finds the card full books onto a later one, which is also
+   * what spreads the divisions apart from then on.
+   *
+   * Measured over two year spectator worlds on three seeds: no card above its cap, at most one
+   * main event per card, and 1.46 to 1.50 title fights per division per year including the first
+   * months while every division waits for its first card. The steady state gap between title
+   * fights is 210 to 238 days, so the turnaround gate still sets the pace and the cap only costs
+   * the week or two a division waits for a card with room.
+   */
+  titleBoutsPerCard: {
+    'numbered-ppv': 2,
+    international: 1,
+    'fight-night': 1,
+    apex: 1,
+    regional: 1,
   },
 
   /** Random jitter so a long save stays varied. Applied last. */
@@ -194,8 +248,13 @@ export const MATCHMAKING = {
    * 62.7 / 68.4 / 72.4 / 73.7 across easy, normal, hard and brutal, with at least three distinct
    * opponents drawn at every setting. A larger value widens that spread but starts collapsing the
    * hardest setting onto a single opponent, which is the variety the draw exists to protect.
+   *
+   * Raised from one to three when the real roster grew past six hundred fighters. With eighty to
+   * ninety real fighters in a division, rank and matchup terms crowded the nudge out and all four
+   * settings handed out opponents within a tenth of an Ovr point of each other. The distinct
+   * opponent test still holds at three.
    */
-  difficultyPerOvrPoint: 1,
+  difficultyPerOvrPoint: 3,
 
   /**
    * Ceiling on the Ovr gap the difficulty adjustment will consider, in rating points.

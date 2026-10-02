@@ -5,6 +5,10 @@
  * distributions that matter: finish rate by method, round of finish, significant strike
  * volume, takedown rates, control time and decision types.
  *
+ * Fighters are paired within about three Ovr of each other, the way real matchmaking pairs
+ * them. Two independent draws produced mismatches that finished far more often than booked
+ * fights do, which hid a decision heavy engine behind a healthy looking finish rate.
+ *
  * Run with:  npx vite-node tools/calibrate.ts [fights] [seed]
  *
  * The reference bands printed alongside each metric are the shape of publicly reported
@@ -41,6 +45,15 @@ interface Bucket {
   rounds: Record<number, number>;
   sigA: number;
   sigB: number;
+  sigAtt: number;
+  decisions: number;
+  splits: number;
+  majorities: number;
+  draws: number;
+  scoredRounds: number;
+  dissentRounds: number;
+  kdEvents: number;
+  kdFinishes: number;
   tdA: number;
   tdB: number;
   ctrl: number;
@@ -51,7 +64,7 @@ interface Bucket {
 }
 
 function newBucket(): Bucket {
-  return { count: 0, methods: {}, rounds: {}, sigA: 0, sigB: 0, tdA: 0, tdB: 0, ctrl: 0, minutes: 0, kd: 0, subAtt: 0, quality: 0 };
+  return { count: 0, methods: {}, rounds: {}, sigA: 0, sigB: 0, sigAtt: 0, decisions: 0, splits: 0, majorities: 0, draws: 0, scoredRounds: 0, dissentRounds: 0, kdEvents: 0, kdFinishes: 0, tdA: 0, tdB: 0, ctrl: 0, minutes: 0, kd: 0, subAtt: 0, quality: 0 };
 }
 
 const aggregate = newBucket();
@@ -64,7 +77,7 @@ const t0 = Date.now();
 for (let i = 0; i < N; i++) {
   const division = rng.pick(DIVISIONS);
   const targetA = rng.normalClamped(72, 8, 45, 95);
-  const targetB = rng.normalClamped(72, 8, 45, 95);
+  const targetB = rng.normalClamped(targetA, 1.5, targetA - 3, targetA + 3);
   const a = generateFighter(rng, { divisionId: division.id, targetOvr: targetA, today: '2026-01-01', idNumber: idCounter++ });
   const b = generateFighter(rng, { divisionId: division.id, targetOvr: targetB, today: '2026-01-01', idNumber: idCounter++ });
   const scheduledRounds: 3 | 5 = rng.chance(0.12) ? 5 : 3;
@@ -108,6 +121,27 @@ for (let i = 0; i < N; i++) {
     if (isFinish(result.method)) bucket.rounds[result.endRound] = (bucket.rounds[result.endRound] ?? 0) + 1;
     bucket.sigA += result.totalsA.sigStrikesLanded;
     bucket.sigB += result.totalsB.sigStrikesLanded;
+    bucket.sigAtt += result.totalsA.sigStrikesAttempted + result.totalsB.sigStrikesAttempted;
+    if (isDecision(result.method)) {
+      bucket.decisions++;
+      if (result.method === 'decision-split') bucket.splits++;
+      if (result.method === 'decision-majority') bucket.majorities++;
+      if (result.method.startsWith('draw')) bucket.draws++;
+      const cards = result.scorecards;
+      for (let r = 0; r < (cards[0]?.rounds.length ?? 0); r++) {
+        bucket.scoredRounds++;
+        const winners = new Set(cards.map((c) => Math.sign(c.rounds[r].a - c.rounds[r].b)));
+        if (winners.size > 1) bucket.dissentRounds++;
+      }
+    }
+    // A knockdown ends the fight when the next thing that happens to the downed fighter is the
+    // stoppage, in the same round.
+    result.events.forEach((e, idx) => {
+      if (!e.tags.includes('knockdown')) return;
+      bucket.kdEvents++;
+      const next = result.events.slice(idx + 1).find((x) => x.tags.includes('finish') || x.tags.includes('knockdown'));
+      if (next && next.tags.includes('finish') && next.round === e.round && (result.method === 'ko' || result.method.startsWith('tko'))) bucket.kdFinishes++;
+    });
     bucket.tdA += result.totalsA.takedownsLanded;
     bucket.tdB += result.totalsB.takedownsLanded;
     bucket.ctrl += result.totalsA.controlSeconds + result.totalsB.controlSeconds;
@@ -144,11 +178,20 @@ function report(name: string, b: Bucket): void {
     .sort((x, y) => Number(x[0]) - Number(y[0]))
     .map(([r, c]) => `R${r} ${pct(c, finishes)}`);
   console.log(`  finish round: ${rd.join('  ')}`);
+  const share = (r: number) => (b.rounds[r] ?? 0) / Math.max(1, finishes);
+  console.log(
+    `  R1/R2/R3:     ${pct(b.rounds[1] ?? 0, finishes)} / ${pct(b.rounds[2] ?? 0, finishes)} / ${pct(b.rounds[3] ?? 0, finishes)}   [reference about 45% / 30% / 25%]${share(1) < share(3) ? '   R1 BELOW R3' : ''}`
+  );
   console.log(`  sig str/min:  ${((b.sigA + b.sigB) / 2 / perFighterMinutes).toFixed(2)} per fighter   [reference band 3.4 to 4.4]`);
   console.log(`  avg fight:    ${(totalMin / b.count).toFixed(2)} min      [reference band 9.0 to 11.5]`);
   console.log(`  td/15min:     ${(((b.tdA + b.tdB) / 2 / perFighterMinutes) * 15).toFixed(2)} per fighter   [reference band 1.3 to 2.1]`);
   console.log(`  sub att/15:   ${((b.subAtt / 2 / perFighterMinutes) * 15).toFixed(2)} per fighter   [reference band 0.4 to 0.9]`);
   console.log(`  kd/15min:     ${((b.kd / 2 / perFighterMinutes) * 15).toFixed(2)} per fighter   [reference band 0.4 to 0.8]`);
+  console.log(`  kd to finish: ${pct(b.kdFinishes, Math.max(1, b.kdEvents))} of knockdowns   [reference band 40% to 50%]`);
+  console.log(`  sig accuracy: ${pct(b.sigA + b.sigB, Math.max(1, b.sigAtt))}   [reference band 45% to 50%]`);
+  console.log(
+    `  decisions:    split ${pct(b.splits, Math.max(1, b.decisions))} [10% to 15%]  majority ${pct(b.majorities, Math.max(1, b.decisions))} [2% to 4%]  draws ${pct(b.draws, Math.max(1, b.decisions))} [1% or less]  round dissent ${pct(b.dissentRounds, Math.max(1, b.scoredRounds))}`
+  );
   console.log(`  control:      ${((b.ctrl / b.count / 60)).toFixed(2)} min combined per fight`);
   console.log(`  avg quality:  ${(b.quality / b.count).toFixed(1)}`);
 }

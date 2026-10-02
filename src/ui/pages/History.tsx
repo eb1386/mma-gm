@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { DIVISIONS } from '@core/config/divisions';
 import { formatDate } from '@core/types/common';
-import { titleLineage } from '@core/world/history';
+import { AWARD_LABEL, titleLineage } from '@core/world/history';
 import { useGame } from '../store';
 import { Panel } from '../components';
 
@@ -39,8 +39,8 @@ export function HistoryPage() {
                       <td>
                         <Link to={`/fighter/${r.fighterId}`}>{r.fighterName}</Link>
                       </td>
-                      <td className="small">{r.wonOn}</td>
-                      <td className="small">{r.lostOn ?? <span className="good">current</span>}</td>
+                      <td className="small nowrap">{formatDate(r.wonOn)}</td>
+                      <td className="small nowrap">{r.lostOn ? formatDate(r.lostOn) : <span className="good">current</span>}</td>
                       <td className="num">{r.days}</td>
                       <td className="num">{r.defenses}</td>
                       <td className="small dim">{r.endReason ?? ''}</td>
@@ -114,7 +114,7 @@ export function HistoryPage() {
               .map((a, i) => (
                 <tr key={i}>
                   <td className="num">{a.year}</td>
-                  <td>{a.key.split('-').join(' ')}</td>
+                  <td>{AWARD_LABEL[a.key] ?? a.key}</td>
                   <td>
                     {a.fighterId ? (
                       <Link to={`/fighter/${a.fighterId}`}>{save.fighters[a.fighterId]?.name}</Link>

@@ -1,7 +1,9 @@
-import { clamp, Rng } from '../rng';
+import { clamp, hashString, Rng } from '../rng';
+import { record } from './finance';
 import { invalidatePot } from './pot';
+import { hasLiveBooking } from './availability';
 import { NAME_BANKS } from '../data/names';
-import type { FighterId, GymId, IsoDate } from '../types/common';
+import { daysBetween, formatDate, formatMoney, type FighterId, type GymId, type IsoDate } from '../types/common';
 import { RATING_KEYS, type Fighter } from '../types/fighter';
 import type { Gym, GymStaff } from '../types/world';
 import type { SaveGame } from '../types/save';
@@ -44,6 +46,16 @@ export const STAFF_DEVELOPS: Record<GymStaff['role'], GymStaff['develops']> = {
   manager: null,
 };
 
+/**
+ * A gym's location for display. A real gym's city is known only when its own name gives one, and its
+ * country is then a game value taken from a member, so a gym with no known city shows no location
+ * rather than "Unknown, Unknown" or a guessed country.
+ */
+export function gymLocation(g: Pick<Gym, 'city' | 'country'>): string {
+  if (!g.city || g.city === 'Unknown') return '';
+  return g.country && g.country !== 'Unknown' ? `${g.city}, ${g.country}` : g.city;
+}
+
 export function createGym(
   save: SaveGame,
   rng: Rng,
@@ -81,8 +93,28 @@ export function createGym(
     note: 'Fictional gym created inside this save.',
     recentResults: { wins: 0, losses: 0 },
   };
+  if (opts.isPlayerControlled) {
+    // A room opened this morning has bare walls, and pays for what it is rather than a random
+    // figure. The random overhead (up to $60k a month) sank a new coach gym by its second month,
+    // when membership at its starting reputation brings in about $4k. The draws above still happen,
+    // so the world rng runs the same either way.
+    gym.facilities = Math.min(gym.facilities, NEW_PLAYER_GYM_FACILITIES_CAP);
+    gym.monthlyCosts = playerGymMonthlyCosts(gym);
+  }
   save.gyms[id] = gym;
   return gym;
+}
+
+/** The best facilities a gym the player founds can open with. */
+export const NEW_PLAYER_GYM_FACILITIES_CAP = 30;
+
+/**
+ * Monthly overhead for a gym the player founded, from its size: rent and upkeep for the floor
+ * space and the equipment. Roughly $8k to $12k for a fresh room, so membership and a few fighters
+ * can carry it, and a bigger, better equipped room costs more to run.
+ */
+export function playerGymMonthlyCosts(gym: Pick<Gym, 'capacity' | 'facilities'>): number {
+  return Math.round(4000 + gym.capacity * 150 + gym.facilities * 40);
 }
 
 /**
@@ -136,15 +168,33 @@ export function fireStaff(save: SaveGame, gym: Gym, staffId: string): void {
   }
 }
 
+/**
+ * The rng a candidate search draws from.
+ *
+ * Seeded with the staff counter as well as the day, because every hire moves the counter. Seeded
+ * on the day alone, a second search after a hire returned the same four people, including the one
+ * just hired, who could then be hired again as a duplicate under the same name.
+ */
+export function staffCandidateRng(save: SaveGame, role: GymStaff['role']): Rng {
+  return new Rng(`${save.seed}-${role}-${save.date}-${save.counters.staff ?? 0}`);
+}
+
 /** Candidate pool refreshed when the player opens the hiring screen. */
 export function generateStaffCandidates(save: SaveGame, gym: Gym, role: GymStaff['role'], rng: Rng, count = 4): GymStaff[] {
   const out: GymStaff[] = [];
+  // Nobody already on the staff is offered again as a stranger looking for work.
+  const taken = new Set(gym.staffIds.map((id) => save.staff[id]?.name).filter(Boolean));
+  const pool = save.counters.staff ?? 0;
   for (let i = 0; i < count; i++) {
     const bank = rng.weighted(NAME_BANKS, (b) => b.weight);
     const quality = clamp(Math.round(rng.normal(gym.reputation * 0.8 + 22, 15)), 15, 96);
+    let name = `${rng.pick(bank.first)} ${rng.pick(bank.last)}`;
+    for (let tries = 0; tries < 5 && (taken.has(name) || out.some((c) => c.name === name)); tries++) {
+      name = `${rng.pick(bank.first)} ${rng.pick(bank.last)}`;
+    }
     out.push({
-      id: `cand-${gym.id}-${role}-${i}-${save.date}`,
-      name: `${rng.pick(bank.first)} ${rng.pick(bank.last)}`,
+      id: `cand-${gym.id}-${role}-${pool}-${i}-${save.date}`,
+      name,
       role,
       quality,
       develops: STAFF_DEVELOPS[role],
@@ -290,8 +340,11 @@ export function rollFighterAutonomy(save: SaveGame, fighter: Fighter, rng: Rng):
     };
   }
 
-  // A fighter struggling with the cut may decide to move divisions regardless of advice.
-  if (fighter.wear.weightCut > 62 && rng.chance(0.06)) {
+  // A fighter struggling with the cut may decide to move divisions regardless of advice. The roll
+  // comes first so the world rng draws the same either way. Somebody whose move is not the room's
+  // to back does not raise it: a booked fighter, a champion (the belt decides that, on its own
+  // path), a regional fighter who stays at the circuit's weight, and the player's own fighter.
+  if (fighter.wear.weightCut > 62 && rng.chance(0.06) && mayRaiseDivisionChange(save, fighter)) {
     return {
       kind: 'change-division',
       message: `${fighter.name} says the cut is no longer worth it and intends to move up.`,
@@ -299,6 +352,17 @@ export function rollFighterAutonomy(save: SaveGame, fighter: Fighter, rng: Rng):
   }
 
   return { kind: 'none' };
+}
+
+/** Whether a gym fighter can bring a division change to the coach at all. */
+export function mayRaiseDivisionChange(save: SaveGame, fighter: Fighter): boolean {
+  if (fighter.id === save.player.fighterId) return false;
+  if (fighter.circuit) return false;
+  if (hasLiveBooking(save, fighter)) return false;
+  const table = save.rankings[fighter.divisionId];
+  if (fighter.isChampion || fighter.isInterimChampion) return false;
+  if (table?.championId === fighter.id || table?.interimChampionId === fighter.id) return false;
+  return true;
 }
 
 /** Does the fighter accept the coach's recommended camp plan. */
@@ -320,15 +384,38 @@ export function moveFighterToGym(save: SaveGame, fighterId: FighterId, newGymId:
   const fighter = save.fighters[fighterId];
   if (!fighter) return;
   if (fighter.gymId !== newGymId) invalidatePot(save, fighterId, 'gym-change');
-  if (fighter.gymId) {
+  if (fighter.gymId && fighter.gymId !== newGymId) {
     const old = save.gyms[fighter.gymId];
-    if (old) old.fighterIds = old.fighterIds.filter((id) => id !== fighterId);
+    if (old) {
+      old.fighterIds = old.fighterIds.filter((id) => id !== fighterId);
+      // People who no longer share a room are no longer training partners. The bond only ever
+      // rose, so somebody who left years ago still read as a training partner. Only existing
+      // relationships are touched: leaving creates nobody new and writes no history.
+      setTeammateBonds(save, fighterId, old.fighterIds, (bond) => Math.min(bond, FORMER_TEAMMATE_BOND));
+    }
   }
   fighter.gymId = newGymId;
   if (newGymId) {
     const g = save.gyms[newGymId];
     if (g && !g.fighterIds.includes(fighterId)) g.fighterIds.push(fighterId);
+    // Somebody they already know in the new room is a training partner again.
+    if (g) setTeammateBonds(save, fighterId, g.fighterIds, (bond) => Math.max(bond, CURRENT_TEAMMATE_BOND));
     fighter.relationships.coach = 50;
+  }
+}
+
+/** The bond at which two people who used to share a room settle once they no longer do. */
+const FORMER_TEAMMATE_BOND = 40;
+/** The bond two fighters in the same room start from, matching a new teammate relationship. */
+const CURRENT_TEAMMATE_BOND = 60;
+
+function setTeammateBonds(save: SaveGame, fighterId: FighterId, others: FighterId[], next: (bond: number) => number): void {
+  const store = save.relationships;
+  if (!store) return;
+  for (const otherId of others) {
+    if (otherId === fighterId) continue;
+    const r = store[[fighterId, otherId].sort().join('|')];
+    if (r) r.teammateBond = next(r.teammateBond);
   }
 }
 
@@ -422,11 +509,49 @@ export function runGymMonth(save: SaveGame, gym: Gym): { income: number; costs: 
   const income = Math.round(membership + purseShare);
   const costs = Math.round(salaries + overhead);
   gym.balance += income - costs;
-  lines.push(`Membership and programs ${Math.round(membership)}`);
-  if (purseShare > 0) lines.push(`Fighter purse share ${Math.round(purseShare)}`);
-  lines.push(`Staff salaries ${Math.round(salaries)}`);
-  lines.push(`Facility overhead ${overhead}`);
+  lines.push(`Membership and programs ${formatMoney(membership)}`);
+  if (purseShare > 0) lines.push(`Fighter purse share ${formatMoney(purseShare)}`);
+  lines.push(`Staff salaries ${formatMoney(salaries)}`);
+  lines.push(`Facility overhead ${formatMoney(overhead)}`);
   return { income, costs, net: income - costs, lines };
+}
+
+/** The answers to the decision raised when the player's gym ends a month in debt. */
+export const GYM_DEBT_CHOICES = { cover: 'gym-cover-shortfall', carry: 'gym-carry-debt' } as const;
+/** Below this many months of costs in the bank, the monthly statement asks to be read. */
+export const GYM_RUNWAY_WARNING_MONTHS = 2;
+/** Standing lost each month the gym closes its books in debt: suppliers and members talk. */
+export const GYM_DEBT_REPUTATION_LOSS = 1;
+/** The further standing lost when the owner chooses to let the debt ride. */
+const GYM_CARRY_DEBT_REPUTATION_LOSS = 2;
+
+/** The coach's own money: the same figure the money pages show. */
+function ownMoney(save: SaveGame): number {
+  return save.finance?.cash ?? save.player.balance;
+}
+
+/**
+ * Pays the gym's debt out of the coach's own money, as far as it goes. What cannot be covered
+ * stays on the gym's books.
+ */
+export function coverGymShortfall(save: SaveGame, gym: Gym): string {
+  const owed = Math.max(0, -Math.round(gym.balance));
+  if (owed === 0) return `${gym.name} is no longer in debt, so there is nothing to cover.`;
+  const paid = Math.min(owed, Math.max(0, Math.floor(ownMoney(save))));
+  if (paid <= 0) return `${carryGymDebt(gym)} There was nothing in your own account to cover it with.`;
+  gym.balance += paid;
+  // Through the ledger like every other movement of the player's money, so the cash, the debt and
+  // the career totals all agree with what the Money page lists.
+  record(save, save.player.coachStaffId ?? 'coach', 'out', 'gym-investment', paid, `Covered ${gym.name}'s shortfall`);
+  return paid >= owed
+    ? `You put ${formatMoney(paid)} of your own money in, and ${gym.name} is back above zero.`
+    : `You put in all you had, ${formatMoney(paid)}. ${gym.name} still owes ${formatMoney(owed - paid)}.`;
+}
+
+/** Lets the gym carry its debt. Upgrades and hiring stay frozen, since both are paid from the balance. */
+export function carryGymDebt(gym: Gym): string {
+  gym.reputation = clamp(gym.reputation - GYM_CARRY_DEBT_REPUTATION_LOSS, 0, 100);
+  return `${gym.name} carries the debt. Upgrades and hiring are frozen until the balance is back above zero, and the unpaid bills have cost the gym some standing.`;
 }
 
 function addMonthsBack(date: IsoDate): IsoDate {
@@ -435,32 +560,93 @@ function addMonthsBack(date: IsoDate): IsoDate {
   return dt.toISOString().slice(0, 10);
 }
 
+/** The most fighters a gym can be built out to hold. */
+export const GYM_CAPACITY_CAP = 60;
+
+export interface GymUpgrade {
+  key: string;
+  label: string;
+  cost: number;
+  apply: (g: Gym) => void;
+  /**
+   * Whether buying it again would change nothing. The stats clamp at 99, so with no check the
+   * button kept taking the money for an upgrade that did nothing, and the floor space grew forever.
+   */
+  isMaxed: (g: Gym) => boolean;
+}
+
 /** Facility and reputation upgrades available to a player controlled gym. */
-export const GYM_UPGRADES = [
-  { key: 'mats', label: 'Resurface the mats', cost: 18000, apply: (g: Gym) => (g.facilities = clamp(g.facilities + 5, 0, 99)) },
-  { key: 'strength', label: 'Build out the strength room', cost: 45000, apply: (g: Gym) => (g.facilities = clamp(g.facilities + 9, 0, 99)) },
-  { key: 'recovery', label: 'Add a recovery suite', cost: 62000, apply: (g: Gym) => (g.safety = clamp(g.safety + 10, 0, 99)) },
-  { key: 'cage', label: 'Install a full size cage', cost: 38000, apply: (g: Gym) => (g.facilities = clamp(g.facilities + 7, 0, 99)) },
-  { key: 'expand', label: 'Expand the floor space', cost: 90000, apply: (g: Gym) => (g.capacity += 8) },
+export const GYM_UPGRADES: GymUpgrade[] = [
+  { key: 'mats', label: 'Resurface the mats', cost: 18000, apply: (g) => (g.facilities = clamp(g.facilities + 5, 0, 99)), isMaxed: (g) => g.facilities >= 99 },
+  { key: 'strength', label: 'Build out the strength room', cost: 45000, apply: (g) => (g.facilities = clamp(g.facilities + 9, 0, 99)), isMaxed: (g) => g.facilities >= 99 },
+  { key: 'recovery', label: 'Add a recovery suite', cost: 62000, apply: (g) => (g.safety = clamp(g.safety + 10, 0, 99)), isMaxed: (g) => g.safety >= 99 },
+  { key: 'cage', label: 'Install a full size cage', cost: 38000, apply: (g) => (g.facilities = clamp(g.facilities + 7, 0, 99)), isMaxed: (g) => g.facilities >= 99 },
+  {
+    key: 'expand',
+    label: 'Expand the floor space',
+    cost: 90000,
+    apply: (g) => (g.capacity = Math.min(g.capacity + 8, GYM_CAPACITY_CAP)),
+    isMaxed: (g) => g.capacity >= GYM_CAPACITY_CAP,
+  },
   {
     key: 'sparring-policy',
     label: 'Introduce a controlled sparring policy',
     cost: 12000,
-    apply: (g: Gym) => {
+    apply: (g) => {
       g.hardSparringTendency = clamp(g.hardSparringTendency - 15, 0, 100);
       g.safety = clamp(g.safety + 6, 0, 99);
     },
+    isMaxed: (g) => g.safety >= 99 && g.hardSparringTendency <= 0,
   },
   {
     key: 'culture',
     label: 'Invest in team culture',
     cost: 22000,
-    apply: (g: Gym) => (g.culture = clamp(g.culture + 8, 0, 99)),
+    apply: (g) => (g.culture = clamp(g.culture + 8, 0, 99)),
+    isMaxed: (g) => g.culture >= 99,
   },
 ];
 
+/**
+ * Buys an upgrade for the gym. The checks run here, at the moment of purchase, rather than only on
+ * the button, so a stale page can never take money for an upgrade that would do nothing.
+ */
+export function buyGymUpgrade(save: SaveGame, gymId: GymId, key: string): { ok: boolean; message: string } {
+  const gym = save.gyms[gymId];
+  const upgrade = GYM_UPGRADES.find((u) => u.key === key);
+  if (!gym || !upgrade) return { ok: false, message: 'That upgrade is not available.' };
+  if (upgrade.isMaxed(gym)) return { ok: false, message: `${upgrade.label}: there is nothing more to gain.` };
+  if (gym.balance < upgrade.cost) return { ok: false, message: `The gym cannot afford ${formatMoney(upgrade.cost)} right now.` };
+  gym.balance -= upgrade.cost;
+  upgrade.apply(gym);
+  return { ok: true, message: `${upgrade.label} complete.` };
+}
+
+/** How long a fighter who turned down a pitch will not hear another one. */
+export const PITCH_COOLDOWN_DAYS = 60;
+/** How long a refusal is remembered, making a later pitch less likely to land. */
+export const PITCH_MEMORY_DAYS = 365;
+/** What a remembered refusal leaves of the chance once the cooldown is over. */
+const REPEAT_PITCH_FACTOR = 0.6;
+
+/** The date this fighter last turned the gym down, while it still counts. */
+export function pitchRefusedOn(save: SaveGame, gym: Gym, target: Fighter): IsoDate | null {
+  const on = gym.pitchRefusals?.[target.id];
+  if (!on) return null;
+  return daysBetween(on, save.date) < PITCH_MEMORY_DAYS ? on : null;
+}
+
+/** Whether the fighter is still in the cooldown after turning the gym down. */
+export function pitchCoolingDown(save: SaveGame, gym: Gym, target: Fighter): boolean {
+  const on = pitchRefusedOn(save, gym, target);
+  return on !== null && daysBetween(on, save.date) < PITCH_COOLDOWN_DAYS;
+}
+
 /** Recruiting pitch success, used by Coach Mode. */
 export function recruitmentChance(save: SaveGame, gym: Gym, target: Fighter): number {
+  // A fighter who has just said no is not asked again for a while, and a fighter who has said no
+  // before is harder to win over. Without this a pitch could be repeated until it landed.
+  if (pitchCoolingDown(save, gym, target)) return 0;
   const current = target.gymId ? save.gyms[target.gymId] : null;
   let p = 0.12;
   p += clamp((gym.reputation - (current?.reputation ?? 30)) / 90, -0.3, 0.4);
@@ -469,5 +655,36 @@ export function recruitmentChance(save: SaveGame, gym: Gym, target: Fighter): nu
   p -= clamp((gym.revenueSharePct - (current?.revenueSharePct ?? 8)) / 25, -0.15, 0.3);
   if (gym.fighterIds.length >= gym.capacity) p = 0;
   if (target.ranking !== null && target.ranking <= 8 && gym.reputation < 60) p *= 0.35;
+  if (pitchRefusedOn(save, gym, target)) p *= REPEAT_PITCH_FACTOR;
   return clamp(p, 0, 0.85);
+}
+
+/**
+ * Pitches the gym to a fighter. One answer per fighter per day, from a roll seeded on the gym, the
+ * fighter and the date rather than the shared world rng, so tapping again cannot reroll it and a
+ * pitch made from the page does not shift the world's draws.
+ */
+export function pitchFighter(save: SaveGame, gymId: GymId, fighterId: FighterId): { joined: boolean; message: string } {
+  const gym = save.gyms[gymId];
+  const target = save.fighters[fighterId];
+  if (!gym || !target) return { joined: false, message: 'That fighter is no longer available.' };
+  if (target.gymId === gym.id) return { joined: false, message: `${target.name} already trains at ${gym.name}.` };
+  if (gym.fighterIds.length >= gym.capacity) return { joined: false, message: `${gym.name} has no room for another fighter.` };
+  const refused = pitchRefusedOn(save, gym, target);
+  if (refused && pitchCoolingDown(save, gym, target)) {
+    return { joined: false, message: `${target.name} turned you down on ${formatDate(refused)} and is not ready to hear it again.` };
+  }
+  const chance = recruitmentChance(save, gym, target);
+  const rng = new Rng(hashString(`pitch-${save.seed}-${gym.id}-${target.id}-${save.date}`));
+  if (chance > 0 && rng.chance(chance)) {
+    moveFighterToGym(save, target.id, gym.id);
+    target.relationships.player = 55;
+    if (gym.pitchRefusals) delete gym.pitchRefusals[target.id];
+    return { joined: true, message: `${target.name} has joined ${gym.name}.` };
+  }
+  if (!gym.pitchRefusals) gym.pitchRefusals = {};
+  gym.pitchRefusals[target.id] = save.date;
+  // Being chased by a gym they have no interest in costs a little goodwill.
+  target.relationships.player = clamp(target.relationships.player - 3, 0, 100);
+  return { joined: false, message: `${target.name} turned the pitch down.` };
 }

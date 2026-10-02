@@ -2,8 +2,11 @@ import { clamp, Rng } from '../rng';
 import { addDays, daysBetween, type FighterId, type IsoDate } from '../types/common';
 import type { Fighter } from '../types/fighter';
 import type { SaveGame } from '../types/save';
-import { liveInterestBetween, recordMatchupInterest } from './matchup-interest';
+import { liveInterestBetween, recordMatchupInterest, unearnedBlocker } from './matchup-interest';
 import { escalateRivalry } from './hype';
+import { dial } from './identity';
+import { managerFor } from './finance';
+import { fillPronouns, pronouns } from './pronouns';
 
 /**
  * Relationships between fighters.
@@ -35,7 +38,14 @@ export interface Relationship {
   teammateBond: number;
   mentorBond: number;
   startedOn: IsoDate;
+  /** The last thing that actually happened between them. Drift does not count. */
   lastEventOn: IsoDate;
+  /**
+   * When the values last drifted toward neutral. Kept apart from lastEventOn, which decay used to
+   * overwrite: that pushed years old relationships to the top of the most recent first list, and
+   * kept the idle time from ever growing, so the drift never sped up. Optional for older saves.
+   */
+  lastDecayOn?: IsoDate;
   history: { date: IsoDate; note: string; kind: RelationshipEventKind }[];
   /** Fights between them, oldest first. */
   fights: { boutId: string; date: IsoDate; winnerId: FighterId | null }[];
@@ -135,11 +145,13 @@ export function ensureRelationship(save: SaveGame, aId: FighterId, bId: FighterI
  */
 export function relationshipState(r: Relationship | null): RelationshipState {
   if (!r) return 'stranger';
-  if (r.teammateBond > 55) return 'training-partner';
-  if (r.teammateBond > 15 && r.friendship > 35) return 'former-teammate';
+  // Real hostility outranks sharing a room: a teammate who has come to hate you is not a
+  // training partner any more, whatever the bond says.
   const hostility = Math.max(r.publicHostility, r.privateHostility);
   if (hostility > 75 && r.resentment > 60) return 'enemy';
   if (r.rivalry > 70 && r.resentment > 45) return 'bitter-rival';
+  if (r.teammateBond > 55) return 'training-partner';
+  if (r.teammateBond > 15 && r.friendship > 35) return 'former-teammate';
   if (r.rivalry > 45 && hostility > 35) return 'heated-rival';
   if (r.rivalry > 30 && r.respect > 55) return 'respected-opponent';
   if (r.rivalry > 25) return 'professional-rival';
@@ -251,18 +263,25 @@ export function relationshipsFor(save: SaveGame, fighterId: FighterId): { other:
   return out.sort((x, y) => (x.relationship.lastEventOn < y.relationship.lastEventOn ? 1 : -1));
 }
 
+/** How long a relationship sits idle before it drifts, and how often it drifts after that. */
+const DECAY_PERIOD_DAYS = 120;
+
 /** Relationships drift toward neutral when nothing happens for a long time. */
 export function decayRelationships(save: SaveGame): number {
   let touched = 0;
   for (const r of Object.values(store(save))) {
+    // Idle time runs from the last real event, so a relationship left alone longer drifts faster.
+    // The drift itself happens at most once per period, timed from the last drift.
     const idle = daysBetween(r.lastEventOn, save.date);
-    if (idle < 120) continue;
-    const step = Math.min(4, Math.floor(idle / 120));
+    if (idle < DECAY_PERIOD_DAYS) continue;
+    const lastDrift = r.lastDecayOn && r.lastDecayOn > r.lastEventOn ? r.lastDecayOn : r.lastEventOn;
+    if (daysBetween(lastDrift, save.date) < DECAY_PERIOD_DAYS) continue;
+    const step = Math.min(4, Math.floor(idle / DECAY_PERIOD_DAYS));
     r.rivalry = clamp(r.rivalry - step, 0, 100);
     r.publicHostility = clamp(r.publicHostility - step, 0, 100);
     r.privateHostility = clamp(r.privateHostility - step * 0.6, 0, 100);
     r.resentment = clamp(r.resentment - step * 0.5, 0, 100);
-    r.lastEventOn = save.date;
+    r.lastDecayOn = save.date;
     touched++;
   }
   return touched;
@@ -372,10 +391,27 @@ export function assessCallout(save: SaveGame, fromId: FighterId, toId: FighterId
     acceptance -= 0.3;
     warnings.push(`${to.name} is not available: ${blockReason}`);
   }
+  // The promotion holds a callout to the same standard as any other booking. Saying so here keeps
+  // the player from being told that an acceptance puts pressure on the matchmaker when the
+  // matchmaker will refuse the fight whatever the answer.
+  const unearned = unearnedBlocker(save, from, to);
+  if (unearned === 'not-earned') {
+    warnings.push(
+      to.isChampion
+        ? `${to.name} holds the title and you are not yet in line for a title shot. Even an acceptance will not get this fight made.`
+        : `${to.name} is out of reach for now. Even an acceptance will not get this fight made until the step up is earned on results.`
+    );
+  } else if (unearned === 'rematch-not-earned') {
+    warnings.push('Your last meeting was not close enough to run back this soon. Even an acceptance will not get it made yet.');
+  }
 
   const hype = clamp((from.popularity + to.popularity) / 2 + (rel?.rivalry ?? 0) * 0.4, 0, 100);
+  // A manager with the matchmaker's ear gets a callout taken more seriously.
+  const manager = managerFor(save, fromId);
+  const influence = manager ? manager.matchmakingInfluence * 0.12 : 0;
+  if (influence >= 6) reasons.push(`${manager!.name} has the matchmaker's ear.`);
   const promotionInterest = clamp(
-    hype * 0.6 + (to.divisionId === from.divisionId ? 20 : 0) + (toRank < 6 && fromRank < 6 ? 20 : 0) - Math.abs(gap) * 1.5,
+    hype * 0.6 + (to.divisionId === from.divisionId ? 20 : 0) + (toRank < 6 && fromRank < 6 ? 20 : 0) - Math.abs(gap) * 1.5 + influence,
     0,
     100
   );
@@ -401,8 +437,8 @@ export function assessCallout(save: SaveGame, fromId: FighterId, toId: FighterId
 const CALLOUT_TEXT: Record<CalloutTone, string[]> = {
   respectful: ['{to}, you have earned every bit of your position. I want that fight next.', 'Nothing but respect, {to}. Let us find out.'],
   confident: ['{to}. Name the date. I will be there.', 'I have watched enough of {to}. That is a fight I win.'],
-  aggressive: ['{to} has been avoiding this. Sign it or say why not.', 'I want {to} and I want him hurt.'],
-  personal: ['{to} knows exactly what he said. He can say it to my face on fight night.', 'This one is personal with {to}. Everyone knows why.'],
+  aggressive: ['{to} has been avoiding this. Sign it or say why not.', 'I want {to} and I want {him} hurt.'],
+  personal: ['{to} knows exactly what {he} said. {He} can say it to my face on fight night.', 'This one is personal with {to}. Everyone knows why.'],
   promotional: ['{to} against me sells itself. Make the fight.', 'Give the fans {to} and me. Nobody else in this division comes close.'],
 };
 
@@ -428,7 +464,8 @@ export function makeCallout(save: SaveGame, fromId: FighterId, toId: FighterId, 
   const id = `callout-${fromId}-${toId}-${save.date}`;
   if (s[id]) return s[id];
 
-  const text = rng.pick(CALLOUT_TEXT[tone]).replace(/\{to\}/g, to.name);
+  // The pronouns belong to the fighter being called out.
+  const text = fillPronouns(rng.pick(CALLOUT_TEXT[tone]).replace(/\{to\}/g, to.name), pronouns(to));
   const assessment = assessCallout(save, fromId, toId, null);
   const callout: Callout = {
     id,
@@ -461,8 +498,10 @@ export function resolveCallout(save: SaveGame, calloutId: string, rng: Rng): Cal
   if (!from || !to) return callout;
 
   const assessment = assessCallout(save, callout.fromId, callout.toId, null);
-  const ego = to.personality?.ego ?? 0.5;
-  const temper = to.personality?.temper ?? 0.5;
+  // The dials are stored 0 to 100. Read raw against these 0 to 1 thresholds, every fighter was a
+  // hothead with an ego, so a polite answer, a 'not yet' or silence could never come back.
+  const ego = dial(to.personality, 'ego');
+  const temper = dial(to.personality, 'temper');
 
   let response: CalloutResponse;
   if (rng.chance(assessment.acceptanceChance)) {
@@ -507,7 +546,7 @@ export function applyCalloutResponse(
 
   callout.response = response;
   callout.status = 'answered';
-  callout.responseText = callout.responseText ?? responseTextFor(response, toName, fromName);
+  callout.responseText = callout.responseText ?? responseTextFor(response, toName, fromName, to, from);
 
   // The fans have a view, and it is part of whether the promotion makes the fight.
   const fanFavour = clamp(
@@ -577,20 +616,23 @@ export function applyCalloutResponse(
   }
 }
 
-function responseTextFor(response: CalloutResponse, toName: string, fromName: string): string {
+/** The answer's text. Each pronoun belongs to the party it names: the one answering, or the caller. */
+function responseTextFor(response: CalloutResponse, toName: string, fromName: string, to: Fighter, from: Fighter): string {
+  const t = pronouns(to);
+  const f = pronouns(from);
   switch (response) {
     case 'accept':
-      return `${toName} accepts. He says he will sign whatever the promotion sends over.`;
+      return `${toName} accepts. ${t.He} says ${t.he} will sign whatever the promotion sends over.`;
     case 'reject':
-      return `${toName} turns it down flat. He says there is nothing in it for him.`;
+      return `${toName} turns it down flat. ${t.He} says there is nothing in it for ${t.him}.`;
     case 'counter-callout':
-      return `${toName} answers with a callout of his own, and names a bigger fight.`;
+      return `${toName} answers with a callout of ${t.his} own, and names a bigger fight.`;
     case 'insult':
       return `${toName} responds with something that will be on every highlight reel by tonight.`;
     case 'respectful-answer':
-      return `${toName} answers politely. He says he would take it if the promotion made it.`;
+      return `${toName} answers politely. ${t.He} says ${t.he} would take it if the promotion made it.`;
     case 'silence':
-      return `${toName} says nothing at all. ${fromName} is left talking to himself.`;
+      return `${toName} says nothing at all. ${fromName} is left talking to ${f.himself}.`;
     case 'future-promise':
       return `${toName} says the fight makes sense, but not yet.`;
   }

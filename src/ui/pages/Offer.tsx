@@ -5,10 +5,10 @@ import { DIVISION_BY_ID } from '@core/config/divisions';
 import { formatDate, formatMoney, formatNumber } from '@core/types/common';
 import { ovrDisplayed, RATING_LONG_LABEL, RATING_KEYS } from '@core/types/fighter';
 import { estimateRatings, scoutingReport } from '@core/world/scouting';
-import { respondToOffer, type OfferResponse } from '@core/world/offers';
+import { onShortNoticeList, respondToOffer, type OfferResponse, type OfferTone } from '@core/world/offers';
 import { BOOKING_KIND_LABEL, type BookingKind } from '@core/world/matchmaking';
 import { MATCHUP_SOURCE_LABEL, type MatchupSource } from '@core/world/matchup-interest';
-import { canCompete } from '@core/world/health';
+import { activeInjuries, canCompete } from '@core/world/health';
 import { useGame } from '../store';
 import { EstimatedRating, KeyValues, Notice, Panel, Rating, RealTag } from '../components';
 
@@ -32,7 +32,7 @@ export function OfferPage() {
   const showToast = useGame((s) => s.showToast);
   const { offerId } = useParams();
   const navigate = useNavigate();
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; tone: OfferTone } | null>(null);
   const [askAmount, setAskAmount] = useState<number | null>(null);
 
   const offer = offerId ? save.fightOffers[offerId] : null;
@@ -43,20 +43,35 @@ export function OfferPage() {
   const est = estimateRatings(save, opponent);
   const scout = scoutingReport(save, opponent);
   const health = canCompete(fighter, save.date);
+  // A medical decline is free only with something on the medical record behind it.
+  const noInjury = health.ok && activeInjuries(fighter, save.date).length === 0;
+  const tryout = offer.bookingKind === 'tryout';
+  const regional = Boolean(save.events[offer.eventId]?.promotionId) || Boolean(fighter.circuit);
+  const volunteered = onShortNoticeList(fighter, save.date);
+  const lastRequest = offer.requestsUsed >= 2;
   const division = DIVISION_BY_ID[offer.divisionId];
 
   // Answering an offer goes through the operation controller so the buttons disable, the
   // result is visible, and a double click cannot apply the answer twice.
   const respond = async (response: OfferResponse) => {
     if (busy) return;
+    // The third request ends the negotiation, so it is never sent by accident.
+    if (response.kind.startsWith('request') && lastRequest) {
+      if (!window.confirm('A third request ends the negotiation and the matchmaker pulls the offer. Send it anyway?')) return;
+    }
+    let tone: OfferTone = 'info';
     const result = await runOperation('other', 'Answering the offer', (report) => {
       report('updating-world', 'Sending your answer to the matchmaker');
+      // Only an answer to an offer that had already closed changed nothing. This used to be read
+      // from the reply text, which broke whenever a message was reworded.
+      const wasOpen = save.fightOffers[offer.id]?.status === 'open';
       const rng = new Rng(save.rng);
       const r = respondToOffer(save, offer.id, response, rng);
       save.rng = rng.getState();
+      tone = r.tone;
       return {
         ok: true,
-        noOpReason: r.accepted || r.newOffer ? null : r.message.includes('no longer') ? r.message : null,
+        noOpReason: wasOpen ? null : r.message,
         error: null,
         fromDate: save.date,
         toDate: save.date,
@@ -69,9 +84,14 @@ export function OfferPage() {
       };
     });
     const text = result.headlines[0] ?? result.error ?? 'Nothing changed.';
-    setMessage(text);
-    showToast(text, result.navigateTo ? 'good' : 'info');
-    if (result.navigateTo) navigate(result.navigateTo);
+    const shown: OfferTone = result.error ? 'bad' : tone;
+    // The reply is shown next to the buttons that sent it. A toast is only needed when the page is
+    // left behind, and it carries the same tone, so a refusal never shows as a success.
+    setMessage({ text, tone: shown });
+    if (result.navigateTo) {
+      showToast(text, shown);
+      navigate(result.navigateTo);
+    }
   };
 
   const closed = offer.status !== 'open';
@@ -85,7 +105,6 @@ export function OfferPage() {
         </span>
       </div>
 
-      {message && <Notice kind="good">{message}</Notice>}
       {closed && <Notice kind="warn">This offer is {offer.status}.</Notice>}
       {!health.ok && <Notice kind="bad">Currently unable to compete: {health.reason}. Declining for medical reasons carries no penalty.</Notice>}
 
@@ -100,11 +119,11 @@ export function OfferPage() {
               ['Contracted weight', `${offer.contractedWeightLb} lb${offer.isCatchweight ? ' catchweight' : ''}`],
               ['Rounds', offer.scheduledRounds],
               ['Main event', offer.isMainEvent ? 'Yes' : 'No'],
-              ['Title', offer.isInterimTitleFight ? 'Interim championship' : offer.isTitleFight ? 'Championship' : 'No'],
+              ['Title', offer.isInterimTitleFight ? 'Interim championship' : offer.isTitleFight ? 'Championship' : offer.regionalTitle ? 'Regional championship' : 'No'],
               ['Notice', `${offer.noticeDays} days`],
               ['Camp available', `${offer.campWeeksAvailable} weeks`],
               ['Travel', `${formatNumber(offer.travelKm)} km`],
-              ['Reply by', offer.deadline],
+              ['Reply by', formatDate(offer.deadline)],
             ]}
           />
           <p className="small dim mt">
@@ -176,6 +195,7 @@ export function OfferPage() {
         </Panel>
 
         <Panel title="Response">
+          <div aria-live="polite">{message && <Notice kind={message.tone}>{message.text}</Notice>}</div>
           {closed ? (
             <p className="dim">This offer is closed. <Link to="/inbox">Back to the inbox</Link>.</p>
           ) : (
@@ -184,47 +204,74 @@ export function OfferPage() {
                 <button className="primary" disabled={busy} onClick={() => void respond({ kind: 'accept' })}>
                   Accept
                 </button>
-                <button disabled={busy} onClick={() => void respond({ kind: 'request-date' })}>Ask for a different date</button>
-                <button disabled={busy} onClick={() => void respond({ kind: 'request-opponent' })}>Ask for a different opponent</button>
+                <button className={lastRequest ? 'danger' : ''} disabled={busy} onClick={() => void respond({ kind: 'request-date' })}>Ask for a different date</button>
+                <button className={lastRequest ? 'danger' : ''} disabled={busy} onClick={() => void respond({ kind: 'request-opponent' })}>Ask for a different opponent</button>
               </div>
               <div className="row mb">
-                <button disabled={busy || offer.scheduledRounds === 5} onClick={() => void respond({ kind: 'request-five-rounds' })}>
+                <button
+                  className={lastRequest ? 'danger' : ''}
+                  disabled={busy || offer.scheduledRounds === 5 || tryout}
+                  title={tryout ? 'Tryouts are three rounds.' : undefined}
+                  onClick={() => void respond({ kind: 'request-five-rounds' })}
+                >
                   Ask for five rounds
                 </button>
-                <button disabled={busy || offer.isTitleFight || offer.isInterimTitleFight} onClick={() => void respond({ kind: 'request-title-fight' })}>
+                <button
+                  className={lastRequest ? 'danger' : ''}
+                  disabled={busy || offer.isTitleFight || offer.isInterimTitleFight || offer.bookingKind === 'regional' || tryout || regional}
+                  title={regional ? 'Regional belts go to the top of the regional rankings.' : undefined}
+                  onClick={() => void respond({ kind: 'request-title-fight' })}
+                >
                   Make the case for a title shot
                 </button>
-                <button disabled={busy} onClick={() => void respond({ kind: 'request-more-time', weeks: 4 })}>Ask for four more weeks</button>
-                <button disabled={busy} onClick={() => void respond({ kind: 'request-catchweight', weightLb: offer.contractedWeightLb + 4 })}>
+                <button className={lastRequest ? 'danger' : ''} disabled={busy} onClick={() => void respond({ kind: 'request-more-time', weeks: 4 })}>Ask for four more weeks</button>
+                <button
+                  className={lastRequest ? 'danger' : ''}
+                  disabled={busy || offer.isTitleFight || offer.isInterimTitleFight || offer.isCatchweight}
+                  onClick={() => void respond({ kind: 'request-catchweight', weightLb: offer.contractedWeightLb + 4 })}
+                >
                   Ask for a catchweight
                 </button>
-                <button disabled={busy} onClick={() => void respond({ kind: 'volunteer-replacement' })}>Volunteer for short notice work</button>
+                <button disabled={busy || volunteered} onClick={() => void respond({ kind: 'volunteer-replacement' })}>
+                  {volunteered ? 'On the short notice list' : 'Volunteer for short notice work'}
+                </button>
               </div>
               <div className="row mb">
                 <input
                   type="number"
                   placeholder="Ask for show pay"
                   value={askAmount ?? ''}
+                  disabled={offer.moneyGranted}
                   onChange={(e) => setAskAmount(e.target.value === '' ? null : Number(e.target.value))}
                   style={{ width: 130 }}
                 />
-                <button disabled={busy || askAmount === null} onClick={() => askAmount !== null && void respond({ kind: 'request-money', amount: askAmount })}>
-                  Ask for more money
+                <button
+                  className={lastRequest ? 'danger' : ''}
+                  disabled={busy || askAmount === null || offer.moneyGranted}
+                  onClick={() => askAmount !== null && void respond({ kind: 'request-money', amount: askAmount })}
+                >
+                  {offer.moneyGranted ? 'Purse already raised' : 'Ask for more money'}
                 </button>
               </div>
-              <p className="small dim">
-                Requests are limited. After two the matchmaker pulls the offer.{' '}
-                {offer.requestsUsed > 0 ? `${offer.requestsUsed} used.` : ''}
+              <p className={`small ${lastRequest ? 'warn' : 'dim'}`}>
+                {offer.requestsUsed} of 2 requests used. A third request ends the negotiation. Volunteering for short notice
+                work does not use a request.
               </p>
 
               <h3 className="mt">Decline</h3>
               <p className="small dim">
-                The consequence depends on the reason. Declining while injured costs nothing. Repeated refusals without a
+                The consequence depends on the reason. Declining while injured costs nothing, and the medical team
+                checks: a medical decline needs an injury on record. Repeated refusals without a
                 reason damage the relationship and eventually put the contract at risk. You have declined{' '}
                 {fighter.declinedOffers} offer{fighter.declinedOffers === 1 ? '' : 's'} so far.
               </p>
               <div className="row">
-                <button className="danger" disabled={busy} onClick={() => void respond({ kind: 'decline', reason: 'injury' })}>
+                <button
+                  className="danger"
+                  disabled={busy || noInjury}
+                  title={noInjury ? 'No injury on record' : undefined}
+                  onClick={() => void respond({ kind: 'decline', reason: 'injury' })}
+                >
                   Decline: not healthy
                 </button>
                 <button className="danger" disabled={busy} onClick={() => void respond({ kind: 'decline', reason: 'short-notice' })}>

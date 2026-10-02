@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { formatDate } from '@core/types/common';
@@ -26,6 +26,16 @@ export function InboxPage() {
   const busy = useGame((s) => s.busy);
 
   const selected = messageId ? save.inbox.find((m) => m.id === messageId) ?? null : null;
+
+  // Opening a message marks it read however it was opened: a tap in the list, the Dashboard's link,
+  // the dock, or the jump to the next decision after answering one. Only the list tap used to. The
+  // status guard keeps this from writing the save on every render, and matches markRead, which leaves
+  // a message that still needs a decision unread (writing anyway would loop).
+  const selectedId = selected?.id;
+  const markable = Boolean(selected && selected.status === 'unread' && !selected.requiresAction);
+  useEffect(() => {
+    if (selectedId && markable) mutate((s) => markRead(s, selectedId));
+  }, [selectedId, markable, mutate]);
 
   const list = save.inbox.filter((m) => {
     if (filter === 'action') return messageNeedsAction(save, m);
@@ -87,6 +97,9 @@ export function InboxPage() {
     navigate(remaining.length > 0 ? `/inbox/${remaining[0].id}` : '/inbox');
   };
 
+  // A reply-by date means nothing once the message is settled.
+  const showDeadline = (m: InboxMessage) => Boolean(m.deadline) && m.status !== 'resolved' && m.status !== 'expired';
+
   return (
     <div className="page">
       <div className="page-head">
@@ -106,7 +119,9 @@ export function InboxPage() {
         onChange={(k) => setFilter(k as typeof filter)}
       />
 
-      <div className="grid c2">
+      {/* On a phone the two panels stack, and an opened message landed below the list, under the
+          docked bar, so a tap seemed to do nothing. There the grid shows one side at a time. */}
+      <div className={`grid c2 inbox-grid${selected ? ' has-selection' : ''}`}>
         <Panel title={`Messages (${list.length})`} flush>
           <div className="scroll-y">
             {list.length === 0 && <p className="dim small" style={{ padding: 9 }}>Nothing here.</p>}
@@ -114,14 +129,13 @@ export function InboxPage() {
               <Link
                 key={m.id}
                 to={`/inbox/${m.id}`}
-                className={`inbox-item${m.status === 'unread' ? ' unread' : ''}${m.status === 'resolved' || m.status === 'expired' ? ' resolved' : ''}`}
-                onClick={() => mutate((s) => markRead(s, m.id))}
+                className={`inbox-item${m.status === 'unread' ? ' unread' : ''}${m.status === 'resolved' || m.status === 'expired' ? ' resolved' : ''}${m.id === selected?.id ? ' active' : ''}`}
               >
                 <div className="subject">{m.subject}</div>
                 <div className="meta">
                   <span>{SENDER_LABEL[m.sender]}</span>
                   <span>{formatDate(m.date)}</span>
-                  {m.deadline && <span className="warn">reply by {m.deadline}</span>}
+                  {showDeadline(m) && <span className="warn">reply by {formatDate(m.deadline!)}</span>}
                   {m.requiresAction && m.status !== 'resolved' && m.status !== 'expired' && <span className="tag warn">action</span>}
                 </div>
               </Link>
@@ -131,12 +145,15 @@ export function InboxPage() {
 
         <Panel title={selected ? selected.subject : 'Select a message'}>
           {!selected ? (
-            <p className="dim small">Choose a message on the left.</p>
+            <p className="dim small">Choose a message.</p>
           ) : (
             <>
+              <button className="m-only inbox-back" onClick={() => navigate('/inbox')}>
+                Back to inbox
+              </button>
               <p className="small dim">
                 {SENDER_LABEL[selected.sender]} · {selected.senderName} · {formatDate(selected.date)}
-                {selected.deadline ? ` · reply by ${selected.deadline}` : ''}
+                {showDeadline(selected) ? ` · reply by ${formatDate(selected.deadline!)}` : ''}
               </p>
               <p style={{ whiteSpace: 'pre-wrap' }}>{selected.body}</p>
 

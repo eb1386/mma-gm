@@ -157,10 +157,30 @@ export interface GrantResult {
 }
 
 /**
- * Grants number one contender status, replacing any previous holder.
+ * Whether a standing claim still holds against a newer one.
  *
- * A newer earned claim supersedes an older one, because the alternative is a queue that never
- * clears. The displaced record is returned so the caller can report it.
+ * A holder who can fight, or who is hurt but still inside the grace period, keeps the position.
+ * Without this any eliminator elsewhere in the top five took the shot away from a fighter who
+ * had already earned it and was only waiting on the champion, so the contender spot changed
+ * hands every few weeks and the fighter who earned it first often never got the fight.
+ */
+function claimStillHolds(save: SaveGame, record: ContenderStatus): boolean {
+  const holder = save.fighters[record.fighterId];
+  if (!holder) return false;
+  if (canCompete(holder, save.date).ok) return true;
+  // Read without updating the record, so asking the question changes nothing.
+  const since = record.unavailableSince ?? save.date;
+  return daysBetween(since, save.date) <= CONTENDER_INJURY_GRACE_DAYS;
+}
+
+/**
+ * Grants number one contender status.
+ *
+ * A newer claim supersedes an older one only when the older holder can no longer use it: they
+ * cannot fight and the injury grace period has run out. A holder who is ready keeps the spot and
+ * the grant is refused with a stated reason, because the alternative made the position a prize
+ * anybody in the top five could take without fighting the fighter who held it. The displaced
+ * record is returned so the caller can report it.
  */
 export function grantContenderStatus(
   save: SaveGame,
@@ -185,6 +205,15 @@ export function grantContenderStatus(
     previous.source = source;
     previous.earnedOn = save.date;
     return { granted: true, record: previous, displaced: null, message: `${fighter.name} remains the number one contender.` };
+  }
+  if (previous && claimStillHolds(save, previous)) {
+    const holder = save.fighters[previous.fighterId];
+    return {
+      granted: false,
+      record: null,
+      displaced: null,
+      message: `${holder?.name ?? 'The number one contender'} stays next in line for the ${DIVISION_BY_ID[divisionId].name} title, so ${fighter.name} has to wait behind them.`,
+    };
   }
   if (previous) {
     previous.forfeitedOn = save.date;

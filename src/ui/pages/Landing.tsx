@@ -1,14 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatDate } from '@core/types/common';
-import { deleteSave, listSaves, loadGame, saveGame } from '@core/save/store';
-import type { SaveIndexEntry } from '@core/types/save';
-import { migrateSave } from '@core/save/migrate';
-import { CAREER_STATE_LABEL, careerStatus, type CareerState } from '@core/world/career';
-import type { SaveGame } from '@core/types/save';
+import { listSaves, loadGame, renameSave, saveGame, updateIndexEntry } from '@core/save/store';
+import type { SaveGame, SaveIndexEntry } from '@core/types/save';
+import { summarizeCareer, type CareerSummary } from '@core/save/summary';
+import { CAREER_STATE_LABEL, careerStatus } from '@core/world/career';
 import { Notice, OctagonMark, Panel } from '../components';
 import { GAME_NAME } from '@core/config/branding';
-import { discardPendingSave, useGame } from '../store';
+import { deleteCareer, useGame } from '../store';
+import { StorageNotice } from '../StorageNotice';
+
+/** How each mode reads on a card. The raw ids ('fighter', 'coach') were shown as they were. */
+export const MODE_LABEL: Record<SaveIndexEntry['mode'], string> = {
+  fighter: 'Fighter',
+  coach: 'Coach',
+  spectator: 'Spectator',
+};
 
 /**
  * The landing screen.
@@ -21,6 +28,8 @@ export function LandingPage() {
   const navigate = useNavigate();
   const setSave = useGame((s) => s.setSave);
   const activeSave = useGame((s) => s.save);
+  const mutate = useGame((s) => s.mutate);
+  const persist = useGame((s) => s.persist);
   const showToast = useGame((s) => s.showToast);
   const [entries, setEntries] = useState<SaveIndexEntry[]>([]);
   const [summaries, setSummaries] = useState<Record<string, CareerSummary>>({});
@@ -29,46 +38,65 @@ export function LandingPage() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const renameInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     void refresh();
   }, []);
 
+  // The field opens where the browser decides to scroll it, which on a phone was under the fixed
+  // header. It is brought to the middle of the screen instead.
+  useEffect(() => {
+    if (!renaming) return;
+    const input = renameInput.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+    input.scrollIntoView?.({ block: 'center' });
+  }, [renaming]);
+
+  /**
+   * The cards draw from the save index alone. Each entry carries its own summary, written with the
+   * save, so no full save is read here. An entry an older build wrote has none: that save is read
+   * once and its entry filled in, so the next visit needs nothing.
+   */
   const refresh = async () => {
     try {
       const list = await listSaves();
       setEntries(list);
-      // Read each save once so the card can show the real career state.
       const next: Record<string, CareerSummary> = {};
+      for (const entry of list) if (entry.summary) next[entry.saveId] = entry.summary;
+      setSummaries(next);
       for (const entry of list) {
+        if (entry.summary || entry.saveId === useGame.getState().save?.saveId) continue;
         try {
-          const raw = await loadGame(entry.saveId);
-          if (!raw) continue;
-          const save = migrateSave(raw);
-          next[entry.saveId] = summarize(save);
+          const save = await loadGame(entry.saveId);
+          if (!save) continue;
+          const filled = await updateIndexEntry(save);
+          if (filled.summary) setSummaries((prev) => ({ ...prev, [entry.saveId]: filled.summary! }));
         } catch {
           // A save that will not open is still listed, just without detail.
         }
       }
-      setSummaries(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const resume = async (saveId: string) => {
-    setBusyId(saveId);
     setError(null);
+    // The career already loaded is the newest copy there is. Reading it back from storage threw
+    // away whatever was still waiting for its write, and the last advance's recap with it.
+    if (activeSave?.saveId === saveId) {
+      navigate(destinationFor(activeSave));
+      return;
+    }
+    setBusyId(saveId);
     try {
-      const raw = await loadGame(saveId);
-      if (!raw) throw new Error('That career could not be read.');
-      const save = migrateSave(raw);
+      const save = await loadGame(saveId);
+      if (!save) throw new Error('That career could not be read.');
       setSave(save);
-      // Land on whatever needs the player, or the dashboard when nothing does.
-      const status = careerStatus(save);
-      const destination =
-        status.action && status.advanceBlocked && status.action.kind === 'navigate' ? status.action.route : '/dashboard';
-      navigate(destination);
+      navigate(destinationFor(save));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -78,10 +106,12 @@ export function LandingPage() {
 
   const duplicate = async (saveId: string) => {
     setBusyId(saveId);
+    setError(null);
     try {
-      const raw = await loadGame(saveId);
-      if (!raw) throw new Error('That career could not be read.');
-      const copy = migrateSave(JSON.parse(JSON.stringify(raw)) as SaveGame);
+      // The loaded career is copied from memory, which is newer than its stored copy.
+      const source = activeSave?.saveId === saveId ? activeSave : await loadGame(saveId);
+      if (!source) throw new Error('That career could not be read.');
+      const copy = structuredClone(source);
       copy.saveId = `save-copy-${Date.now().toString(36)}`;
       copy.saveName = `${copy.saveName} (copy)`;
       await saveGame(copy);
@@ -95,15 +125,21 @@ export function LandingPage() {
   };
 
   const rename = async (saveId: string) => {
-    if (!renameValue.trim()) return;
+    const name = renameValue.trim();
+    if (!name) return;
     setBusyId(saveId);
+    setError(null);
     try {
-      const raw = await loadGame(saveId);
-      if (!raw) throw new Error('That career could not be read.');
-      const save = migrateSave(raw);
-      save.saveName = renameValue.trim();
-      await saveGame(save);
-      if (activeSave?.saveId === saveId) setSave(save);
+      if (activeSave?.saveId === saveId) {
+        // Renamed in memory and written from there. Loading the stored copy and swapping it in
+        // flushed the old name over the new one and dropped any change still waiting to be written.
+        mutate((s) => {
+          s.saveName = name;
+        });
+        await persist();
+      } else {
+        await renameSave(saveId, name);
+      }
       setRenaming(null);
       showToast('Career renamed.', 'good');
       await refresh();
@@ -116,12 +152,9 @@ export function LandingPage() {
 
   const remove = async (saveId: string) => {
     setBusyId(saveId);
+    setError(null);
     try {
-      // Dropped before the record goes, because clearing the loaded save flushes any queued write
-      // and that write would put the deleted career straight back.
-      discardPendingSave(saveId);
-      await deleteSave(saveId);
-      if (activeSave?.saveId === saveId) setSave(null);
+      await deleteCareer(saveId);
       setConfirmDelete(null);
       showToast('Career deleted.', 'info');
       await refresh();
@@ -145,6 +178,7 @@ export function LandingPage() {
       </div>
 
       {error && <Notice kind="bad">{error}</Notice>}
+      <StorageNotice />
 
       <div className="row landing-actions">
         {mostRecent && (
@@ -166,14 +200,23 @@ export function LandingPage() {
         ) : (
           <div className="save-grid">
             {entries.map((entry) => {
-              const summary = summaries[entry.saveId];
+              const isActive = activeSave?.saveId === entry.saveId;
+              // The loaded career is described from memory, so its card is never behind the game.
+              const summary = isActive && activeSave ? summarizeCareer(activeSave) : summaries[entry.saveId];
+              const name = isActive && activeSave ? activeSave.saveName : entry.saveName;
+              const isRenaming = renaming === entry.saveId;
+              const fighterCareer = entry.mode === 'fighter';
               return (
-                <div key={entry.saveId} className={`save-card${activeSave?.saveId === entry.saveId ? ' active' : ''}`}>
+                <div key={entry.saveId} className={`save-card${isActive ? ' active' : ''}`}>
                   <div className="save-card-head">
-                    {renaming === entry.saveId ? (
+                    {isRenaming ? (
                       <input
-                        autoFocus
+                        ref={renameInput}
+                        className="save-card-rename"
+                        aria-label="Career name"
                         value={renameValue}
+                        maxLength={60}
+                        enterKeyHint="done"
                         onChange={(e) => setRenameValue(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') void rename(entry.saveId);
@@ -181,19 +224,19 @@ export function LandingPage() {
                         }}
                       />
                     ) : (
-                      <strong>{entry.saveName}</strong>
+                      <strong>{name}</strong>
                     )}
-                    <span className="tag">{entry.mode}</span>
+                    <span className="tag">{MODE_LABEL[entry.mode] ?? entry.mode}</span>
                   </div>
                   <table className="save-card-table">
                     <tbody>
                       <tr>
-                        <td>Fighter or gym</td>
+                        <td>{fighterCareer ? 'Fighter' : entry.mode === 'coach' ? 'Gym' : 'Playing as'}</td>
                         <td>{entry.fighterName ?? entry.gymName ?? 'Spectator'}</td>
                       </tr>
                       <tr>
                         <td>In game date</td>
-                        <td>{formatDate(entry.date)}</td>
+                        <td>{formatDate(isActive && activeSave ? activeSave.date : entry.date)}</td>
                       </tr>
                       <tr>
                         <td>Last played</td>
@@ -216,57 +259,79 @@ export function LandingPage() {
                             <td>Next action</td>
                             <td>{summary.nextAction ?? 'Nothing outstanding'}</td>
                           </tr>
-                          <tr>
-                            <td>Booked opponent</td>
-                            <td>{summary.opponent ?? 'Nobody'}</td>
-                          </tr>
-                          <tr>
-                            <td>Fight date</td>
-                            <td>{summary.fightDate ? formatDate(summary.fightDate) : 'None'}</td>
-                          </tr>
-                          <tr>
-                            <td>Injury</td>
-                            <td>{summary.injury ?? 'None'}</td>
-                          </tr>
-                          <tr>
-                            <td>Suspension</td>
-                            <td>{summary.suspension ?? 'None'}</td>
-                          </tr>
-                          <tr>
-                            <td>Division</td>
-                            <td>{summary.division ?? 'Not applicable'}</td>
-                          </tr>
+                          {/* A coach or spectator career has no booked fight, injury or division of
+                              its own, so these rows only said 'Nobody' and 'Not applicable'. */}
+                          {fighterCareer && (
+                            <>
+                              <tr>
+                                <td>Booked opponent</td>
+                                <td>{summary.opponent ?? 'Nobody'}</td>
+                              </tr>
+                              <tr>
+                                <td>Fight date</td>
+                                <td>{summary.fightDate ? formatDate(summary.fightDate) : 'None'}</td>
+                              </tr>
+                              <tr>
+                                <td>Injury</td>
+                                <td>{summary.injury ?? 'None'}</td>
+                              </tr>
+                              <tr>
+                                <td>Suspension</td>
+                                <td>{summary.suspensionUntil ? `Until ${formatDate(summary.suspensionUntil)}` : 'None'}</td>
+                              </tr>
+                              <tr>
+                                <td>Division</td>
+                                <td>{summary.division ?? 'Not recorded'}</td>
+                              </tr>
+                            </>
+                          )}
                         </>
                       )}
                     </tbody>
                   </table>
                   <div className="row tight save-card-actions">
-                    <button className="primary" disabled={busyId !== null} onClick={() => void resume(entry.saveId)}>
-                      Resume
-                    </button>
-                    <button
-                      disabled={busyId !== null}
-                      onClick={() => {
-                        setRenaming(entry.saveId);
-                        setRenameValue(entry.saveName);
-                      }}
-                    >
-                      Rename
-                    </button>
-                    <button disabled={busyId !== null} onClick={() => void duplicate(entry.saveId)}>
-                      Duplicate
-                    </button>
-                    {confirmDelete === entry.saveId ? (
+                    {isRenaming ? (
+                      // Explicit buttons, because a phone has no Escape key and the field gave no
+                      // other way out. Leaving the field does not commit: tapping Cancel leaves it.
                       <>
-                        <button className="danger" disabled={busyId !== null} onClick={() => void remove(entry.saveId)}>
-                          Delete permanently
+                        <button className="primary" disabled={busyId !== null || !renameValue.trim()} onClick={() => void rename(entry.saveId)}>
+                          Save
                         </button>
-                        <button onClick={() => setConfirmDelete(null)}>Keep it</button>
+                        <button disabled={busyId !== null} onClick={() => setRenaming(null)}>
+                          Cancel
+                        </button>
                       </>
                     ) : (
-                      <button className="danger" disabled={busyId !== null} onClick={() => setConfirmDelete(entry.saveId)}>
-                        Delete
-                      </button>
+                      <>
+                        <button className="primary" disabled={busyId !== null} onClick={() => void resume(entry.saveId)}>
+                          Resume
+                        </button>
+                        <button
+                          disabled={busyId !== null}
+                          onClick={() => {
+                            setConfirmDelete(null);
+                            setRenaming(entry.saveId);
+                            setRenameValue(name);
+                          }}
+                        >
+                          Rename
+                        </button>
+                        <button disabled={busyId !== null} onClick={() => void duplicate(entry.saveId)}>
+                          Duplicate
+                        </button>
+                        {confirmDelete === entry.saveId ? (
+                          <>
+                            <button className="danger" disabled={busyId !== null} onClick={() => void remove(entry.saveId)}>
+                              Delete permanently
+                            </button>
+                            <button onClick={() => setConfirmDelete(null)}>Keep it</button>
+                          </>
+                        ) : (
+                          <button className="danger" disabled={busyId !== null} onClick={() => setConfirmDelete(entry.saveId)}>
+                            Delete
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -279,36 +344,8 @@ export function LandingPage() {
   );
 }
 
-interface CareerSummary {
-  state: CareerState;
-  /** How long the career has been in this state. Only the save knows this; it cannot be recomputed. */
-  stateSince: string | null;
-  reason: string | null;
-  nextAction: string | null;
-  opponent: string | null;
-  fightDate: string | null;
-  injury: string | null;
-  suspension: string | null;
-  division: string | null;
-}
-
-function summarize(save: SaveGame): CareerSummary {
+/** Where resuming a career lands: whatever needs the player, or the dashboard when nothing does. */
+function destinationFor(save: SaveGame): string {
   const status = careerStatus(save);
-  const me = save.player.fighterId ? save.fighters[save.player.fighterId] : null;
-  const suspension =
-    me?.antiDopingSuspension?.until ?? me?.medicalSuspension?.until ?? me?.commissionSuspension?.until ?? null;
-  // The live status is authoritative for what to do next. The persisted record is what carries
-  // how long this has been the case, which nothing can work out after the fact.
-  const persisted = save.careerState?.state === status.state ? save.careerState : null;
-  return {
-    state: status.state,
-    stateSince: persisted?.since ?? null,
-    reason: persisted?.reason ?? status.reason,
-    nextAction: status.action?.label ?? null,
-    opponent: status.opponentName,
-    fightDate: status.eventDate,
-    injury: status.injurySummary,
-    suspension: suspension ? `Until ${suspension}` : null,
-    division: me?.divisionId ?? null,
-  };
+  return status.action && status.advanceBlocked && status.action.kind === 'navigate' ? status.action.route : '/dashboard';
 }

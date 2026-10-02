@@ -27,6 +27,8 @@ import type { DivisionSpell } from '../world/weightclass';
 import type { Official } from '../world/officials';
 import type { ContenderStatus } from '../world/contender';
 import type { WeightClassPlan } from '../world/weightclass';
+import type { RegionalState } from '../world/regional';
+import type { CareerSummary } from '../save/summary';
 import type {
   Contract,
   ContractOffer,
@@ -44,7 +46,7 @@ import type {
   TrainingCamp,
 } from './world';
 
-export const SAVE_SCHEMA_VERSION = 21;
+export const SAVE_SCHEMA_VERSION = 22;
 
 export interface SaveSettings {
   difficulty: Difficulty;
@@ -116,7 +118,8 @@ export const DEFAULT_SETTINGS: SaveSettings = {
   potPaths: 160,
   potPercentile: 0.72,
   injuriesEnabled: true,
-  eventsPerMonth: 3.83,
+  // Forty eight cards a year, matching CALENDAR_TARGETS.
+  eventsPerMonth: 4,
   fillRosterWithGenerated: true,
   retirementEnabled: true,
   featureFlags: { ...DEFAULT_FEATURE_FLAGS },
@@ -151,7 +154,17 @@ export interface PlayerState {
   coachName: string | null;
   /** Career achievement tracking, no single victory condition. */
   achievements: { key: string; label: string; date: IsoDate }[];
+  /**
+   * The player fighter's place in their division when the career began: 0 for a champion, the
+   * rank for a ranked fighter, null for an unranked one. The ranking milestones are measured
+   * against it, so picking a ranked fighter does not hand out "Broke into the rankings" in week
+   * one. Optional, because saves written before this have no record of it, and those saves keep
+   * whatever they have already been awarded.
+   */
+  startRanking?: number | null;
   balance: number;
+  /** When the player last asked around for a manager. Optional, so older saves need no step. */
+  lastManagerSearch?: IsoDate;
 }
 
 export interface WorldHistory {
@@ -265,6 +278,12 @@ export interface SaveGame {
     byBout: Record<string, { camp?: GamePlanKey[]; preFight?: GamePlanKey[]; inFight?: GamePlanKey[]; updatedOn: IsoDate; opponentId?: string }>;
   };
 
+  /**
+   * The regional circuit, present only for a career that started on it. Every reader treats an
+   * absent block as a world with no regional circuit, so older saves are untouched.
+   */
+  regional?: RegionalState;
+
   /** Monotonic counters so generated ids never collide across a long save. */
   counters: Record<string, number>;
 
@@ -282,4 +301,9 @@ export interface SaveIndexEntry {
   gymName: string | null;
   snapshotId: string;
   schemaVersion: number;
+  /**
+   * What the landing screen's card shows, written with every save so the card never has to read
+   * the full save. Optional: entries written by older builds have none until they are next saved.
+   */
+  summary?: CareerSummary;
 }

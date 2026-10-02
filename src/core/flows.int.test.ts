@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { signContractOffer } from './world/economy';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Rng } from './rng';
@@ -10,11 +11,11 @@ import { createNewGame } from './world/newgame';
 import { advance, resolveBout, simulatePlayerBout } from './world/tick';
 import { respondToOffer } from './world/offers';
 import { CAMP_PRESETS, createCamp } from './world/camp';
-import { actionableMessages, messageNeedsAction } from './world/inbox';
+import { actionableMessages, messageNeedsAction, resolveMessagesForOffer } from './world/inbox';
 import { migrateSave } from './save/migrate';
 import { moveFighterToGym, recruitmentChance } from './world/gyms';
 import { canCompete, manageWalkingWeight } from './world/health';
-import { shouldCreateInterimTitle } from './world/matchmaking';
+import { interimTitleJustification } from './world/title-eligibility';
 import { updatePot } from './world/pot';
 import { CALENDAR_TARGETS, rollingYearCounts } from './world/matchmaking';
 
@@ -99,6 +100,16 @@ function runCareer(
       });
       save.camps[camp.id] = camp;
       campsCreated++;
+    }
+
+    // Sign any contract offer, as a player would. Marking the message answered without signing left
+    // the fighter a free agent for the rest of the run, so whether this test passed came down to how
+    // many fights the seeded starting deal happened to have left.
+    for (const offer of Object.values(save.contractOffers)) {
+      if (offer.fighterId !== playerId || offer.status !== 'open') continue;
+      signContractOffer(save, me, offer, null);
+      offer.status = 'accepted';
+      resolveMessagesForOffer(save, offer.id, 'Signed by the integration harness.');
     }
 
     // Answer anything else so the calendar is not blocked by an unrelated decision.
@@ -284,7 +295,7 @@ describe('title and ranking integrity', () => {
 
     // Force the champion into a state where the weight model must move them up.
     champ.weightMisses = 5;
-    const move = manageWalkingWeight(champ, save.date);
+    const move = manageWalkingWeight(champ, save.date, true);
     expect(move.movedUp).toBeTruthy();
 
     // The weekly pass performs the bookkeeping.
@@ -377,7 +388,7 @@ describe('title and ranking integrity', () => {
       note: 'test fixture for the interim title path',
     });
     expect(canCompete(champ, save.date).ok).toBe(false);
-    expect(shouldCreateInterimTitle(save, division.id)).toBe(true);
+    expect(interimTitleJustification(save, division.id).justified).toBe(true);
 
     // Numbered cards carry title bouts and land roughly monthly, so a season of weeks is
     // enough for the booking pass to reach one.
