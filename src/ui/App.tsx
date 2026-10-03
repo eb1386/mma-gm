@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { WelcomeSheet } from './Guide';
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom';
 import { DIVISIONS } from '@core/config/divisions';
 import { formatDate } from '@core/types/common';
@@ -506,6 +507,7 @@ function Shell() {
           </p>
         </footer>
       </div>
+      <WelcomeSheet />
       <ActionDock />
       <MobileTabBar onMore={openNav} navOpen={navOpen} />
       <Notifications />

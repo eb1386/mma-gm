@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { PageTip } from '../Guide';
 import { Link } from 'react-router-dom';
 import { GAME_PLAN_LABEL } from '@core/sim/plan';
 import { formatDate, formatMoney } from '@core/types/common';
@@ -216,6 +217,9 @@ export function CampPage() {
           )}
         </span>
       </div>
+      <PageTip id="camp" title="Planning a camp">
+        The sliders split the camp between six areas, and intensity trades sharpness against injury risk. Pick a game plan that suits both you and this opponent: a coherent plan prepares you better than a pile of them.
+      </PageTip>
 
       {injuries.length > 0 && (
         <Notice kind="warn">

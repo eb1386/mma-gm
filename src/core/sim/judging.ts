@@ -58,6 +58,12 @@ export interface RoundScoreInput {
   aggressionB: number;
   cageControlA: number;
   cageControlB: number;
+  /**
+   * Seconds of ground control weighted by how dominant the position was, so a minute in mount
+   * counts for more than a minute in someone's guard. Optional, scored as zero when absent.
+   */
+  positionA?: number;
+  positionB?: number;
 }
 
 /**
@@ -74,6 +80,10 @@ export function trueRoundScore(input: RoundScoreInput): number {
   primary += (a.takedownsLanded - b.takedownsLanded) * C.judging.takedownWeight;
   primary += (a.submissionAttempts - b.submissionAttempts) * C.judging.submissionAttemptWeight;
   primary += (a.controlSeconds - b.controlSeconds) * C.judging.controlWeight;
+  // The rules reward advantageous positions, not only time on top. Without this a fighter who
+  // passed to mount and took the back scored the same as one stalled in guard, so out grappling
+  // an opponent on the mat earned nothing the takedown had not already earned.
+  primary += ((input.positionA ?? 0) - (input.positionB ?? 0)) * C.judging.positionWeight;
 
   if (Math.abs(primary) < C.judging.evenMargin) {
     primary += (input.aggressionA - input.aggressionB) * C.judging.aggressionWeight;
@@ -150,7 +160,8 @@ export function scoreRoundForJudge(
 ): { a: number; b: number } {
   const grapplingComponent =
     (input.statsA.takedownsLanded - input.statsB.takedownsLanded) * C.judging.takedownWeight +
-    (input.statsA.controlSeconds - input.statsB.controlSeconds) * C.judging.controlWeight;
+    (input.statsA.controlSeconds - input.statsB.controlSeconds) * C.judging.controlWeight +
+    ((input.positionA ?? 0) - (input.positionB ?? 0)) * C.judging.positionWeight;
   const damageComponent = (input.damageA - input.damageB) * C.judging.damageWeight * 0.1;
 
   // Perception noise grows with how much happened in the round. A busy round gives a judge more

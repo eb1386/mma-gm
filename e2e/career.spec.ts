@@ -109,6 +109,18 @@ async function startCareer(page: Page) {
   await expect(start).toBeEnabled({ timeout: 30_000 });
   await start.click();
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 120_000 });
+  await dismissWelcome(page);
+}
+
+/**
+ * Closes the first career welcome sheet, as a new player does. It covers the dashboard until it is
+ * dismissed, so every test that starts a career goes through it first.
+ */
+async function dismissWelcome(page: Page) {
+  const welcome = page.getByRole('dialog', { name: 'Welcome' });
+  await expect(welcome).toBeVisible({ timeout: 15_000 });
+  await welcome.getByRole('button', { name: /^start/i }).click();
+  await expect(welcome).toBeHidden();
 }
 
 /**
@@ -234,6 +246,7 @@ async function startCareerInMode(page: Page, mode: RegExp) {
   await expect(start).toBeEnabled({ timeout: 60_000 });
   await start.click();
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 120_000 });
+  await dismissWelcome(page);
 }
 
 for (const [label, mode] of [

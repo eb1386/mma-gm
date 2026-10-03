@@ -231,3 +231,77 @@ export function submissionLabel(name: SubmissionName): string {
     .join(' ')
     .replace('darce', "d'arce");
 }
+
+/** Ground strikes named by where they come from, so a run of ground and pound reads as a place. */
+export const GROUND_STRIKE_FROM: Partial<Record<FightPosition, string>> = {
+  'top-guard': 'inside the guard',
+  'top-half-guard': 'from half guard',
+  'top-side-control': 'from side control',
+  'top-mount': 'from mount',
+  'back-control': 'from the back',
+  'turtle-top': 'on the turtle',
+  knockdown: 'on the canvas',
+};
+
+/** Ground strike nouns without a place in them, for when the place is named separately. */
+export const GROUND_NOUN: Record<'ground-strike' | 'ground-elbow', string[]> = {
+  'ground-strike': ['punch', 'hammer fist', 'short right hand', 'heavy left', 'clubbing punch'],
+  'ground-elbow': ['elbow', 'short elbow', 'sharp elbow', 'slicing elbow'],
+};
+
+/** A fighter hurt on the floor does not stumble; these are what a hurt fighter underneath does. */
+export const GROUND_HURT_PHRASE = ['goes limp for a moment', 'is hurt underneath', 'stops defending for a second', 'is in real trouble underneath'];
+
+export const STUN_STATE = ['is hurt', 'is wobbled', 'is shaken', 'is rocked'];
+
+export const GROUND_STRIKE_VERB = ['rains down', 'drops', 'smashes home', 'lands', 'sneaks in', 'drives down'];
+
+export const KNOCKDOWN_FOLLOW = [
+  'The referee is watching closely.',
+  'The crowd is on its feet.',
+  'Big moment in this fight.',
+  'That one landed flush.',
+];
+
+export const STUN_FOLLOW = ['and is looking to hold on.', 'and is covering up.', 'and the crowd can sense it.'];
+
+export const SUBMISSION_SECURED_PHRASE = [
+  'has the {sub} locked up and {d} is in trouble',
+  'sinks the {sub} in deep',
+  'has the {sub} tight and {d} is fighting for survival',
+  'cranks on the {sub} and {d} is in real danger',
+];
+
+export const TAKEDOWN_STUFFED = [
+  '{a} shoots {td} and {d} stuffs it.',
+  '{d} sprawls on {td} from {a}.',
+  '{a} goes for {td} and {d} is not going anywhere.',
+  '{d} reads {td} from {a} and shuts it down.',
+];
+
+export const TAKEDOWN_PARTIAL = [
+  '{a} gets in on {td} and {d} defends it to the fence.',
+  '{a} gets in deep on {td} but {d} stays upright.',
+  '{a} has hold of {td} and {d} balances on one leg.',
+];
+
+/** The call when the referee or the doctor ends it. {a} is the winner, {d} the other fighter. */
+export const FINISH_CALL: Record<string, string[]> = {
+  ko: ['{d} is out and the referee waves it off. It is all over.', 'That is it. {d} is out before the referee can get there.'],
+  'tko-strikes': [
+    'The referee steps in. {d} was not defending and {a} gets the stoppage.',
+    '{a} keeps throwing and the referee has seen enough. It is over.',
+    'The referee jumps in to save {d}. {a} gets it done.',
+  ],
+  'tko-ground-strikes': [
+    'The referee dives in. {d} cannot get out from under it and {a} gets the stoppage.',
+    '{a} keeps the shots coming and the referee waves it off.',
+    'Nothing coming back from {d}, and the referee stops it on the ground.',
+  ],
+  'doctor-stoppage': ['Between rounds the doctor looks at {d} and will not let it go on. It is over.'],
+  'corner-stoppage': ['{d}\'s corner waves it off on the stool. It is over.'],
+  retirement: ['{d} cannot come out for the next round. It is over.'],
+  disqualification: ['The referee waves it off and disqualifies {d}.'],
+};
+
+export const LATE_ROUND_LEAD = ['With seconds left in the round, ', 'Just before the horn, ', 'Late in the round, '];

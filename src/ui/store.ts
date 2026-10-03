@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { needsSnapshotRepair, repairFromSnapshot } from '@core/data/snapshot-repair';
+import { loadSnapshot, loadSnapshotIndex } from '@core/data/snapshot';
 import type { SaveGame } from '@core/types/save';
 import type { AdvanceMode, AdvanceReport } from '@core/world/tick';
 import { advanceSteps, STOPPED_AT_REQUEST } from '@core/world/tick';
@@ -159,6 +161,27 @@ interface GameState {
   /** Clears the toast with this id, or any toast when no id is given. */
   dismissToast: (id?: number) => void;
   status: () => CareerStatus | null;
+}
+
+/**
+ * Brings an older career's real fighters up to the current snapshot's sourced identity, once, in
+ * the background after it opens. A failed fetch (offline, or the file missing) changes nothing and
+ * is tried again the next time the career is opened.
+ */
+async function repairOpenedSave(saveId: string): Promise<void> {
+  try {
+    const index = await loadSnapshotIndex();
+    const latest = index.snapshots.find((s) => s.isLatest) ?? index.snapshots[0];
+    if (!latest) return;
+    const snapshot = await loadSnapshot(latest.file);
+    const { save, mutate } = useGame.getState();
+    if (!save || save.saveId !== saveId) return;
+    mutate((s) => repairFromSnapshot(s, snapshot));
+    // Persisted even when no fighter changed, so the run is recorded and not repeated.
+    await useGame.getState().persist();
+  } catch {
+    // Nothing is lost by skipping the repair; the career plays exactly as before.
+  }
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -377,7 +400,11 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   // Loading another save also ends any playback, so a fight left mid replay cannot hold the dock.
-  setSave: (save) => (flushPendingSave(get().save), set({ save, revision: get().revision + 1, lastReport: null, lastResult: null, operation: null, busy: false, fightPlayback: null })),
+  setSave: (save) => {
+    flushPendingSave(get().save);
+    set({ save, revision: get().revision + 1, lastReport: null, lastResult: null, operation: null, busy: false, fightPlayback: null });
+    if (save && needsSnapshotRepair(save)) void repairOpenedSave(save.saveId);
+  },
 
   touch: () => set({ revision: get().revision + 1 }),
 

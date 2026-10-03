@@ -284,6 +284,14 @@ export interface SaveGame {
    */
   regional?: RegionalState;
 
+  /**
+   * The snapshot whose sourced identity was last copied into this save's real fighters. Set once
+   * the repair for an older career has run, so the snapshot is not fetched again on every open.
+   */
+  snapshotRepairedFrom?: string;
+  /** The first career guide: whether the welcome was shown, whether it was hidden, and tips seen. */
+  guide?: { welcomed?: boolean; dismissed?: boolean; seenTips?: string[] };
+
   /** Monotonic counters so generated ids never collide across a long save. */
   counters: Record<string, number>;
 

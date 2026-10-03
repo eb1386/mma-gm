@@ -22,20 +22,26 @@ export type Domain =
   | 'recovery';
 
 const BLEND: Record<Domain, Partial<Record<keyof SideState['base'], number>>> = {
-  'strike-offense': { striking: 0.7, cardio: 0.14, wrestling: 0.08, durability: 0.08 },
+  'strike-offense': { striking: 0.5, cardio: 0.2, wrestling: 0.16, durability: 0.14 },
   // Striking used to carry about three quarters of offense, defense and power at once, so one
   // rating decided landing, avoiding and knockdowns while the three grappling ratings, half of
-  // Ovr, barely moved a fight. Defense and power now lean on the frame and the gas tank too.
-  'strike-defense': { striking: 0.5, durability: 0.2, cardio: 0.15, wrestling: 0.15 },
-  power: { striking: 0.6, durability: 0.25, wrestling: 0.15 },
-  'takedown-offense': { wrestling: 0.78, grappling: 0.14, cardio: 0.08 },
-  'takedown-defense': { wrestling: 0.66, grappling: 0.2, durability: 0.08, cardio: 0.06 },
-  'ground-offense': { grappling: 0.72, wrestling: 0.16, submissions: 0.12 },
-  'ground-defense': { grappling: 0.68, wrestling: 0.18, submissions: 0.08, durability: 0.06 },
+  // Ovr, barely moved a fight. Striking is used in every exchange of every fight and the mat only
+  // in some, so even at two thirds a point of Striking was still worth twice a point of Grappling.
+  // Offense, defense and power now lean on the frame, the gas tank and the threat of the takedown
+  // too, and tying up a striker is part of not getting hit.
+  'strike-defense': { striking: 0.3, durability: 0.2, cardio: 0.15, wrestling: 0.15, grappling: 0.2 },
+  power: { striking: 0.4, durability: 0.3, wrestling: 0.3 },
+  'takedown-offense': { wrestling: 0.7, grappling: 0.22, cardio: 0.08 },
+  'takedown-defense': { wrestling: 0.44, grappling: 0.42, durability: 0.08, cardio: 0.06 },
+  // Positional grappling on the mat is jiu jitsu as much as it is wrestling: guard retention,
+  // sweeps and passing are the submission game's foundation. With Submissions a small share here
+  // the rating only counted on the rare attempt and was worth far less than its place in Ovr.
+  'ground-offense': { submissions: 0.5, grappling: 0.38, wrestling: 0.12 },
+  'ground-defense': { grappling: 0.46, submissions: 0.38, wrestling: 0.1, durability: 0.06 },
   'submission-offense': { submissions: 0.74, grappling: 0.2, cardio: 0.06 },
-  'submission-defense': { submissions: 0.44, grappling: 0.4, durability: 0.1, cardio: 0.06 },
-  scramble: { wrestling: 0.42, grappling: 0.4, cardio: 0.18 },
-  clinch: { wrestling: 0.44, grappling: 0.3, striking: 0.16, cardio: 0.1 },
+  'submission-defense': { submissions: 0.5, grappling: 0.34, durability: 0.1, cardio: 0.06 },
+  scramble: { wrestling: 0.3, grappling: 0.36, submissions: 0.2, cardio: 0.14 },
+  clinch: { wrestling: 0.4, grappling: 0.34, striking: 0.16, cardio: 0.1 },
   recovery: { cardio: 0.6, durability: 0.4 },
 };
 

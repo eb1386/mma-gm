@@ -1827,3 +1827,945 @@ body::before {
     border-bottom: 1px solid var(--border);
   }
 }
+
+/* --------------------------------------------------------------- first career guide */
+
+.guide-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px));
+  background: rgba(0, 0, 0, 0.55);
+}
+.guide-sheet {
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 20px 20px 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.guide-sheet h2 {
+  font-size: 20px;
+  margin-bottom: 12px;
+}
+.guide-points {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.guide-points li {
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.guide-start {
+  width: 100%;
+  min-height: 46px;
+  font-size: 16px;
+  margin-top: 6px;
+}
+
+.guide-card {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-raised);
+}
+.guide-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.guide-card-head button {
+  margin-left: auto;
+}
+.guide-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.guide-steps li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--text-dim);
+}
+.guide-steps li.next {
+  color: var(--text);
+}
+.guide-steps li.done strong {
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+.guide-tick {
+  flex: 0 0 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--good);
+}
+.guide-steps li.done .guide-tick {
+  border-color: var(--good);
+}
+.guide-steps li.next .guide-tick {
+  border-color: var(--accent);
+}
+
+.page-tip {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+.page-tip > div {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+.page-tip button {
+  flex: 0 0 auto;
+}
+
+/* The fight broadcast: scoreboard, moment banner, round card, result reveal and playback controls.
+   Red corner is the first fighter and blue the second, as on a fight card. Motion is used only to
+   mark something that just happened, and is switched off for anyone who asks for reduced motion. */
+.fight-live {
+  margin-bottom: 14px;
+}
+.fight-live.scroll-anchor {
+  scroll-margin-top: 50px;
+}
+.fight-scoreboard {
+  position: relative;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px 6px;
+  margin-bottom: 10px;
+  transition: border-color 0.3s ease;
+}
+/* Sticks below the header while the fight plays, so the round, the clock and the meters stay in
+   view as the commentary scrolls. Once the result is being read it lets go. */
+.fight-live.playing .fight-scoreboard {
+  position: sticky;
+  top: 41px;
+  z-index: 15;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+}
+.fight-scoreboard:has(.fb-banner.hot) {
+  border-color: var(--accent);
+}
+.fb-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.fb-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fb-name.b {
+  justify-content: flex-end;
+}
+.fb-name .fb-full,
+.fb-name .fb-last {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fb-last {
+  display: none;
+}
+.fb-name.trouble .fb-full,
+.fb-name.trouble .fb-last {
+  color: var(--bad);
+}
+.fb-corner {
+  flex: 0 0 4px;
+  height: 22px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.fb-corner.b {
+  background: var(--link);
+}
+.fb-record {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.fb-flag {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--bad);
+  padding: 1px 5px;
+  border-radius: 3px;
+  animation: fb-pulse 0.9s ease-in-out infinite alternate;
+}
+.fb-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+  min-width: 84px;
+}
+.fb-round {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.fb-of {
+  color: var(--text-faint);
+}
+.fb-time {
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.fb-status {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.fb-bars {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 16px;
+  margin-top: 6px;
+}
+.fb-meter-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 3px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.fb-meter-label.center {
+  justify-content: center;
+}
+.fb-share-label {
+  margin-top: 5px;
+}
+.fb-dim {
+  color: var(--text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fb-meter {
+  display: flex;
+  height: 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fb-meter.b {
+  justify-content: flex-end;
+}
+.fb-meter > span {
+  background: var(--text-dim);
+  transition: width 0.45s ease;
+}
+.fb-meter.warn > span {
+  background: var(--warn);
+}
+.fb-meter.bad > span {
+  background: var(--bad);
+}
+.fb-momentum {
+  position: relative;
+  height: 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fb-momentum-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: left 0.5s ease, width 0.5s ease;
+}
+.fb-momentum-fill.a {
+  background: var(--accent);
+}
+.fb-momentum-fill.b {
+  background: var(--link);
+}
+.fb-momentum-mid {
+  position: absolute;
+  left: calc(50% - 1px);
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--text-faint);
+}
+.fb-share {
+  display: flex;
+  gap: 2px;
+  height: 5px;
+}
+.fb-share > span {
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.fb-share-a {
+  background: var(--accent);
+  opacity: 0.75;
+}
+.fb-share-b {
+  background: var(--link);
+  opacity: 0.75;
+}
+.fb-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.fb-pips.b {
+  text-align: right;
+}
+.fb-banner {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  padding: 8px 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--warn);
+  border-radius: 6px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  transform: translateX(-50%);
+  animation: fb-banner-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.25);
+  pointer-events: none;
+}
+.fb-banner.hot {
+  border-left-color: var(--accent);
+}
+.fb-banner.ref {
+  border-left-color: var(--gold);
+}
+.fb-banner-label {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bg);
+  background: var(--warn);
+}
+.fb-banner.hot .fb-banner-label {
+  color: #fff;
+  background: var(--accent);
+}
+.fb-banner.ref .fb-banner-label {
+  background: var(--gold);
+}
+.fb-banner-line {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* The commentary: a key moment is a card in the feed, with its own tag, and the line that has
+   just arrived eases in rather than appearing in a jump. */
+.pbp-round {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.pbp-opener {
+  font-size: 12px;
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.pbp-round.horn {
+  color: var(--gold);
+}
+.pbp-line.fresh {
+  animation: pbp-in 0.35s ease-out;
+}
+.pbp-line.moment {
+  margin: 4px 0;
+  padding: 5px 8px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-raised);
+}
+.pbp-line.moment.hot {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg-raised));
+}
+.pbp-line.moment.warm {
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, var(--bg-raised));
+}
+.pbp-line.moment.ref {
+  border-left-color: var(--gold);
+}
+.pbp-line.moment.hot .pbp-text {
+  font-size: 14px;
+  font-weight: 700;
+}
+.pbp-line.moment.warm .pbp-text {
+  font-weight: 600;
+}
+.pbp-line.moment.hot.fresh {
+  animation: pbp-hot 0.9s ease-out;
+}
+.pbp-line.moment .clock {
+  padding-top: 2px;
+}
+.pbp-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+}
+.moment.hot .pbp-tag {
+  border-color: transparent;
+  color: #fff;
+  background: var(--accent);
+}
+.moment.warm .pbp-tag,
+.moment.ref .pbp-tag {
+  border-color: transparent;
+  color: var(--bg);
+  background: var(--warn);
+}
+.moment.ref .pbp-tag {
+  background: var(--gold);
+}
+
+/* Playback controls under the commentary. */
+.fight-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+  padding: 6px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.fc-play {
+  min-width: 76px;
+}
+.fc-speeds {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fc-speeds button {
+  border: 0;
+  border-radius: 0;
+}
+.fc-speeds button + button {
+  border-left: 1px solid var(--border-strong);
+}
+.fc-speeds button.active {
+  color: #fff;
+  background: var(--accent);
+}
+.fc-speed-select {
+  display: none;
+}
+.fc-skips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Between rounds. */
+.between-rounds.fb-card {
+  margin-bottom: 10px;
+  border-left: 3px solid var(--gold);
+  background: var(--bg-raised);
+  animation: fb-card-in 0.4s ease-out;
+}
+.br-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.br-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.br-next {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.br-headline {
+  margin: 4px 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+.br-analyst {
+  margin: 0 0 8px;
+  color: var(--text-dim);
+}
+.br-body {
+  display: grid;
+  grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
+  gap: 8px 28px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .br-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.br-side {
+  padding-top: 8px;
+}
+.br-stats {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+.br-names {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+}
+.br-names .a,
+.br-corner.a {
+  color: var(--accent);
+}
+.br-names .b,
+.br-corner.b {
+  color: var(--link);
+}
+.br-stat {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  align-items: center;
+  column-gap: 8px;
+}
+.br-label {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.br-num {
+  grid-row: 2;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.br-num.lead {
+  color: var(--text);
+}
+.br-num.b {
+  text-align: right;
+}
+.br-bar {
+  grid-row: 2;
+  display: flex;
+  gap: 2px;
+  height: 8px;
+}
+.br-bar > span {
+  transition: width 0.5s ease;
+}
+.br-bar-a {
+  border-radius: 4px 0 0 4px;
+  background: var(--accent);
+}
+.br-bar-b {
+  border-radius: 0 4px 4px 0;
+  background: var(--link);
+}
+.br-corners p {
+  margin: 4px 0;
+  font-size: 12.5px;
+}
+.br-corner {
+  margin-right: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.br-read {
+  margin: 8px 0 0;
+}
+.br-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+.br-countdown {
+  flex: 1 0 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--bg-inset);
+}
+.br-countdown > span {
+  display: block;
+  height: 100%;
+  background: var(--gold);
+  transform-origin: left center;
+  animation-name: br-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+/* The result as it is read out. */
+.result-reveal {
+  margin-bottom: 10px;
+  padding: 16px;
+  text-align: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-top: 4px solid var(--accent);
+  border-radius: 8px;
+  animation: rr-in 0.5s ease-out;
+}
+.result-reveal.decision {
+  border-top-color: var(--gold);
+}
+.rr-kicker {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.result-reveal.decision .rr-kicker {
+  color: var(--gold);
+}
+.rr-call {
+  margin: 8px 0;
+  font-size: 22px;
+  font-weight: 800;
+}
+.rr-winner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 8px 0;
+}
+.rr-name {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  animation: rr-name-in 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.rr-method {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.rr-verdict {
+  margin-top: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.rr-verdict.good {
+  color: var(--good);
+  border-color: var(--good);
+}
+.rr-verdict.bad {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.rr-where {
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.rr-cards {
+  max-width: 440px;
+  margin: 10px auto;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.rr-cards li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.rr-cards li.shown .rr-score {
+  animation: rr-card-in 0.45s ease-out;
+}
+.rr-judge {
+  color: var(--text-dim);
+}
+.rr-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.rr-totals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.rr-totals-names {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+@keyframes fb-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.55; }
+}
+@keyframes fb-banner-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(0.92); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+@keyframes pbp-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pbp-hot {
+  0% { opacity: 0; box-shadow: 0 0 0 0 var(--accent); }
+  30% { opacity: 1; box-shadow: 0 0 0 3px var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes fb-card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes br-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+@keyframes rr-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rr-name-in {
+  from { opacity: 0; transform: scale(0.85); letter-spacing: 0.08em; }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rr-card-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fight-scoreboard,
+  .fight-scoreboard *,
+  .pbp-line,
+  .between-rounds.fb-card,
+  .br-bar > span,
+  .result-reveal,
+  .result-reveal * {
+    animation: none !important;
+    transition: none !important;
+  }
+  /* The countdown is information, not decoration, but it only says so by moving. The text beside
+     it says the same thing. */
+  .br-countdown {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .fight-live.scroll-anchor {
+    scroll-margin-top: calc(60px + env(safe-area-inset-top, 0px));
+  }
+  .fight-live.playing .fight-scoreboard {
+    top: calc(52px + env(safe-area-inset-top, 0px));
+  }
+  /* The name turns red instead; the badge pushed a long surname into an ellipsis. */
+  .fb-flag {
+    display: none;
+  }
+  .fight-scoreboard {
+    padding: 6px 8px 5px;
+  }
+  .fb-row {
+    gap: 6px;
+  }
+  .fb-name {
+    gap: 5px;
+    font-size: 15px;
+  }
+  .fb-full,
+  .fb-record {
+    display: none;
+  }
+  .fb-last {
+    display: inline;
+  }
+  .fb-corner {
+    height: 18px;
+  }
+  .fb-clock {
+    min-width: 64px;
+  }
+  .fb-time {
+    font-size: 19px;
+  }
+  .fb-status {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+  }
+  .fb-bars {
+    gap: 8px;
+    margin-top: 4px;
+  }
+  /* The round share is the first thing to go on a phone; momentum says most of the same. */
+  .fb-share,
+  .fb-share-label {
+    display: none;
+  }
+  .fb-dim {
+    display: none;
+  }
+  .fb-meter-label {
+    justify-content: flex-start;
+  }
+  .fb-side.b .fb-meter-label {
+    justify-content: flex-end;
+  }
+  .fb-meter-label.center {
+    justify-content: center;
+  }
+  .fb-foot {
+    margin-top: 4px;
+    font-size: 10.5px;
+  }
+  .fb-banner {
+    top: calc(100% + 4px);
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  .fb-banner-line {
+    font-size: 13.5px;
+  }
+  .fc-speeds,
+  .fc-keys {
+    display: none;
+  }
+  .fc-speed-select {
+    display: inline-block;
+    min-height: 40px;
+  }
+  .fc-play {
+    min-height: 40px;
+  }
+  .fc-skips {
+    flex-wrap: nowrap;
+    width: 100%;
+    margin-left: 0;
+  }
+  .fc-skips button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 40px;
+    padding-left: 4px;
+    padding-right: 4px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  /* The scoreboard and the controls now share the screen with the commentary, so the box gives
+     up the height they take. */
+  .fight-live.playing .play-by-play {
+    max-height: max(200px, calc(100dvh - 430px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
+  }
+  .rr-name {
+    font-size: 24px;
+  }
+  .rr-call {
+    font-size: 18px;
+  }
+}

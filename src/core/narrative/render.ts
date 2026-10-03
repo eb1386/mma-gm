@@ -9,10 +9,17 @@ import {
   CORNER_ADVICE,
   FEELING_OUT,
   FIGHT_START,
+  FINISH_CALL,
   FOUL_NAME,
+  GROUND_HURT_PHRASE,
+  GROUND_NOUN,
+  GROUND_STRIKE_FROM,
+  GROUND_STRIKE_VERB,
   HURT_PHRASE,
+  KNOCKDOWN_FOLLOW,
   KNOCKDOWN_PHRASE,
   LAND_VERB,
+  LATE_ROUND_LEAD,
   MISS_VERB,
   MOMENTUM_PHRASE,
   PARTIAL_VERB,
@@ -22,11 +29,31 @@ import {
   SLIP_VERB,
   STRIKE_NOUN,
   SUBMISSION_ENTRY_VERB,
+  STUN_FOLLOW,
+  STUN_STATE,
   SUBMISSION_ESCAPE_PHRASE,
+  SUBMISSION_SECURED_PHRASE,
   SUBMISSION_TAP_PHRASE,
   SUBMISSION_TECHNICAL_PHRASE,
+  TAKEDOWN_PARTIAL,
+  TAKEDOWN_STUFFED,
   TAKEDOWN_VERB,
 } from './lexicon';
+
+/** "an elbow", "a hook". The phrase banks are written bare, so the article is chosen here. */
+export function withArticle(noun: string): string {
+  return /^[aeiou]/i.test(noun) && !/^one\b/i.test(noun) ? `an ${noun}` : `a ${noun}`;
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function fillNames(template: string, actor: string, defender: string, extra: Record<string, string> = {}, sentence = true): string {
+  let out = template.split('{a}').join(actor).split('{d}').join(defender);
+  for (const [k, v] of Object.entries(extra)) out = out.split(`{${k}}`).join(v);
+  return sentence ? capitalize(out) : out;
+}
 
 export interface NarrativeFighter {
   id: string;
@@ -123,8 +150,15 @@ export class FightNarrator {
    * modifies simulation state, so commentary can never change what happened.
    */
   render(e: FightEvent): string | null {
-    const text = this.renderRaw(e);
+    let text = this.renderRaw(e);
     if (text === null) return null;
+    // A big shot in the last seconds of a round is called as one. The clock is the event's own,
+    // so the line is never placed anywhere it did not happen.
+    const lateWorthy = e.importance === 'notable' || e.importance === 'major' || (e.importance === 'decisive' && !e.tags.includes('finish'));
+    if (lateWorthy && e.clockSecondsRemaining <= 10 && e.clockSecondsRemaining > 0 && e.action.kind !== 'referee') {
+      const lead = this.anti.pick(this.rng, 'late', LATE_ROUND_LEAD);
+      text = `${lead}${/^(A|An|The) /.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text}`;
+    }
     // A sentence that has just been said is dropped unless the moment is important
     // enough that leaving it out would break the account of the fight.
     if (this.recentSentences.includes(text)) {
@@ -167,32 +201,87 @@ export class FightNarrator {
 
   private renderStrike(e: FightEvent, actor: string, target: string): string | null {
     if (e.action.kind !== 'strike') return null;
-    const noun = this.anti.pick(this.rng, `noun-${e.action.name}`, STRIKE_NOUN[e.action.name]);
+    const name = e.action.name;
+    const groundName = name === 'ground-strike' || name === 'ground-elbow' ? name : null;
+    // Where a ground strike comes from is named on its own, so the noun must not name a place too:
+    // "a punch from the top from side control" said the position twice.
+    const from = groundName ? GROUND_STRIKE_FROM[e.stateBefore] : undefined;
+    const noun = this.anti.pick(this.rng, `noun-${name}`, from && groundName ? GROUND_NOUN[groundName] : STRIKE_NOUN[name]);
+    const aNoun = withArticle(noun);
     const area = e.target === 'leg' ? 'the lead leg' : e.target === 'body' ? 'the body' : 'the head';
+    const onGround = Boolean(groundName) || e.stateBefore.startsWith('top-') || e.stateBefore === 'back-control';
 
     if (e.result === 'clean-land') {
       const verb = this.anti.pick(this.rng, 'land-verb', LAND_VERB);
+      // A knockdown, a leg that gives way and a hurt fighter are the moments of a fight, so each
+      // has its own sentences rather than a clause bolted onto a routine one.
+      if (onGround && (e.tags.includes('knockdown') || e.tags.includes('stun'))) {
+        // Nobody falls down from the bottom of a pin. The same moment underneath is a fighter
+        // going limp or no longer defending.
+        const hurt = this.anti.pick(this.rng, 'ground-hurt', GROUND_HURT_PHRASE);
+        return this.anti.pick(this.rng, 'ground-hurt-structure', [
+          `${actor} ${verb} ${aNoun}${from ? ` ${from}` : ''} and ${target} ${hurt}.`,
+          `${capitalize(aNoun)} from ${actor} and ${target} ${hurt}!`,
+        ]);
+      }
+      if (e.tags.includes('knockdown')) {
+        const kd = this.anti.pick(this.rng, 'kd', KNOCKDOWN_PHRASE);
+        const follow = this.anti.pick(this.rng, 'kd-follow', KNOCKDOWN_FOLLOW);
+        const structures = [
+          `${actor} ${verb} ${aNoun} and ${target} ${kd}.`,
+          `${capitalize(aNoun)} from ${actor} and ${target} ${kd}! ${follow}`,
+          `Down goes ${target}! ${actor} ${verb} ${aNoun} right on the chin.`,
+          `${actor} ${verb} ${aNoun} and ${target} ${kd}. ${follow}`,
+        ];
+        return e.target === 'body'
+          ? `${actor} ${verb} ${aNoun} to the body and ${target} folds to the canvas.`
+          : this.anti.pick(this.rng, 'kd-structure', structures);
+      }
+      if (e.tags.includes('leg-drop')) {
+        return this.anti.pick(this.rng, 'leg-drop', [
+          `${actor} ${verb} ${aNoun} and the leg gives out on ${target}.`,
+          `${capitalize(aNoun)} from ${actor} chops ${target} down to the mat.`,
+          `${target} goes down off ${aNoun} from ${actor}. That leg is compromised.`,
+        ]);
+      }
+      if (e.tags.includes('stun')) {
+        const hurt = this.anti.pick(this.rng, 'hurt', HURT_PHRASE);
+        const structures = [
+          `${actor} ${verb} ${aNoun} and ${target} ${hurt}.`,
+          `${capitalize(aNoun)} from ${actor} and ${target} ${hurt}!`,
+          `${target} ${this.anti.pick(this.rng, 'stun-state', STUN_STATE)} by ${aNoun} from ${actor} ${this.anti.pick(this.rng, 'stun-follow', STUN_FOLLOW)}`,
+        ];
+        return this.anti.pick(this.rng, 'stun-structure', structures);
+      }
+      if (e.tags.includes('cut')) {
+        return this.anti.pick(this.rng, 'cut', [
+          `${capitalize(aNoun)} from ${actor} opens ${target} up.`,
+          `${actor} ${verb} ${aNoun} and there is blood on ${target}.`,
+          `${target} is cut by ${aNoun} from ${actor}.`,
+        ]);
+      }
+      if (from) {
+        const gverb = this.anti.pick(this.rng, 'ground-verb', GROUND_STRIKE_VERB);
+        const structures = [
+          `${actor} ${gverb} ${aNoun} ${from}.`,
+          `${capitalize(from)}, ${actor} ${verb} ${aNoun}.`,
+          `${target} eats ${aNoun} ${from}.`,
+        ];
+        return this.rng.pick(structures);
+      }
       // A noun such as "kick to the ribs" already names its target, so appending the
       // target clause again would read as a duplication.
       const nounNamesTarget = /\bto the\b|\bbody\b|\bleg\b|\bcalf\b|\bhead\b|\bhigh\b|upstairs/.test(noun);
       const structures = [
-        `${actor} ${verb} a ${noun}.`,
+        `${actor} ${verb} ${aNoun}.`,
         nounNamesTarget ? `${actor} ${verb} the ${noun}.` : `${actor} ${verb} the ${noun} to ${area}.`,
-        `A ${noun} from ${actor} lands ${this.anti.pick(this.rng, 'clean', CLEAN_ADVERB)}.`,
-        `${target} eats a ${noun}.`,
+        `${capitalize(aNoun)} from ${actor} lands ${this.anti.pick(this.rng, 'clean', CLEAN_ADVERB)}.`,
+        `${target} eats ${aNoun}.`,
       ];
-      let text = this.rng.pick(structures);
-      if (e.tags.includes('knockdown')) {
-        text = `${actor} ${verb} a ${noun} and ${target} ${this.anti.pick(this.rng, 'kd', KNOCKDOWN_PHRASE)}.`;
-      } else if (e.tags.includes('stun')) {
-        text = `${actor} ${verb} a ${noun} and ${target} ${this.anti.pick(this.rng, 'hurt', HURT_PHRASE)}.`;
-      } else if (e.tags.includes('cut')) {
-        text = `A ${noun} from ${actor} opens ${target} up.`;
-      }
-      return text;
+      return this.rng.pick(structures);
     }
     if (e.result === 'partial-land') {
-      return `${actor} ${this.anti.pick(this.rng, 'partial', PARTIAL_VERB)} a ${noun}.`;
+      return `${actor} ${this.anti.pick(this.rng, 'partial', PARTIAL_VERB)} ${aNoun}${from ? ` ${from}` : ''}.`;
     }
     if (e.result === 'blocked') {
       return e.importance === 'trivial' && this.rng.chance(0.55) ? null : `The ${noun} from ${actor} ${this.anti.pick(this.rng, 'block', BLOCK_VERB)}.`;
@@ -200,7 +289,7 @@ export class FightNarrator {
     if (e.result === 'slipped') {
       return this.rng.chance(0.5) ? null : `${actor} throws the ${noun} and it ${this.anti.pick(this.rng, 'slip', SLIP_VERB)}.`;
     }
-    return this.rng.chance(0.62) ? null : `${actor} ${this.anti.pick(this.rng, 'miss', MISS_VERB)} a ${noun}.`;
+    return this.rng.chance(0.62) ? null : `${actor} ${this.anti.pick(this.rng, 'miss', MISS_VERB)} ${aNoun}.`;
   }
 
   private renderWrestle(e: FightEvent, actor: string, target: string): string | null {
@@ -229,12 +318,12 @@ export class FightNarrator {
       return this.rng.pick(structures);
     }
     if (e.result === 'partial') {
-      return `${actor} gets in on ${td} and ${target} defends it to the fence.`;
+      return fillNames(this.anti.pick(this.rng, 'td-partial', TAKEDOWN_PARTIAL), actor, target, { td });
     }
     if (e.tags.includes('counter-position')) {
       return `${actor} shoots ${td} and ${target} turns it around.`;
     }
-    return `${actor} shoots ${td} and ${target} stuffs it.`;
+    return fillNames(this.anti.pick(this.rng, 'td-stuffed', TAKEDOWN_STUFFED), actor, target, { td });
   }
 
   private renderGrapple(e: FightEvent, actor: string, target: string): string | null {
@@ -282,12 +371,12 @@ export class FightNarrator {
     switch (e.action.stage) {
       case 'entry':
         return e.result === 'completed'
-          ? `${actor} ${this.anti.pick(this.rng, 'sub-entry', SUBMISSION_ENTRY_VERB)} a ${label}.`
+          ? `${actor} ${this.anti.pick(this.rng, 'sub-entry', SUBMISSION_ENTRY_VERB)} ${withArticle(label)}.`
           : this.rng.chance(0.5)
             ? null
-            : `${actor} reaches for a ${label} and cannot get it locked.`;
+            : `${actor} reaches for ${withArticle(label)} and cannot get it locked.`;
       case 'secured':
-        return `${actor} has the ${label} locked up and ${target} is in trouble.`;
+        return `${actor} ${fillNames(this.anti.pick(this.rng, 'sub-secured', SUBMISSION_SECURED_PHRASE), actor, target, { sub: label }, false)}.`;
       case 'defense':
         return `${target} ${this.anti.pick(this.rng, 'sub-escape', SUBMISSION_ESCAPE_PHRASE)}.`;
       case 'adjustment':
@@ -344,7 +433,14 @@ export class FightNarrator {
       }
       case 'doctor-check':
         return this.anti.pick(this.rng, 'doc', REFEREE_PHRASE.doctorCheck);
-      case 'timeout':
+      case 'timeout': {
+        // The engine closes every stoppage with this event, tagged with the method. It was left
+        // silent, so a knockout scrolled past without the referee ever being mentioned.
+        if (!e.tags.includes('finish')) return null;
+        const method = e.tags.find((t) => FINISH_CALL[t]);
+        if (!method) return null;
+        return fillNames(this.anti.pick(this.rng, `finish-${method}`, FINISH_CALL[method]), actor, target);
+      }
       case 'break':
         return null;
     }

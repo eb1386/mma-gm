@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { PageTip } from '../Guide';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { formatDate, formatMoney } from '@core/types/common';
@@ -104,6 +105,7 @@ export function FightWeekPage() {
   };
 
   const head = (
+    <>
     <div className="page-head">
       <h1>Fight week</h1>
       <span className="sub">
@@ -111,6 +113,10 @@ export function FightWeekPage() {
         {formatDate(bout.date)}
       </span>
     </div>
+      <PageTip id="fightweek" title="Fight week">
+        Each stage opens on its day. Press answers move hype and your relationship with the opponent; the official weigh in decides whether you make weight. Miss it and you lose part of the purse, and a title if one is on the line.
+      </PageTip>
+    </>
   );
 
   // A canceled bout has no fight week left. Canceling clears its stages, so this page used to read

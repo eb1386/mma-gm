@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { PageTip } from '../Guide';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { formatDate } from '@core/types/common';
@@ -108,6 +109,9 @@ export function InboxPage() {
           {save.inbox.filter((m) => m.status === 'unread').length} unread, {save.inbox.filter((m) => messageNeedsAction(save, m)).length} needing a decision
         </span>
       </div>
+      <PageTip id="inbox" title="The inbox">
+        Anything marked action needs an answer before the calendar moves on. Social posts and news can wait; offers, injuries and contracts cannot.
+      </PageTip>
 
       <Tabs
         tabs={[

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { PageTip } from '../Guide';
 import { useNavigate } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { formatDate, formatMoney } from '@core/types/common';
@@ -102,6 +103,9 @@ export function ContractPage() {
         <h1>Contract</h1>
         <span className="sub">{fighter.name}</span>
       </div>
+      <PageTip id="contract" title="Contracts">
+        The promotion opens below what it will pay. Counter for more, but every round tests its patience, and walking away means waiting for the next offer.
+      </PageTip>
 
       <Notice>
         Every contract in this game is a simulated object. Real fighter pay is not public, so nothing here is presented

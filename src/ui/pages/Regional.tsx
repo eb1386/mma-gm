@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { PageTip } from '../Guide';
 import { DIVISION_BY_ID } from '@core/config/divisions';
 import { PROMOTION_ABBREVIATION, PROMOTION_NAME } from '@core/config/branding';
 import { PRO_AGE, REGIONAL_LEVELS } from '@core/config/regional';
@@ -69,6 +70,9 @@ export function RegionalPage() {
           {DIVISION_BY_ID[me.divisionId].name}
         </span>
       </div>
+      <PageTip id="regional" title="The call up">
+        Readiness rises with wins, finishes, your regional ranking and the belt, and with how good you actually are. At 50 a tryout invitation can arrive; at 68 the main promotion offers a contract.
+      </PageTip>
 
       {!onCircuit && state.callUp.calledUpOn && (
         <Notice kind="good">

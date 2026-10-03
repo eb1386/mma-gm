@@ -93,8 +93,14 @@ export function updateTactics(st: FightState, side: SideState, rng: Rng): void {
   side.paceTarget = clamp(side.plan.pace * paceCeiling * staminaFactor, 0.15, 1.3);
 
   // Where does this fighter want the fight.
+  // The submission matchup is part of what the mat offers. Leaving it out meant a far better
+  // submission artist had no more reason to want the ground than anyone else, so the rating only
+  // mattered in the fights that happened to go there.
   const myGroundEdge =
-    effective(st, side, 'ground-offense') - effective(st, opp, 'ground-defense') + (effective(st, side, 'takedown-offense') - effective(st, opp, 'takedown-defense'));
+    effective(st, side, 'ground-offense') -
+    effective(st, opp, 'ground-defense') +
+    (effective(st, side, 'takedown-offense') - effective(st, opp, 'takedown-defense')) +
+    (effective(st, side, 'submission-offense') - effective(st, opp, 'submission-defense')) * C.ai.submissionStyleWeight;
   const myStandingEdge = effective(st, side, 'strike-offense') - effective(st, opp, 'strike-defense');
 
   // A fighter takes the fight where they are better relative to this opponent. Judging the
@@ -249,21 +255,27 @@ function chooseStandingAction(st: FightState, side: SideState, rng: Rng): Decisi
   const wantsFurther = side.wantsDistance && (pos.range === 'pocket' || pos.range === 'boxing');
 
   // The size of the grappling edge decides how hard a fighter chases the takedown, not only
-  // whether they want it at all.
+  // whether they want it at all. One who does not want the mat still shoots now and then, and
+  // less again when the mat favours the opponent: a striker does not shoot on a better grappler.
   const takedownDesire =
     side.wantsGround && pos.range !== 'long'
       ? (side.plan.takedown + clamp(side.styleEdge / C.ai.styleEdgeScale, 0, 0.5)) *
         (1.1 + (side.desperate ? 0.4 : 0)) *
         clamp(side.stamina / 55, 0.3, 1.2)
-      : side.plan.takedown * 0.25;
+      : side.plan.takedown * 0.25 * clamp(1 + side.styleEdge / C.ai.styleEdgeScale, C.ai.unwantedTakedownShare, 1);
 
   const clinchDesire = side.plan.clinch * (pos.range === 'pocket' || pos.range === 'boxing' ? 1.2 : 0.4);
+
+  // A fighter who wants the fight on the mat walks the opponent down to shooting range, harder
+  // the better the ground is for him. Closing only as often as his habits said left a wrestler
+  // at the end of a better striker's jab for a third of the fight, where no takedown exists.
+  const groundPull = side.wantsGround ? clamp(side.styleEdge / C.ai.styleEdgeScale, 0, 1) : 0;
 
   const opts: Weighted<Decision>[] = [
     { item: chooseStandingStrike(st, side, rng), weight: C.ai.strikeChoiceWeight * (0.55 + side.paceTarget) * (side.plan.counter > 0.7 ? 0.82 : 1) },
     {
       item: { action: { kind: 'movement', name: wantsCloser ? 'press-forward' : 'circle' }, power: 0, rangeIntent: wantsCloser ? -1 : 0 },
-      weight: wantsCloser ? 1.15 * side.plan.pressure : 0.42,
+      weight: wantsCloser ? 1.15 * (side.plan.pressure + groundPull * C.ai.grapplerClosePressure) : 0.42,
     },
     {
       item: { action: { kind: 'movement', name: 'retreat' }, power: 0, rangeIntent: 1 },
@@ -319,8 +331,11 @@ function chooseClinchAction(st: FightState, side: SideState, rng: Rng): Decision
       weight: 0.4 * side.tendencies.clinch * (controlling ? 1.2 : 0.5),
     },
     {
+      // A fighter who would rather not be on the mat with this opponent does not drag him there
+      // from the clinch either. Shooting regardless gave a striker minutes of bottom position
+      // under him and handed a better grappler the very fight he wanted.
       item: { action: { kind: 'wrestle', name: td }, power: 0.75 },
-      weight: 1.3 * side.plan.takedown * (controlling ? 1.3 : 0.55) * clamp(side.stamina / 50, 0.25, 1.2),
+      weight: 1.3 * side.plan.takedown * (controlling ? 1.3 : 0.55) * clamp(side.stamina / 50, 0.25, 1.2) * (side.wantsGround ? 1 : C.ai.unwantedTakedownShare),
     },
     {
       item: { action: { kind: 'wrestle', name: 'underhook-defense' }, power: 0.3 },
@@ -450,7 +465,7 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
     if (subs.length > 0) {
       opts.push({
         item: { action: { kind: 'submission', name: pickSubmission(rng, st, subs), stage: 'entry' }, power: 0.7 },
-        weight: 0.085 * side.plan.submission * submissionAppetite(st, side),
+        weight: 0.04 * side.plan.submission * submissionAppetite(st, side),
       });
     }
     return pickWeighted(rng, opts);
@@ -470,18 +485,26 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
       item: { action: { kind: 'grapple', name: 'hold-position' }, power: 0.2 },
       weight: (side.protectingLead ? 1.5 : 0.55) * (1 + side.plan.ground * 0.7) * (side.stamina < 40 ? 1.8 : 1),
     });
+    // Attempt weights are about half what they were: entries now succeed more often for the
+    // better submission artist, and mistakes on the feet and in the guard hand him attempts of
+    // their own, so the same number of attempts would put submissions far above their real rate.
     if (subs.length > 0) {
       opts.push({
         item: { action: { kind: 'submission', name: pickSubmission(rng, st, subs), stage: 'entry' }, power: 0.75 },
-        weight: 0.155 * side.plan.submission * (0.5 + side.base.submissions / 110) * (dominant ? 1.4 : 0.8) * submissionAppetite(st, side),
+        weight: 0.072 * side.plan.submission * (0.5 + side.base.submissions / 110) * (dominant ? 1.4 : 0.8) * submissionAppetite(st, side),
       });
     }
     opts.push({
       item: { action: { kind: 'grapple', name: 'posture-up' }, power: 0.3 },
       weight: pos.ground === 'guard' ? 0.6 : 0.1,
     });
+    // On top of a better grappler, the sooner a striker is back on the feet the better: every
+    // second there is a sweep or a submission he is likely to lose.
     if (!side.wantsGround || side.stamina < 25) {
-      opts.push({ item: { action: { kind: 'wrestle', name: 'stand-up' }, power: 0.5 }, weight: 0.5 });
+      opts.push({
+        item: { action: { kind: 'wrestle', name: 'stand-up' }, power: 0.5 },
+        weight: 0.5 + clamp(-side.styleEdge / C.ai.styleEdgeScale, 0, 1) * C.ai.disengageFromTopWeight,
+      });
     }
   } else {
     const trapped = value >= 0.8;
@@ -504,7 +527,7 @@ function chooseGroundAction(st: FightState, side: SideState, rng: Rng): Decision
     if (subs.length > 0) {
       opts.push({
         item: { action: { kind: 'submission', name: pickSubmission(rng, st, subs), stage: 'entry' }, power: 0.7 },
-        weight: 0.145 * side.plan.submission * (0.4 + side.base.submissions / 100) * (trapped ? 0.5 : 1.2),
+        weight: 0.09 * side.plan.submission * (0.4 + side.base.submissions / 100) * (trapped ? 0.5 : 1.2) * submissionAppetite(st, side),
       });
     }
     opts.push({
@@ -567,10 +590,17 @@ export function chooseInitiative(st: FightState, rng: Rng): SideState {
   let weightA = st.a.aggression + 0.35;
   let weightB = st.b.aggression + 0.35;
   if (pos.zone === 'ground' && pos.ground !== 'scramble') {
+    // The top fighter sets the pace on the mat, by as much as he is the better grappler from
+    // there. A fixed share gave a far better guard player underneath as few chances to work as a
+    // novice, so being the better grappler mattered only from on top.
+    const top = pos.controller === 0 ? st.a : st.b;
+    const bottom = pos.controller === 0 ? st.b : st.a;
+    const edge = effective(st, top, 'ground-offense') - effective(st, bottom, 'ground-defense');
+    const topShare = 2.1 * clamp(1 + edge / C.grappling.initiativeEdgeScale, 0.55, 1.6);
     if (pos.controller === 0) {
-      weightA *= 2.1;
+      weightA *= topShare;
     } else {
-      weightB *= 2.1;
+      weightB *= topShare;
     }
   } else if (pos.zone === 'clinch') {
     if (pos.controller === 0) weightA *= 1.55;

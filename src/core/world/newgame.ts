@@ -129,6 +129,8 @@ function emptySave(opts: NewGameOptions, snapshot: SnapshotFile): SaveGame {
       balance: opts.mode === 'coach' ? 75000 : 0,
     },
     snapshot: snapshot.meta,
+    // Built from this snapshot, so there is nothing for the older career repair to bring across.
+    snapshotRepairedFrom: snapshot.meta.snapshotId,
     fighters: {},
     gyms: {},
     staff: {},

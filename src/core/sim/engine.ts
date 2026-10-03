@@ -17,7 +17,7 @@ import {
 } from '../types/fight';
 import type { SaveSettings } from '../types/save';
 import { chooseAction, chooseInitiative, updateTactics, type Decision } from './ai';
-import { effective, recoverStamina } from './effective';
+import { effective, recoverStamina, spendStamina } from './effective';
 import { drawJudges, resolveDecision, scoreRoundForJudge, trueRoundScore, type JudgePersona } from './judging';
 import { buildPlanProfile, planCoherence } from './plan';
 import {
@@ -154,7 +154,7 @@ function buildSide(
     experienceBonus: experienceBonus(f),
     // Form on the night. A wide gap in ability should still leave room for an upset,
     // because in this sport it always does.
-    nightForm: rng.normalClamped(0, 4.2, -12, 12),
+    nightForm: rng.normalClamped(0, C.fight.nightFormSd, -14, 14),
     cutPenalty,
     campPenalty,
     injuryEffects,
@@ -398,6 +398,8 @@ export class FightSimulator {
   private roundAggressionB = 0;
   private roundCageA = 0;
   private roundCageB = 0;
+  private roundPositionA = 0;
+  private roundPositionB = 0;
   private endTimeSeconds = 0;
   private endRound = 1;
   private result: FightResult | null = null;
@@ -553,6 +555,8 @@ export class FightSimulator {
       controller.fightStats.controlSeconds += used;
       controller.roundStats.groundControlSeconds += used;
       controller.fightStats.groundControlSeconds += used;
+      if (controller.idx === 0) this.roundPositionA += used * GROUND_VALUE[st.position.ground];
+      else this.roundPositionB += used * GROUND_VALUE[st.position.ground];
     } else if (st.position.zone === 'clinch') {
       const controller = st.position.controller === 0 ? st.a : st.b;
       controller.roundStats.controlSeconds += used * 0.7;
@@ -574,6 +578,22 @@ export class FightSimulator {
     const intensity = st.position.zone === 'ground' ? 0.55 : st.position.zone === 'clinch' ? 0.7 : 0.45;
     recoverStamina(st.a, used, st.a === actor ? intensity + 0.2 : intensity);
     recoverStamina(st.b, used, st.b === actor ? intensity + 0.2 : intensity);
+
+    // Carrying a better grappler's weight is exhausting in a way being on top is not. Without a
+    // cost to the fighter underneath, minutes of bottom position left him as fresh as the man who
+    // put him there, so top control decided nothing beyond the round it happened in.
+    if (isGroundControlPosition(st.position) && st.position.downedIdx === null) {
+      const top = st.position.controller === 0 ? st.a : st.b;
+      const bottom = top.idx === 0 ? st.b : st.a;
+      const edge = effective(st, top, 'ground-offense') - effective(st, bottom, 'ground-defense');
+      // Divided by the division's fatigue factor, which spending stamina applies again: both men are
+      // the same size, so carrying the one on top costs a flyweight what it costs a heavyweight.
+      spendStamina(
+        bottom,
+        (C.grappling.bottomDrainPerSecond * used * (0.5 + GROUND_VALUE[st.position.ground]) * clamp(1 + edge / C.grappling.bottomDrainEdgeScale, 0.25, 2.2)) /
+          bottom.fatigueFactor
+      );
+    }
 
     for (const side of [st.a, st.b]) {
       side.stunSecondsRemaining = Math.max(0, side.stunSecondsRemaining - used);
@@ -674,6 +694,8 @@ export class FightSimulator {
       aggressionB: this.roundAggressionB,
       cageControlA: this.roundCageA,
       cageControlB: this.roundCageB,
+      positionA: this.roundPositionA,
+      positionB: this.roundPositionB,
     };
     const trueScore = trueRoundScore(input);
 
@@ -760,6 +782,8 @@ export class FightSimulator {
     this.roundAggressionB = 0;
     this.roundCageA = 0;
     this.roundCageB = 0;
+    this.roundPositionA = 0;
+    this.roundPositionB = 0;
     updateTactics(st, st.a, this.rng);
     updateTactics(st, st.b, this.rng);
   }

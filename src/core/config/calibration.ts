@@ -122,6 +122,12 @@ export interface Calibration {
     base: number;
     durationSeconds: number;
     abilityPenalty: number;
+    /**
+     * Stun chance of a strike thrown on the mat relative to one standing. Short shots from top
+     * wear a fighter down rather than switch him off, and once top position started producing
+     * real offense a full stun chance made ground and pound the commonest finish in the game.
+     */
+    groundMultiplier: number;
   };
 
   stoppage: {
@@ -199,19 +205,50 @@ export interface Calibration {
     dominantLandingChance: number;
     /** Fence proximity chance when a takedown stalls. */
     fenceStallChance: number;
+    /** Share of a takedown contest from the clinch decided by the clinch domain rather than pure wrestling. */
+    clinchTakedownShare: number;
+    /**
+     * A completed takedown turns into a scramble with this scale times the logistic of the
+     * defender's ground defense over the attacker's ground offense, less the difficulty.
+     */
+    landingScrambleScale: number;
+    landingScrambleDifficulty: number;
   };
 
   grappling: {
-    /** Base per attempt chance of advancing position at parity. */
+    /**
+     * Advancing, sweeping and standing up from bottom are each a floor plus a scale times the
+     * logistic of the grappling gap. Advancing and standing up keep the parity chances they had
+     * when the floors carried most of each chance, but the scales now carry most of it, so being
+     * the better grappler decides who keeps the top. With the floors dominant a much better
+     * grappler was swept and stood up nearly as often as an even one, and the Grappling rating
+     * was worth far less than Striking.
+     */
     advanceBase: number;
-    /** Base sweep chance from bottom at parity. */
+    advanceScale: number;
     sweepBase: number;
-    /** Base stand up chance from bottom at parity. */
+    sweepScale: number;
+    /** Effective points a sweep or reversal from bottom has to overcome before the grappling gap counts. */
+    sweepDifficulty: number;
     standUpBase: number;
+    standUpScale: number;
     /** Referee stand up after this many seconds of no meaningful action. */
     inactivityStandUpSeconds: number;
-    /** Share of the ground offense over ground defense gap added to strike accuracy from top. */
-    groundStrikeEdgeWeight: number;
+    /**
+     * Share of a strike's accuracy contest on the ground decided by the grappling domains rather
+     * than the striking ones. Landing from top is posture and pinning, and avoiding strikes from
+     * bottom is framing and tying up, so a pure striking contest let a good striker on his back
+     * shut out the ground and pound of a far better grappler.
+     */
+    groundStrikeGrapplingShare: number;
+    /** The same share for the force of a strike thrown on the ground. */
+    groundPowerGrapplingShare: number;
+    /** Stamina per second drained from the fighter pinned underneath, at parity in a neutral position. */
+    bottomDrainPerSecond: number;
+    /** Ground offense over defense, in effective points, that doubles that drain. */
+    bottomDrainEdgeScale: number;
+    /** Ground offense over defense, in effective points, that doubles the top fighter's extra initiative. */
+    initiativeEdgeScale: number;
     /** Striking accuracy edge of the top fighter in any ground position, before position value. */
     topStrikeBase: number;
     /** Extra top striking edge per unit of position value. */
@@ -219,12 +256,18 @@ export interface Calibration {
   };
 
   submission: {
-    /** Base chance an entry becomes a secured position. */
+    /**
+     * Each stage's chance is its base plus its scale times the logistic of the offense over defense
+     * gap, so the scale is how much the submission ratings decide and the base is the floor any
+     * attempt has. With most of each stage in the base, a far better submission artist finished
+     * barely more often than anyone else and the rating was worth less than any other.
+     */
     entryBase: number;
-    /** Base chance a secured submission progresses past defense. */
+    entryScale: number;
     securedBase: number;
-    /** Base chance the final adjustment forces a tap. */
+    securedScale: number;
     finishBase: number;
+    finishScale: number;
     /** Multiplier on finish chance from defender fatigue. */
     fatigueScale: number;
     /** Chance a failed submission costs the attacker position. */
@@ -240,6 +283,12 @@ export interface Calibration {
      */
     dominantPositionEdge: number;
     positionEdge: number;
+    /** Chance a stuffed takedown gives the defender a front headlock choke, at parity. */
+    counterOnStuffedChance: number;
+    /** Chance a failed guard pass gives the bottom fighter a submission attempt, at parity. */
+    counterOnPassChance: number;
+    /** Change in those chances per point of submission offense over the victim's defense. */
+    counterEdgeScale: number;
   };
 
   judging: {
@@ -251,6 +300,8 @@ export interface Calibration {
     knockdownWeight: number;
     /** Score weight of control seconds. */
     controlWeight: number;
+    /** Score weight of ground control seconds multiplied by the position's dominance value. */
+    positionWeight: number;
     /** Score weight of takedowns. */
     takedownWeight: number;
     /** Score weight of submission attempts. */
@@ -313,6 +364,8 @@ export interface Calibration {
     submissionEdgeScale: number;
     /** Effective points of grappling over striking edge that add one unit of ground desire. */
     styleEdgeScale: number;
+    /** Weight of the submission matchup in how much better the ground is for a fighter than the feet. */
+    submissionStyleWeight: number;
     /**
      * Weight of ground strikes against holding or advancing for the fighter on top. Top control
      * has to produce offense, or a takedown wins nothing on the cards.
@@ -320,6 +373,12 @@ export interface Calibration {
     groundStrikeWeight: number;
     /** How much less distance a fighter who wants the takedown keeps. */
     grapplerCloseDistance: number;
+    /** Extra will to walk the opponent down, at full grappling edge, for a fighter who wants the takedown. */
+    grapplerClosePressure: number;
+    /** Share of the usual clinch takedown appetite kept by a fighter who does not want the fight on the mat. */
+    unwantedTakedownShare: number;
+    /** Extra weight of standing up from top, at full striking edge, for a fighter who does not want the mat. */
+    disengageFromTopWeight: number;
   };
 
   fight: {
@@ -342,6 +401,13 @@ export interface Calibration {
     experienceHalfLife: number;
     /** Age at which the in fight composure bonus peaks. */
     composurePeakAge: number;
+    /**
+     * Spread of a fighter's form on the night, in effective points. Widened from 4.2 when the
+     * grappling and submission ratings started deciding fights alongside Striking: at the old
+     * spread every Ovr gap turned into wins more surely than before and a much better fighter
+     * almost never lost. At this spread the win rate across an Ovr gap is close to what it was.
+     */
+    nightFormSd: number;
   };
 
   /**
@@ -396,8 +462,8 @@ export interface Calibration {
 
 export const CALIBRATION: Calibration = {
   actionSpread: 11.5,
-  grappleSpread: 10.0,
-  submissionSpread: 8.5,
+  grappleSpread: 7.5,
+  submissionSpread: 8,
 
   round: { seconds: 300, restSeconds: 60 },
 
@@ -468,7 +534,7 @@ export const CALIBRATION: Calibration = {
   },
 
   knockdown: {
-    base: 0.012,
+    base: 0.014,
     strikingScale: 0.019,
     durabilityScale: 0.021,
     accumulationScale: 0.003,
@@ -480,13 +546,13 @@ export const CALIBRATION: Calibration = {
     legDropMax: 0.03,
   },
 
-  stun: { base: 0.042, durationSeconds: 10, abilityPenalty: 13 },
+  stun: { base: 0.042, durationSeconds: 10, abilityPenalty: 13, groundMultiplier: 0.3 },
 
   stoppage: {
     unansweredThreshold: 5,
     downedUnansweredThreshold: 4,
     pinnedPositionValue: 0.8,
-    pinnedUnansweredThreshold: 12,
+    pinnedUnansweredThreshold: 24,
     knockdownKoBase: 0.5,
     knockdownKoHeadScale: 400,
     baseCheck: 0.14,
@@ -523,35 +589,53 @@ export const CALIBRATION: Calibration = {
     stuffCounterChance: 0.17,
     dominantLandingChance: 0.19,
     fenceStallChance: 0.24,
+    clinchTakedownShare: 0.5,
+    landingScrambleScale: 0.5,
+    landingScrambleDifficulty: 6,
   },
 
   grappling: {
-    advanceBase: 0.3,
-    sweepBase: 0.16,
-    standUpBase: 0.26,
+    advanceBase: 0.15,
+    advanceScale: 0.8,
+    sweepBase: 0.06,
+    sweepScale: 0.54,
+    sweepDifficulty: 6,
+    standUpBase: 0.12,
+    standUpScale: 0.68,
     inactivityStandUpSeconds: 48,
-    groundStrikeEdgeWeight: 0.6,
+    groundStrikeGrapplingShare: 0.5,
+    groundPowerGrapplingShare: 0.4,
+    bottomDrainPerSecond: 0.04,
+    bottomDrainEdgeScale: 15,
+    initiativeEdgeScale: 25,
     topStrikeBase: 3,
     topStrikeScale: 10,
   },
 
   submission: {
-    entryBase: 0.32,
-    securedBase: 0.28,
-    finishBase: 0.035,
-    fatigueScale: 0.5,
+    entryBase: 0.2,
+    entryScale: 0.66,
+    securedBase: 0.14,
+    securedScale: 0.68,
+    finishBase: 0.005,
+    finishScale: 0.22,
+    fatigueScale: 0.1,
     positionLossOnFail: 0.27,
     technicalChance: 0.11,
     finishDifficultyWeight: 0.3,
-    dominantPositionEdge: 14,
-    positionEdge: 8,
+    dominantPositionEdge: 4,
+    positionEdge: 2,
+    counterOnStuffedChance: 0.05,
+    counterOnPassChance: 0.1,
+    counterEdgeScale: 0.12,
   },
 
   judging: {
     strikeWeight: 1.0,
     damageWeight: 1.55,
     knockdownWeight: 9.0,
-    controlWeight: 0.032,
+    controlWeight: 0.05,
+    positionWeight: 0.06,
     takedownWeight: 3.1,
     submissionAttemptWeight: 2.4,
     aggressionWeight: 0.5,
@@ -575,7 +659,7 @@ export const CALIBRATION: Calibration = {
     tenSevenImpact: 0.97,
     impactNoiseSd: 0.05,
     judgeNoiseSd: 2.5,
-    judgeNoisePerActivity: 1.0,
+    judgeNoisePerActivity: 2.1,
     judgeBiasSd: 1.6,
     homeCrowdBias: 8,
     anonymousHometownSusceptibility: 0.1,
@@ -591,8 +675,12 @@ export const CALIBRATION: Calibration = {
     strikeChoiceWeight: 5.2,
     submissionEdgeScale: 0.1,
     styleEdgeScale: 18,
-    groundStrikeWeight: 1.5,
+    submissionStyleWeight: 0.8,
+    groundStrikeWeight: 1.8,
     grapplerCloseDistance: 0.2,
+    grapplerClosePressure: 0.4,
+    unwantedTakedownShare: 0.3,
+    disengageFromTopWeight: 1.5,
   },
 
   fight: {
@@ -607,6 +695,7 @@ export const CALIBRATION: Calibration = {
     experienceMax: 4.0,
     experienceHalfLife: 8,
     composurePeakAge: 31,
+    nightFormSd: 6.2,
   },
 
   fightHealth: {

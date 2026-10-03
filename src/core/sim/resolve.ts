@@ -90,6 +90,19 @@ function zoneOf(st: FightState): 'distance' | 'clinch' | 'ground' {
 }
 
 /**
+ * The share of a strike contest on the ground that the grappling domains decide. None standing,
+ * and none over a fighter just knocked down, where it is still a striker's finishing moment.
+ */
+function groundShare(st: FightState, share: number): number {
+  return st.position.zone === 'ground' && st.position.downedIdx === null && st.position.ground !== 'scramble' ? share : 0;
+}
+
+/** The grappling domain a fighter works from in the current ground position: offense on top, defense underneath. */
+function groundRole(st: FightState, side: SideState, bonus = 0): number {
+  return effective(st, side, st.position.controller === side.idx ? 'ground-offense' : 'ground-defense', { bonus });
+}
+
+/**
  * Damage scaling. Power is a product of striking effectiveness, division, build and
  * commitment. It is deliberately not a stored rating.
  */
@@ -108,7 +121,9 @@ function computeDamage(
     target === 'head' ? C.damage.baseCleanHead : target === 'body' ? C.damage.baseCleanBody : C.damage.baseCleanLeg;
   const groundBase = st.position.zone === 'ground' ? C.damage.baseGroundStrike / C.damage.baseCleanHead : 1;
 
-  const powerRating = effective(st, attacker, 'power');
+  // Ground and pound force comes from posture and position as well as from the hands.
+  const powerShare = groundShare(st, C.grappling.groundPowerGrapplingShare);
+  const powerRating = effective(st, attacker, 'power') * (1 - powerShare) + (powerShare > 0 ? groundRole(st, attacker) : 0) * powerShare;
   const durability = effective(st, defender, 'strike-defense', { bonus: defender.base.durability - defender.base.striking });
   const skillTerm = 1 + (powerRating - 65) * 0.014;
   const durabilityTerm = 1 - (durability - 65) * C.damage.durabilityScale;
@@ -204,15 +219,18 @@ export function resolveStrike(ctx: ResolveCtx, attacker: SideState, dec: Decisio
   const spent = spendStamina(attacker, cost);
 
   // Accuracy contest. Technique difficulty and commitment both reduce the chance to land.
-  // From top position, landing depends on pinning the opponent as much as on hand skill, so the
-  // grappling gap feeds ground and pound. Without it a dominant grappler held position and
-  // landed no more than anyone else.
-  const topControl =
-    st.position.zone === 'ground' && st.position.controller === attacker.idx
-      ? (effective(st, attacker, 'ground-offense') - effective(st, defender, 'ground-defense')) * C.grappling.groundStrikeEdgeWeight
-      : 0;
-  const atk = effective(st, attacker, 'strike-offense', { bonus: -prof.difficulty - power * 5 + topControl });
-  const def = effective(st, defender, 'strike-defense') * C.striking.defenseWeight;
+  // On the ground, landing depends on pinning the opponent as much as on hand skill, and avoiding
+  // strikes depends on framing and tying up rather than head movement, so part of the contest is
+  // the grappling one. Adding the grappling gap on top of the full striking contest still let a
+  // good striker on his back shut out the ground and pound of a much better grappler, and a
+  // takedown won the grappler almost nothing.
+  const share = groundShare(st, C.grappling.groundStrikeGrapplingShare);
+  const atkStrike = effective(st, attacker, 'strike-offense', { bonus: -prof.difficulty - power * 5 });
+  const defStrike = effective(st, defender, 'strike-defense');
+  const atkGround = share > 0 ? groundRole(st, attacker, -prof.difficulty - power * 5) : 0;
+  const defGround = share > 0 ? groundRole(st, defender) : 0;
+  const atk = atkStrike * (1 - share) + atkGround * share;
+  const def = (defStrike * (1 - share) + defGround * share) * C.striking.defenseWeight;
   const landChance = clamp(sigmoid((atk - def) / C.actionSpread) * C.striking.landScale, 0.03, 0.93);
 
   const roll = ctx.rng.next();
@@ -285,7 +303,12 @@ export function resolveStrike(ctx: ResolveCtx, attacker: SideState, dec: Decisio
     } else {
       const stunAdv = effective(st, attacker, 'power') - effective(st, defender, 'strike-defense');
       const stunChance = clamp(
-        C.stun.base * prof.knockdown * (1 + clamp(stunAdv, -25, 35) * 0.016) * (0.5 + power) * (1 + defender.damage.head * 0.006),
+        C.stun.base *
+          prof.knockdown *
+          (1 + clamp(stunAdv, -25, 35) * 0.016) *
+          (0.5 + power) *
+          (1 + defender.damage.head * 0.006) *
+          (st.position.zone === 'ground' ? C.stun.groundMultiplier : 1),
         0,
         0.45
       );
@@ -385,8 +408,15 @@ export function resolveTakedown(ctx: ResolveCtx, attacker: SideState, dec: Decis
 
   const difficulty = TAKEDOWN_DIFFICULTY[name] ?? 0;
   const fenceBonus = st.position.clinchKind === 'fence' && st.position.controller === attacker.idx ? 3 : 0;
-  const atk = effective(st, attacker, 'takedown-offense', { bonus: -difficulty + fenceBonus }) * C.wrestling.entryWeight;
-  const def = effective(st, defender, 'takedown-defense');
+  // From the clinch the trips, throws and body locks are as much grappling as wrestling, so half
+  // the contest is the clinch one. Shots from open space stay a pure wrestling contest.
+  const clinchShare = st.position.zone === 'clinch' ? C.wrestling.clinchTakedownShare : 0;
+  const atkTd = effective(st, attacker, 'takedown-offense', { bonus: -difficulty + fenceBonus });
+  const defTd = effective(st, defender, 'takedown-defense');
+  const atkClinch = clinchShare > 0 ? effective(st, attacker, 'clinch', { bonus: -difficulty + fenceBonus }) : 0;
+  const defClinch = clinchShare > 0 ? effective(st, defender, 'clinch') : 0;
+  const atk = (atkTd * (1 - clinchShare) + atkClinch * clinchShare) * C.wrestling.entryWeight;
+  const def = defTd * (1 - clinchShare) + defClinch * clinchShare;
   const p = clamp(sigmoid((atk - def) / C.grappleSpread) * 0.95, 0.03, 0.94);
 
   bump(attacker, 'takedownsAttempted');
@@ -406,6 +436,15 @@ export function resolveTakedown(ctx: ResolveCtx, attacker: SideState, dec: Decis
     st.position.inactivitySeconds = 0;
     const dominant = ctx.rng.chance(C.wrestling.dominantLandingChance * (1 + (attacker.base.grappling - 65) / 120));
     st.position.ground = dominant ? (ctx.rng.chance(0.6) ? 'side-control' : 'half-guard') : ctx.rng.chance(0.72) ? 'guard' : 'half-guard';
+    // A takedown lands a fighter on the mat, not under the man who shot. A clearly better
+    // grappler often comes up into a scramble on the way down, so being taken down by a worse
+    // grappler does not hand him minutes of top position the way it hands them to anyone else.
+    const landingGap = effective(st, defender, 'ground-defense') - effective(st, attacker, 'ground-offense') - C.wrestling.landingScrambleDifficulty;
+    const comeUp = sigmoid(landingGap / C.grappleSpread) * C.wrestling.landingScrambleScale;
+    if (ctx.rng.chance(comeUp)) {
+      st.position.ground = 'scramble';
+      tags.push('scramble');
+    }
   } else if (roll < p) {
     result = 'partial';
     tags.push('partial-takedown');
@@ -435,6 +474,11 @@ export function resolveTakedown(ctx: ResolveCtx, attacker: SideState, dec: Decis
     }
     spendStamina(attacker, C.stamina.costs.takedownAttempt * 0.45);
   }
+  // A shot stuffed by a dangerous submission artist leaves the neck behind.
+  const frontHeadlock =
+    result === 'stuffed' &&
+    st.position.zone !== 'ground' &&
+    ctx.rng.chance(counterSubmissionChance(st, defender, attacker, C.submission.counterOnStuffedChance));
 
   ctx.push({
     round: st.round,
@@ -452,7 +496,26 @@ export function resolveTakedown(ctx: ResolveCtx, attacker: SideState, dec: Decis
     tags,
   });
 
+  if (frontHeadlock) {
+    st.position.zone = 'clinch';
+    st.position.clinchKind = 'open';
+    st.position.controller = defender.idx;
+    const name: SubmissionName = ctx.rng.chance(0.7) ? 'guillotine' : 'darce-choke';
+    const counter = resolveSubmission(ctx, defender, { action: { kind: 'submission', name, stage: 'entry' }, power: 0.7 });
+    return { timeUsed: timeUsed + counter.timeUsed, finish: counter.finish };
+  }
   return { timeUsed, finish: NO_FINISH };
+}
+
+/**
+ * Chance that a mistake by `victim` hands `hunter` a submission attempt: a stuffed shot that
+ * leaves the neck, a failed pass that leaves an arm. Scaled by the submission matchup, so the
+ * Submissions rating decides more than the few attempts a fighter sets up himself, and a poor
+ * submission artist almost never gets one.
+ */
+function counterSubmissionChance(st: FightState, hunter: SideState, victim: SideState, base: number): number {
+  const edge = effective(st, hunter, 'submission-offense') - effective(st, victim, 'submission-defense');
+  return base * clamp(1 + edge * C.submission.counterEdgeScale, 0, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +546,7 @@ export function resolveGrapple(ctx: ResolveCtx, actor: SideState, dec: Decision)
   let timeUsed = C.timeCost.positionAdvance * (0.8 + ctx.rng.next() * 0.5);
   let scoreImpact = 0;
 
+  let counterSub: SubmissionName | null = null;
   const atkDomain = controlling ? 'ground-offense' : 'ground-defense';
   const defDomain = controlling ? 'ground-defense' : 'ground-offense';
 
@@ -493,7 +557,7 @@ export function resolveGrapple(ctx: ResolveCtx, actor: SideState, dec: Decision)
       const resistance = GROUND_VALUE[pos.ground] * 8;
       const atk = effective(st, actor, atkDomain, { bonus: -resistance });
       const def = effective(st, defender, defDomain);
-      const p = clamp(C.grappling.advanceBase + sigmoid((atk - def) / C.grappleSpread) * 0.5, 0.05, 0.82);
+      const p = clamp(C.grappling.advanceBase + sigmoid((atk - def) / C.grappleSpread) * C.grappling.advanceScale, 0.05, 0.82);
       if (ctx.rng.chance(p)) {
         pos.ground = next;
         pos.heldSeconds = 0;
@@ -507,6 +571,11 @@ export function resolveGrapple(ctx: ResolveCtx, actor: SideState, dec: Decision)
         tags.push('scramble');
       } else {
         result = 'defended';
+        // Passing the guard of a real submission artist is where arms and necks get caught.
+        const inGuard = pos.ground === 'guard' || pos.ground === 'half-guard';
+        if (inGuard && ctx.rng.chance(counterSubmissionChance(st, defender, actor, C.submission.counterOnPassChance))) {
+          counterSub = ctx.rng.pick(pos.ground === 'guard' ? GUARD_COUNTERS : HALF_GUARD_COUNTERS);
+        }
       }
       void spent;
       break;
@@ -533,7 +602,11 @@ export function resolveGrapple(ctx: ResolveCtx, actor: SideState, dec: Decision)
       const atk = effective(st, actor, 'ground-offense');
       const def = effective(st, defender, 'ground-defense');
       const base = name === 'sweep' ? C.grappling.sweepBase : C.grappling.sweepBase * 0.75;
-      const p = clamp(base + sigmoid((atk - def) / C.grappleSpread) * 0.34, 0.02, 0.7);
+      // Turning over a man who is on top is hard unless the guard is clearly the better game. At
+      // parity, without this difficulty, a worse grappler swept a better one about as often as the
+      // reverse, and top position changed hands so freely that out grappling the opponent hardly
+      // decided who held it.
+      const p = clamp(base + sigmoid((atk - def - C.grappling.sweepDifficulty) / C.grappleSpread) * C.grappling.sweepScale, 0.02, 0.7);
       if (ctx.rng.chance(p)) {
         pos.controller = actor.idx;
         pos.ground = name === 'reversal' ? 'half-guard' : 'guard';
@@ -642,8 +715,15 @@ export function resolveGrapple(ctx: ResolveCtx, actor: SideState, dec: Decision)
     tags,
   });
 
+  if (counterSub) {
+    const counter = resolveSubmission(ctx, defender, { action: { kind: 'submission', name: counterSub, stage: 'entry' }, power: 0.7 });
+    return { timeUsed: timeUsed + counter.timeUsed, finish: counter.finish };
+  }
   return { timeUsed, finish: NO_FINISH };
 }
+
+const GUARD_COUNTERS: SubmissionName[] = ['triangle-choke', 'armbar', 'guillotine', 'kimura'];
+const HALF_GUARD_COUNTERS: SubmissionName[] = ['kimura', 'guillotine'];
 
 /** Stand up and wall walk share a resolution path but differ in cost and difficulty. */
 export function resolveStandUp(ctx: ResolveCtx, actor: SideState, dec: Decision): ResolveOutcome {
@@ -663,7 +743,7 @@ export function resolveStandUp(ctx: ResolveCtx, actor: SideState, dec: Decision)
   } else {
     const atk = effective(st, actor, 'ground-defense', { bonus: isWallWalk ? 4 : 0 });
     const def = effective(st, defender, 'ground-offense');
-    p = clamp(C.grappling.standUpBase + sigmoid((atk - def) / C.grappleSpread) * 0.4 - GROUND_VALUE[pos.ground] * 0.3, 0.03, 0.8);
+    p = clamp(C.grappling.standUpBase + sigmoid((atk - def) / C.grappleSpread) * C.grappling.standUpScale - GROUND_VALUE[pos.ground] * 0.3, 0.03, 0.8);
   }
 
   const timeUsed = C.timeCost.standUp * (0.8 + ctx.rng.next() * 0.5);
@@ -801,7 +881,7 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   timeUsed += C.timeCost.submissionStage * 0.6;
   const entryAtk = effective(st, attacker, 'submission-offense', { bonus: -difficulty });
   const entryDef = effective(st, defender, 'submission-defense');
-  const entryP = clamp(C.submission.entryBase + sigmoid((entryAtk - entryDef) / C.submissionSpread) * 0.42, 0.03, 0.85);
+  const entryP = clamp(C.submission.entryBase + sigmoid((entryAtk - entryDef) / C.submissionSpread) * C.submission.entryScale, 0.03, 0.85);
   if (!ctx.rng.chance(entryP)) {
     emit('entry', 'defended', ['entry-failed'], 0.4);
     if (ctx.rng.chance(positionLoss)) {
@@ -822,7 +902,7 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   spendStamina(defender, C.stamina.costs.submissionAttempt * 1.15);
   const securedAtk = effective(st, attacker, 'submission-offense', { bonus: -difficulty * 0.5 });
   const securedDef = effective(st, defender, 'submission-defense', { bonus: defender.stamina < 40 ? -6 : 0 });
-  const securedP = clamp(C.submission.securedBase + sigmoid((securedAtk - securedDef) / C.submissionSpread) * 0.4, 0.03, 0.8);
+  const securedP = clamp(C.submission.securedBase + sigmoid((securedAtk - securedDef) / C.submissionSpread) * C.submission.securedScale, 0.03, 0.8);
   if (!ctx.rng.chance(securedP)) {
     emit('defense', 'escaped', ['escaped'], 0.8);
     if (ctx.rng.chance(positionLoss * 1.4)) {
@@ -843,7 +923,7 @@ export function resolveSubmission(ctx: ResolveCtx, attacker: SideState, dec: Dec
   // fighter about as often as a secured rear naked choke.
   const finishAtk = effective(st, attacker, 'submission-offense', { bonus: fatigueTerm - difficulty * C.submission.finishDifficultyWeight });
   const finishDef = effective(st, defender, 'submission-defense');
-  const finishP = clamp(C.submission.finishBase + sigmoid((finishAtk - finishDef) / C.submissionSpread) * 0.27, 0.015, 0.78);
+  const finishP = clamp(C.submission.finishBase + sigmoid((finishAtk - finishDef) / C.submissionSpread) * C.submission.finishScale, 0.015, 0.78);
 
   if (ctx.rng.chance(finishP)) {
     const technical = ctx.rng.chance(C.submission.technicalChance);

@@ -53,6 +53,11 @@ import { fightNightName, numberedEventName } from '../config/branding';
  * per card limit in `MATCHMAKING.titleBoutsPerCard` a division sometimes waits a week or two for a
  * card with room, and two year worlds come out at about 1.5, still well inside the band.
  */
+/** 'the United States', 'the Netherlands', 'Brazil': a country as it reads inside a sentence. */
+export function countryWithArticle(country: string): string {
+  return /^(United States|United Kingdom|Netherlands|Philippines|Czech Republic|Dominican Republic|United Arab Emirates)$/.test(country) ? `the ${country}` : country;
+}
+
 export const CHAMPION_TURNAROUND_DAYS = 205;
 
 /**
@@ -716,7 +721,7 @@ export function scoreCandidate(
     score += M.appeal.homeCountryBonus;
     if (kind === 'divisional-filler') {
       kind = 'local-showcase';
-      reason = `a home market showcase in ${event.country}`;
+      reason = `a home market showcase in ${countryWithArticle(event.country)}`;
     }
   }
 

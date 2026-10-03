@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
+import { GuideCard } from '../Guide';
 import { DIVISIONS, DIVISION_BY_ID } from '@core/config/divisions';
 import { daysBetween, formatDate, formatMoney } from '@core/types/common';
 import { ovrDisplayed } from '@core/types/fighter';
@@ -43,6 +44,8 @@ export function DashboardPage() {
         <h1>Dashboard</h1>
         <span className="sub">{formatDate(save.date)}</span>
       </div>
+
+      <GuideCard />
 
       {status && status.state !== 'not-a-fighter' && (
         <div className={`career-banner${status.advanceBlocked ? ' blocked' : ''}`}>

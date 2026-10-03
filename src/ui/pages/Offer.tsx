@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PageTip } from '../Guide';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Rng } from '@core/rng';
 import { DIVISION_BY_ID } from '@core/config/divisions';
@@ -22,6 +23,14 @@ function bookingKindLabel(kind: string): string {
   if (kind in BOOKING_KIND_LABEL) return BOOKING_KIND_LABEL[kind as BookingKind];
   if (kind in MATCHUP_SOURCE_LABEL) return MATCHUP_SOURCE_LABEL[kind as MatchupSource];
   return 'Matchmaking decision';
+}
+
+/** A stored reason fragment ('a home market showcase') as a sentence on its own. */
+function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+  const capped = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 }
 
 /** Fight offer review. Every response and its consequence is stated in plain language. */
@@ -104,6 +113,9 @@ export function OfferPage() {
           {offer.eventName} · {formatDate(offer.date)} · {offer.city}, {offer.country}
         </span>
       </div>
+      <PageTip id="offer" title="Your first fight offer">
+        Check the opponent, the date and the camp time you would get. You can ask for more money, a different date or a different opponent, but the matchmaker's patience runs out after two requests. Declining with a real reason costs little; refusing again and again costs the relationship.
+      </PageTip>
 
       {closed && <Notice kind="warn">This offer is {offer.status}.</Notice>}
       {!health.ok && <Notice kind="bad">Currently unable to compete: {health.reason}. Declining for medical reasons carries no penalty.</Notice>}
@@ -129,7 +141,7 @@ export function OfferPage() {
           <p className="small dim mt">
             <strong>Why this fight was made:</strong>{' '}
             {offer.bookingKind ? `${bookingKindLabel(offer.bookingKind)}. ` : ''}
-            {offer.reason}
+            {sentence(offer.reason)}
           </p>
           <p className="small dim">
             <strong>Ranking implication:</strong> {offer.rankingImplication}
